@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/aidi/apps/osint-agent-network/frontend
+WorkingDirectory=/opt/osint-agent-network/frontend
 ExecStart=/usr/bin/npm run preview
 Restart=always
 RestartSec=3

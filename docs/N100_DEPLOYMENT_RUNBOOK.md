@@ -2,14 +2,14 @@
 
 Version: 1.1
 Updated: 2026-07-02
-Target host: `n100`
-Target path: `/home/aidi/apps/osint-agent-network`
+Target host: `<production-host>`
+Target path: `/opt/osint-agent-network`
 
-This runbook is the handoff document for deploying and upgrading OSINT Agent Network / 情报官 on n100. The latest detailed deployment record is [N100_DEPLOYMENT_LOG_2026-07-02.md](N100_DEPLOYMENT_LOG_2026-07-02.md).
+This runbook is the handoff document for deploying and upgrading OSINT Agent Network / 情报官 on <production-host>. The latest detailed deployment record is [N100_DEPLOYMENT_LOG_2026-07-02.md](N100_DEPLOYMENT_LOG_2026-07-02.md).
 
 ## 1. Current Completion Status
 
-The project is ready for n100 deployment as a staged production build.
+The project is ready for <production-host> deployment as a staged production build.
 
 Verified capabilities:
 
@@ -47,17 +47,17 @@ vite build ... built
 Use one of these modes:
 
 - `scripts/start.sh`: quickest native startup for manual operation.
-- User-level systemd: recommended for persistent n100 service.
+- User-level systemd: recommended for persistent <production-host> service.
 - Docker Compose: available, but native startup is simpler for this project because the OSINT tools often live on the host filesystem.
 
-Recommended n100 mode: user-level systemd after a successful native smoke test.
+Recommended <production-host> mode: user-level systemd after a successful native smoke test.
 
 ## 3. Files And Directories
 
-On n100:
+On <production-host>:
 
 ```text
-/home/aidi/apps/osint-agent-network
+/opt/osint-agent-network
   backend/
   frontend/
   data/
@@ -70,7 +70,7 @@ On n100:
 Backup target:
 
 ```text
-/home/aidi/backups/osint-agent-network
+/var/backups/osint-agent-network
 ```
 
 Important persistent files:
@@ -87,24 +87,24 @@ Important persistent files:
 Create or update:
 
 ```bash
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 cp .env.example .env
 ```
 
-Minimum n100 settings:
+Minimum <production-host> settings:
 
 ```bash
 APP_ENV=production
 APP_HOST=0.0.0.0
 APP_PORT=8088
 WEB_PORT=3008
-OSINT_DB_PATH=/home/aidi/apps/osint-agent-network/data/osint.sqlite
+OSINT_DB_PATH=/opt/osint-agent-network/data/osint.sqlite
 
 AGENT_API_TOKEN=<strong-agent-token>
 ADMIN_API_TOKEN=<strong-admin-token>
 READ_API_TOKEN=<strong-read-token>
 
-OSINT_LLM_BASE_URL=http://10.0.0.184:6780/v1
+OSINT_LLM_BASE_URL=http://192.0.2.10:6780/v1
 OSINT_LLM_API_KEY=<redacted>
 OSINT_LLM_MODEL=gpt-5.4
 OSINT_LLM_TIMEOUT=30
@@ -113,14 +113,14 @@ OSINT_LLM_TIMEOUT=30
 Frontend build-time token:
 
 ```bash
-cd /home/aidi/apps/osint-agent-network/frontend
+cd /opt/osint-agent-network/frontend
 cat > .env.production <<'EOF'
-VITE_API_BASE_URL=http://10.0.0.184:8088
+VITE_API_BASE_URL=http://192.0.2.10:8088
 VITE_ADMIN_API_TOKEN=<same-value-as-ADMIN_API_TOKEN>
 EOF
 ```
 
-If the web UI is only used locally on n100, `VITE_API_BASE_URL=http://127.0.0.1:8088` is acceptable. For LAN browser access, use `http://10.0.0.184:8088`.
+If the web UI is only used locally on <production-host>, `VITE_API_BASE_URL=http://127.0.0.1:8088` is acceptable. For LAN browser access, use `http://192.0.2.10:8088`.
 
 ## 5. Optional OSINT Tool Configuration
 
@@ -147,19 +147,19 @@ PHONEINFOGA_API_KEY=
 GHUNT_COMMAND=ghunt
 GHUNT_COOKIE_PATH=
 
-RECONNG_COMMAND=/home/aidi/apps/tools/recon-ng/recon-ng
+RECONNG_COMMAND=/opt/osint-tools/recon-ng/recon-ng
 ```
 
 Do not commit `.env`, cookies, API keys, tokens, or tool credentials.
 
-For the current n100 real-tool wiring and remaining install list, see `docs/REAL_TOOL_ENABLEMENT.md`.
+For the current <production-host> real-tool wiring and remaining install list, see `docs/REAL_TOOL_ENABLEMENT.md`.
 
 ## 6. Native Deployment
 
 Install dependencies:
 
 ```bash
-cd /home/aidi/apps/osint-agent-network/frontend
+cd /opt/osint-agent-network/frontend
 npm install
 npm run build
 ```
@@ -167,14 +167,14 @@ npm run build
 Run full verification:
 
 ```bash
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 bash scripts/verify.sh
 ```
 
 Start services:
 
 ```bash
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 bash scripts/start.sh
 ```
 
@@ -199,21 +199,21 @@ Use this procedure for incremental upgrades from the local workstation.
 1. Verify locally:
 
 ```bash
-cd /Users/aidi/情报官/osint-agent-network
+cd /path/to/osint-agent-network
 bash scripts/verify.sh
 ```
 
 2. Create a remote pre-deploy backup:
 
 ```bash
-ssh n100 'mkdir -p /home/aidi/backups/osint-agent-network && cd /home/aidi/apps && tar \
+ssh <production-host> 'mkdir -p /var/backups/osint-agent-network && cd /home/osint/apps && tar \
   --exclude=osint-agent-network/frontend/node_modules \
   --exclude=osint-agent-network/frontend/dist \
   --exclude=osint-agent-network/data/jobs \
   --exclude=osint-agent-network/data/artifacts \
   --exclude=osint-agent-network/data/*.sqlite \
   --exclude=osint-agent-network/reports \
-  -czf /home/aidi/backups/osint-agent-network/predeploy-$(date +%Y%m%d-%H%M%S).tar.gz \
+  -czf /var/backups/osint-agent-network/predeploy-$(date +%Y%m%d-%H%M%S).tar.gz \
   osint-agent-network'
 ```
 
@@ -244,28 +244,28 @@ rsync -az \
   --exclude 'data/jobs/' \
   --exclude 'data/artifacts/' \
   --exclude 'reports/' \
-  ./ n100:/home/aidi/apps/osint-agent-network/
+  ./ <production-host>:/opt/osint-agent-network/
 ```
 
 4. Build and verify remotely:
 
 ```bash
-ssh n100 'cd /home/aidi/apps/osint-agent-network/frontend && npm install && npm run build'
-ssh n100 'cd /home/aidi/apps/osint-agent-network && bash scripts/verify.sh'
+ssh <production-host> 'cd /opt/osint-agent-network/frontend && npm install && npm run build'
+ssh <production-host> 'cd /opt/osint-agent-network && bash scripts/verify.sh'
 ```
 
 5. Restart services and run readiness:
 
 ```bash
-ssh n100 'systemctl --user restart osint-agent-network-api.service osint-agent-network-web.service'
-ssh n100 'cd /home/aidi/apps/osint-agent-network && python3 scripts/production_readiness.py'
+ssh <production-host> 'systemctl --user restart osint-agent-network-api.service osint-agent-network-web.service'
+ssh <production-host> 'cd /opt/osint-agent-network && python3 scripts/production_readiness.py'
 ```
 
 6. Confirm access:
 
 ```bash
-curl -sS http://10.0.0.184:8088/api/health
-curl -sS http://10.0.0.184:3008/ | head
+curl -sS http://192.0.2.10:8088/api/health
+curl -sS http://192.0.2.10:3008/ | head
 ```
 
 Stop services:
@@ -292,9 +292,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/aidi/apps/osint-agent-network
-EnvironmentFile=/home/aidi/apps/osint-agent-network/.env
-Environment=PYTHONPATH=/home/aidi/apps/osint-agent-network/backend
+WorkingDirectory=/opt/osint-agent-network
+EnvironmentFile=/opt/osint-agent-network/.env
+Environment=PYTHONPATH=/opt/osint-agent-network/backend
 ExecStart=/usr/bin/python3 -m app.main
 Restart=always
 RestartSec=3
@@ -313,7 +313,7 @@ Wants=osint-agent-network-api.service
 
 [Service]
 Type=simple
-WorkingDirectory=/home/aidi/apps/osint-agent-network/frontend
+WorkingDirectory=/opt/osint-agent-network/frontend
 ExecStart=/usr/bin/npm run preview -- --host 0.0.0.0 --port 3008
 Restart=always
 RestartSec=3
@@ -350,7 +350,7 @@ journalctl --user -u osint-agent-network-web.service -n 100 --no-pager
 Optional boot persistence:
 
 ```bash
-loginctl enable-linger aidi
+loginctl enable-linger "$USER"
 ```
 
 ## 8. Smoke Test After Deployment
@@ -358,7 +358,7 @@ loginctl enable-linger aidi
 Run the deployment health checks:
 
 ```bash
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 bash scripts/healthcheck.sh
 python3 scripts/production_readiness.py
 ```
@@ -370,7 +370,7 @@ Run:
 ```bash
 curl -sS http://127.0.0.1:8088/api/health
 curl -sS http://127.0.0.1:8088/api/system/status
-curl -sS http://10.0.0.184:8088/api/health
+curl -sS http://192.0.2.10:8088/api/health
 curl -sS http://127.0.0.1:3008/ | head
 bash scripts/healthcheck.sh
 ```
@@ -383,7 +383,7 @@ Expected:
 Then open:
 
 ```text
-http://10.0.0.184:3008/
+http://192.0.2.10:3008/
 ```
 
 Manual UI checklist:
@@ -404,7 +404,7 @@ API example:
 curl -sS -X POST http://127.0.0.1:8088/api/investigations \
   -H 'Content-Type: application/json' \
   -d '{
-    "name":"n100 smoke sparse lead",
+    "name":"<production-host> smoke sparse lead",
     "seed_type":"sparse_lead",
     "seed_value":"Long Way / in19034126503jgqn",
     "strategy":"quick",
@@ -452,25 +452,25 @@ curl -sS -X POST http://127.0.0.1:8088/api/investigations/<id>/delete \
 Backup:
 
 ```bash
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 bash scripts/backup.sh
 ```
 
 Manual backup equivalent:
 
 ```bash
-mkdir -p /home/aidi/backups/osint-agent-network/$(date +%Y%m%d-%H%M%S)
+mkdir -p /var/backups/osint-agent-network/$(date +%Y%m%d-%H%M%S)
 rsync -az \
-  /home/aidi/apps/osint-agent-network/data/ \
-  /home/aidi/backups/osint-agent-network/$(date +%Y%m%d-%H%M%S)/data/
+  /opt/osint-agent-network/data/ \
+  /var/backups/osint-agent-network/$(date +%Y%m%d-%H%M%S)/data/
 ```
 
 Restore:
 
 ```bash
 systemctl --user stop osint-agent-network-api.service osint-agent-network-web.service
-rsync -az /home/aidi/backups/osint-agent-network/<backup-id>/data/ \
-  /home/aidi/apps/osint-agent-network/data/
+rsync -az /var/backups/osint-agent-network/<backup-id>/data/ \
+  /opt/osint-agent-network/data/
 systemctl --user start osint-agent-network-api.service osint-agent-network-web.service
 ```
 
@@ -488,7 +488,7 @@ Commands:
 
 ```bash
 systemctl --user stop osint-agent-network-api.service osint-agent-network-web.service
-cd /home/aidi/apps
+cd /home/osint/apps
 mv osint-agent-network osint-agent-network.failed.$(date +%Y%m%d-%H%M%S)
 mv osint-agent-network.previous osint-agent-network
 cd osint-agent-network
@@ -498,7 +498,7 @@ systemctl --user start osint-agent-network-api.service osint-agent-network-web.s
 
 ## 12. Known Operational Notes
 
-- `scripts/start.sh` is suitable for normal shell use. In some Codex sandbox sessions, background processes may not align with PID files; systemd is preferred on n100.
+- `scripts/start.sh` is suitable for normal shell use. In some Codex sandbox sessions, background processes may not align with PID files; systemd is preferred on <production-host>.
 - Missing external tools are not fatal. They should show as `BLOCKED` jobs and appear in the queue panel.
 - `ADMIN_API_TOKEN` protects management write routes. If enabled, the web build must include `VITE_ADMIN_API_TOKEN`.
 - `AGENT_API_TOKEN` protects `/api/agent/*` writeback routes.

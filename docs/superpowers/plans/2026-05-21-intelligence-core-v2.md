@@ -718,14 +718,14 @@ PYTHONPATH=backend python3 -m unittest backend.tests.test_intelligence_core_v2 -
 PYTHONPATH=backend python3 backend/scripts/backfill_core_v2.py --db data/osint.sqlite --dry-run
 ```
 
-- [ ] **Step 4: Deploy and run on n100**
+- [ ] **Step 4: Deploy and run on <production-host>**
 
 After local verification:
 
 ```bash
-rsync -az --exclude node_modules --exclude data --exclude frontend/dist /Users/aidi/情报官/osint-agent-network/ n100:/home/aidi/apps/osint-agent-network/
-ssh n100 'cd /home/aidi/apps/osint-agent-network && scripts/stop.sh && scripts/start.sh'
-ssh n100 'cd /home/aidi/apps/osint-agent-network && PYTHONPATH=backend python3 backend/scripts/backfill_core_v2.py --db data/osint.sqlite'
+rsync -az --exclude node_modules --exclude data --exclude frontend/dist /path/to/osint-agent-network/ <production-host>:/opt/osint-agent-network/
+ssh <production-host> 'cd /opt/osint-agent-network && scripts/stop.sh && scripts/start.sh'
+ssh <production-host> 'cd /opt/osint-agent-network && PYTHONPATH=backend python3 backend/scripts/backfill_core_v2.py --db data/osint.sqlite'
 ```
 
 ---
@@ -752,17 +752,17 @@ node --experimental-strip-types scripts/test-sparse-lead.ts
 node --experimental-strip-types scripts/test-intelligence-core-v2.ts
 ```
 
-- [ ] **Step 3: Verify n100 health**
+- [ ] **Step 3: Verify <production-host> health**
 
 ```bash
-curl -sS http://10.0.0.184:8088/api/health
-ssh n100 'cd /home/aidi/apps/osint-agent-network && scripts/status.sh'
+curl -sS http://192.0.2.10:8088/api/health
+ssh <production-host> 'cd /opt/osint-agent-network && scripts/status.sh'
 ```
 
 - [ ] **Step 4: Verify SRR task**
 
 ```bash
-ssh n100 'curl -sS http://127.0.0.1:8088/api/investigations/196fb57f-dace-4fcc-a45e-bb22d0f46c70 | jq "{facts:(.facts|length), evidence_ledger:(.evidence_ledger|length), hypotheses:(.hypotheses|length), report_audit:.report_audit}"'
+ssh <production-host> 'curl -sS http://127.0.0.1:8088/api/investigations/196fb57f-dace-4fcc-a45e-bb22d0f46c70 | jq "{facts:(.facts|length), evidence_ledger:(.evidence_ledger|length), hypotheses:(.hypotheses|length), report_audit:.report_audit}"'
 ```
 
 Expected:

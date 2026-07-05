@@ -1,8 +1,8 @@
 # N100 部署报告 - 零成本情报增强功能
 
-**部署日期**: 2026-06-30 20:56-21:04 CST  
-**部署环境**: n100 (10.0.0.184)  
-**部署人员**: Claude Code  
+**部署日期**: 2026-06-30 20:56-21:04 CST
+**部署环境**: <production-host> (192.0.2.10)
+**部署人员**: Claude Code
 **部署状态**: ✅ 成功
 
 ---
@@ -25,7 +25,7 @@
 
 ### 1. 备份 (20:56)
 ```bash
-✅ 创建备份: /home/aidi/backups/osint-agent-network/backup-20260630-205621.tar.gz
+✅ 创建备份: /var/backups/osint-agent-network/backup-20260630-205621.tar.gz
 ✅ 备份大小: 59MB
 ✅ 包含内容: 完整项目目录（不含node_modules）
 ```
@@ -33,8 +33,8 @@
 ### 2. 代码同步 (20:57)
 ```bash
 ✅ 方法: rsync over SSH
-✅ 源目录: /Users/aidi/情报官/osint-agent-network/
-✅ 目标目录: n100:/home/aidi/apps/osint-agent-network/
+✅ 源目录: /path/to/osint-agent-network/
+✅ 目标目录: <production-host>:/opt/osint-agent-network/
 ✅ 同步文件: 347个文件
 ✅ 传输大小: 103,925 bytes
 ✅ 排除项: node_modules, data/, .env, __pycache__, *.pyc, .DS_Store, frontend/dist
@@ -56,7 +56,7 @@
 ```bash
 ✅ ADMIN_API_TOKEN: 已配置
 ✅ VITE_ADMIN_API_TOKEN: 已配置 (frontend/.env.production)
-✅ VITE_API_BASE_URL: http://10.0.0.184:8088
+✅ VITE_API_BASE_URL: http://192.0.2.10:8088
 ⚠️ UPKUAJING_*: 未配置（供应链分析需要时配置）
 ```
 
@@ -89,7 +89,7 @@
 
 #### 1. API健康检查 ✅
 ```bash
-curl http://10.0.0.184:8088/api/health
+curl http://192.0.2.10:8088/api/health
 响应: {"status": "ok", "service": "osint-agent-network"}
 ```
 
@@ -105,7 +105,7 @@ curl http://127.0.0.1:8088/api/tools/health
 
 #### 3. Web UI可访问性 ✅
 ```bash
-curl http://10.0.0.184:3008/
+curl http://192.0.2.10:3008/
 响应: HTTP/1.1 200 OK
 内容类型: text/html
 ```
@@ -146,7 +146,7 @@ API日志 (最近5分钟):
 ✅ 20:59:01 - GET /api/health → 200
 ✅ 20:59:16 - GET /api/tools/health → 200
 ✅ 21:00:44 - GET /api/investigations/.../intelligence → 200
-✅ 21:02:43 - GET /api/health → 200 (来自 10.0.0.228)
+✅ 21:02:43 - GET /api/health → 200 (来自 192.0.2.20)
 ✅ 无错误或异常
 ```
 
@@ -181,8 +181,8 @@ API日志 (最近5分钟):
 
 **配置步骤**:
 ```bash
-# 在 n100 上编辑 .env
-cd /home/aidi/apps/osint-agent-network
+# 在 <production-host> 上编辑 .env
+cd /opt/osint-agent-network
 vi .env
 
 # 添加以下配置
@@ -225,16 +225,16 @@ systemctl --user restart osint-agent-network-api.service
 
 ### 快速回滚
 ```bash
-# 1. SSH 登录 n100
-ssh n100
+# 1. SSH 登录 <production-host>
+ssh <production-host>
 
 # 2. 停止服务
 systemctl --user stop osint-agent-network-api.service
 systemctl --user stop osint-agent-network-web.service
 
 # 3. 恢复备份
-cd /home/aidi/backups/osint-agent-network
-tar xzf backup-20260630-205621.tar.gz -C /home/aidi/apps/osint-agent-network/
+cd /var/backups/osint-agent-network
+tar xzf backup-20260630-205621.tar.gz -C /opt/osint-agent-network/
 
 # 4. 重启服务
 systemctl --user start osint-agent-network-api.service
@@ -274,7 +274,7 @@ curl http://127.0.0.1:8088/api/health
 ## 八、后续操作建议
 
 ### 立即操作
-1. ✅ **验证 Web UI** - 打开浏览器访问 `http://10.0.0.184:3008`
+1. ✅ **验证 Web UI** - 打开浏览器访问 `http://192.0.2.10:3008`
 2. ✅ **测试情报面板** - 打开任意调查任务查看"情报汇总"
 3. ⏳ **配置跨境魔方** - 如需使用供应链分析，添加 UPKUAJING_* 配置
 
@@ -332,7 +332,7 @@ curl http://127.0.0.1:8088/api/health
 **诊断步骤**:
 ```bash
 # 1. 检查实体数据
-ssh n100 "cd /home/aidi/apps/osint-agent-network && python3 -c '
+ssh <production-host> "cd /opt/osint-agent-network && python3 -c '
 import sqlite3
 conn = sqlite3.connect(\"data/osint.sqlite\")
 cursor = conn.cursor()
@@ -357,7 +357,7 @@ curl -sS "http://127.0.0.1:8088/api/investigations/<id>/intelligence" \
 **诊断步骤**:
 ```bash
 # 1. 检查环境变量
-ssh n100 "grep UPKUAJING /home/aidi/apps/osint-agent-network/.env"
+ssh <production-host> "grep UPKUAJING /opt/osint-agent-network/.env"
 
 # 2. 手动测试供应链端点
 curl -sS "http://127.0.0.1:8088/api/customs/supply-chain" \
@@ -366,7 +366,7 @@ curl -sS "http://127.0.0.1:8088/api/customs/supply-chain" \
   -d '{"company_name":"TEST","analysis_type":"both"}'
 
 # 3. 查看 API 日志
-ssh n100 "journalctl --user -u osint-agent-network-api.service -n 50"
+ssh <production-host> "journalctl --user -u osint-agent-network-api.service -n 50"
 ```
 
 ### 问题3: 前端样式错乱
@@ -381,11 +381,11 @@ ssh n100 "journalctl --user -u osint-agent-network-api.service -n 50"
 # 1. 清除浏览器缓存并强制刷新 (Ctrl+Shift+R)
 
 # 2. 检查 CSS 文件大小
-ssh n100 "ls -lh /home/aidi/apps/osint-agent-network/frontend/dist/assets/*.css"
+ssh <production-host> "ls -lh /opt/osint-agent-network/frontend/dist/assets/*.css"
 
 # 3. 重新构建前端
-ssh n100 "cd /home/aidi/apps/osint-agent-network/frontend && npm run build"
-ssh n100 "systemctl --user restart osint-agent-network-web.service"
+ssh <production-host> "cd /opt/osint-agent-network/frontend && npm run build"
+ssh <production-host> "systemctl --user restart osint-agent-network-web.service"
 ```
 
 ---

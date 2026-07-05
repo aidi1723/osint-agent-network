@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/aidi/apps/osint-agent-network
-EnvironmentFile=/home/aidi/apps/osint-agent-network/.env
-Environment=PYTHONPATH=/home/aidi/apps/osint-agent-network/backend
+WorkingDirectory=/opt/osint-agent-network
+EnvironmentFile=/opt/osint-agent-network/.env
+Environment=PYTHONPATH=/opt/osint-agent-network/backend
 ExecStart=/usr/bin/python3 -m app.main
 Restart=always
 RestartSec=3

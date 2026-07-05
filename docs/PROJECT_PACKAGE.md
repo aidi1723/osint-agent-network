@@ -41,7 +41,7 @@ osint-agent-network/
 - npm
 - SQLite
 
-n100 部署：
+<production-host> 部署：
 
 - Docker Compose，或 Python/Node 原生服务管理。
 - OSINT 工具按实际需要安装在固定路径。
@@ -56,14 +56,14 @@ n100 部署：
 后端：
 
 ```bash
-cd /Users/aidi/情报官/osint-agent-network
+cd /path/to/osint-agent-network
 PYTHONPATH=backend python3 -m app.main
 ```
 
 前端：
 
 ```bash
-cd /Users/aidi/情报官/osint-agent-network/frontend
+cd /path/to/osint-agent-network/frontend
 npm install
 npm run dev
 ```
@@ -71,13 +71,13 @@ npm run dev
 服务器运行时推荐使用：
 
 ```bash
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 bash scripts/start.sh
 bash scripts/status.sh
 bash scripts/stop.sh
 ```
 
-n100 长期运行推荐使用用户级 systemd：
+<production-host> 长期运行推荐使用用户级 systemd：
 
 ```bash
 systemctl --user status osint-agent-network-api.service osint-agent-network-web.service
@@ -87,7 +87,7 @@ systemctl --user restart osint-agent-network-api.service osint-agent-network-web
 ### Compose 启动
 
 ```bash
-cd /Users/aidi/情报官/osint-agent-network
+cd /path/to/osint-agent-network
 cp .env.example .env
 docker compose up
 ```
@@ -100,10 +100,10 @@ docker compose up
 APP_HOST=0.0.0.0
 APP_PORT=8088
 WEB_PORT=3008
-OSINT_DB_PATH=/home/aidi/apps/osint-agent-network/data/osint.sqlite
+OSINT_DB_PATH=/opt/osint-agent-network/data/osint.sqlite
 AGENT_API_TOKEN=<strong-agent-token>
 ADMIN_API_TOKEN=<strong-admin-token>
-OSINT_LLM_BASE_URL=http://10.0.0.184:6780/v1
+OSINT_LLM_BASE_URL=http://192.0.2.10:6780/v1
 OSINT_LLM_API_KEY=<redacted>
 OSINT_LLM_MODEL=gpt-5.4
 ```
@@ -111,9 +111,9 @@ OSINT_LLM_MODEL=gpt-5.4
 前端生产构建需要写入 API 地址和管理 Token：
 
 ```bash
-cd /home/aidi/apps/osint-agent-network/frontend
+cd /opt/osint-agent-network/frontend
 cat > .env.production <<'EOF'
-VITE_API_BASE_URL=http://10.0.0.184:8088
+VITE_API_BASE_URL=http://192.0.2.10:8088
 VITE_ADMIN_API_TOKEN=<same-value-as-ADMIN_API_TOKEN>
 EOF
 ```
@@ -148,19 +148,19 @@ RECONNG_COMMAND=recon-ng
 每次交付前运行：
 
 ```bash
-cd /Users/aidi/情报官/osint-agent-network
+cd /path/to/osint-agent-network
 bash scripts/verify.sh
 ```
 
 或者拆分运行：
 
 ```bash
-cd /Users/aidi/情报官/osint-agent-network
+cd /path/to/osint-agent-network
 PYTHONPATH=backend python3 -m unittest backend.tests.test_core backend.tests.test_agent_protocol backend.tests.test_worker backend.tests.test_graph
 ```
 
 ```bash
-cd /Users/aidi/情报官/osint-agent-network/frontend
+cd /path/to/osint-agent-network/frontend
 npm run check:ui-copy
 node --experimental-strip-types ./scripts/test-ui-state.ts
 node --experimental-strip-types ./scripts/test-graph-helpers.ts

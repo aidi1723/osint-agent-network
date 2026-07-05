@@ -16,6 +16,7 @@ restrictions that conflict with GPLv3.
 - Run `python3 scripts/runtime_inventory.py` and review the runtime inventory before packaging.
 - Run `python3 scripts/public_release_check.py`; it must pass only when the repository uses GNU GPL v3 and `frontend/package.json` declares `GPL-3.0-only`.
 - Confirm `.env`, API tokens, cookies, screenshots, SQLite databases, reports, and job artifacts are not included in the public repository package.
+- Follow [PUBLIC_REPOSITORY_MAINTENANCE.md](PUBLIC_REPOSITORY_MAINTENANCE.md) for privacy-hygiene scan rules and low-risk residue policy.
 - Review `THIRD_PARTY_NOTICES.md`, `frontend/package-lock.json`, and vendored/generated assets before publishing.
 
 ## License Notes

@@ -8,7 +8,7 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: 3008,
-    allowedHosts: ["n100"],
+    allowedHosts: ["production-host.local"],
     proxy: {
       "/api": apiProxyTarget,
     },
@@ -16,6 +16,6 @@ export default defineConfig({
   preview: {
     host: "0.0.0.0",
     port: 3008,
-    allowedHosts: ["n100"],
+    allowedHosts: ["production-host.local"],
   },
 });

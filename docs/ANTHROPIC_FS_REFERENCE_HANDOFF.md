@@ -223,7 +223,7 @@ The most recent full verification completed with:
 
 ## Operational Notes
 
-- The project directory used for this work is `/Users/aidi/情报官/osint-agent-network`.
+- The project directory used for this work is `/path/to/osint-agent-network`.
 - The directory is not currently a git repository, so no commit or branch merge was created.
 - Runtime behavior for existing tool planning, worker execution, and UI remains compatible with the existing verification suite.
 - New API write validation may reject malformed external Agent payloads that were previously accepted.

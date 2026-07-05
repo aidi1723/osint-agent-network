@@ -9,7 +9,7 @@ from app.main import llm_status_payload
 class LLMClientTests(unittest.TestCase):
     def test_loads_osint_llm_config_and_redacts_secret(self):
         env = {
-            "OSINT_LLM_BASE_URL": "http://10.0.0.184:6780/v1",
+            "OSINT_LLM_BASE_URL": "http://192.0.2.10:6780/v1",
             "OSINT_LLM_API_KEY": "sk-secret-value",
             "OSINT_LLM_MODEL": "gpt-5.4",
         }
@@ -18,7 +18,7 @@ class LLMClientTests(unittest.TestCase):
             config = load_llm_config()
 
         self.assertTrue(config.enabled)
-        self.assertEqual(config.base_url, "http://10.0.0.184:6780/v1")
+        self.assertEqual(config.base_url, "http://192.0.2.10:6780/v1")
         self.assertEqual(config.model, "gpt-5.4")
         self.assertEqual(config.redacted_api_key, "sk-s...alue")
 
@@ -81,7 +81,7 @@ class LLMClientTests(unittest.TestCase):
 
     def test_status_payload_never_exposes_api_key(self):
         env = {
-            "OSINT_LLM_BASE_URL": "http://10.0.0.184:6780/v1",
+            "OSINT_LLM_BASE_URL": "http://192.0.2.10:6780/v1",
             "OSINT_LLM_API_KEY": "sk-secret-value",
             "OSINT_LLM_MODEL": "gpt-5.4",
         }

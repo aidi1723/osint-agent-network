@@ -54,7 +54,7 @@ README.md                                         [MOD] 更新功能描述
 
 ```bash
 # 1. 单元测试通过
-cd /Users/aidi/情报官/osint-agent-network
+cd /path/to/osint-agent-network
 PYTHONPATH=backend python3 -m unittest backend.tests.test_customs_supply_chain
 # 结果: Ran 8 tests in 0.004s - OK
 
@@ -71,7 +71,7 @@ curl http://127.0.0.1:8088/api/tools | grep customs_supply_chain
 
 ```bash
 # 1. TypeScript编译通过
-cd /Users/aidi/情报官/osint-agent-network/frontend
+cd /path/to/osint-agent-network/frontend
 npm run build
 # 结果: ✓ built in 727ms
 
@@ -84,7 +84,7 @@ grep -n "SupplyChainPanel" src/main.tsx
 
 ```bash
 # 启动后端
-cd /Users/aidi/情报官/osint-agent-network
+cd /path/to/osint-agent-network
 PYTHONPATH=backend python3 -m app.main
 
 # 启动前端
@@ -256,7 +256,7 @@ curl -X POST http://127.0.0.1:8088/api/customs/supply-chain \
 
 ```bash
 # 1. 后端无需重启（已热加载）
-cd /Users/aidi/情报官/osint-agent-network
+cd /path/to/osint-agent-network
 # 代码已就位
 
 # 2. 前端需要重新构建
@@ -266,21 +266,21 @@ npm run build
 # 3. 刷新浏览器即可看到新功能
 ```
 
-### 生产环境部署（n100）
+### 生产环境部署（<production-host>）
 
 ```bash
 # 1. 备份当前版本
-ssh n100
-cd /home/aidi/apps/osint-agent-network
+ssh <production-host>
+cd /opt/osint-agent-network
 bash scripts/backup.sh
 
 # 2. 同步代码
-rsync -avz /Users/aidi/情报官/osint-agent-network/ \
-  n100:/home/aidi/apps/osint-agent-network/ \
+rsync -avz /path/to/osint-agent-network/ \
+  <production-host>:/opt/osint-agent-network/ \
   --exclude node_modules --exclude data --exclude .git
 
 # 3. 重新构建前端
-cd /home/aidi/apps/osint-agent-network/frontend
+cd /opt/osint-agent-network/frontend
 npm install
 npm run build
 
@@ -289,11 +289,11 @@ systemctl --user restart osint-agent-network-api.service
 systemctl --user restart osint-agent-network-web.service
 
 # 5. 验证
-curl http://10.0.0.184:8088/api/health
-curl http://10.0.0.184:8088/api/tools | grep customs_supply_chain
+curl http://192.0.2.10:8088/api/health
+curl http://192.0.2.10:8088/api/tools | grep customs_supply_chain
 
 # 6. 测试供应链查询
-访问 http://10.0.0.184:3008
+访问 http://192.0.2.10:3008
 创建公司调查任务
 点击"分析供应链"
 ```
@@ -434,7 +434,7 @@ OK
 ### 🔮 下一步
 
 1. **立即**: 在开发环境测试功能
-2. **本周**: 部署到n100生产环境
+2. **本周**: 部署到<production-host>生产环境
 3. **下月**: 根据使用反馈优化UI和性能
 4. **长期**: 考虑集成更多数据源（如需要）
 

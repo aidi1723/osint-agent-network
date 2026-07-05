@@ -25,7 +25,7 @@
 - Modify `frontend/src/styles.css`: add restrained, dense styles for mosaic chain rows and OSINT status chips.
 - Optionally modify `docs/INTEL_GATEWAY.md` and `docs/GRAPH_TEMPLATE.md` only if implementation names differ from current docs.
 
-The current `/Users/aidi/情报官/osint-agent-network` directory is not a git repository in this environment. If this plan is executed inside a real git worktree later, use the commit steps. If not, skip commit steps and keep verification output in the final report.
+The current `/path/to/osint-agent-network` directory is not a git repository in this environment. If this plan is executed inside a real git worktree later, use the commit steps. If not, skip commit steps and keep verification output in the final report.
 
 ---
 

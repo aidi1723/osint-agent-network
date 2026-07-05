@@ -177,7 +177,7 @@ ACH 输出推荐字段：
 - 输出证据：`company_news_report`、`news_business_event`、`news_buying_signal`、`news_risk_signal`。
 - 输出关系：`company_has_news_article`、`news_supports_business_event`、`news_supports_buying_signal`、`news_supports_risk_signal`。
 
-它不是常驻爬虫，只在任务执行时按需查询一次，适合 n100 的轻量使用模式。
+它不是常驻爬虫，只在任务执行时按需查询一次，适合 <production-host> 的轻量使用模式。
 
 ## 约束式检索方法
 

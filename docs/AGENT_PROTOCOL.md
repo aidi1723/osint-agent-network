@@ -3,7 +3,7 @@
 Version: 0.2
 Base URL: `http://127.0.0.1:8088`
 
-This project treats the web UI as a display board. Execution is done by external agents such as Codex Desktop, OpenHuman on n100, or any CLI agent that can make HTTP requests.
+This project treats the web UI as a display board. Execution is done by external agents such as Codex Desktop, OpenHuman on <production-host>, or any CLI agent that can make HTTP requests.
 
 If `AGENT_API_TOKEN` is configured on the API service, every `/api/agent/*` and `/api/agents/*` request must include:
 
@@ -811,10 +811,10 @@ Agents must not present active deception or counter-information operations as an
 
 ## Credential Configuration
 
-工具凭证只从 Agent 运行环境读取，不写入任务中心、事件、证据或报告。推荐在 n100 的服务启动脚本或 shell profile 中配置：
+工具凭证只从 Agent 运行环境读取，不写入任务中心、事件、证据或报告。推荐在 <production-host> 的服务启动脚本或 shell profile 中配置：
 
 ```bash
-export OSINT_LLM_BASE_URL=http://10.0.0.184:6780/v1
+export OSINT_LLM_BASE_URL=http://192.0.2.10:6780/v1
 export OSINT_LLM_API_KEY=<redacted>
 export OSINT_LLM_MODEL=gpt-5.4
 export SPIDERFOOT_BASE_URL=http://127.0.0.1:5001
@@ -822,7 +822,7 @@ export SPIDERFOOT_API_KEY=<redacted>
 export PHONEINFOGA_BASE_URL=http://127.0.0.1:5000
 export PHONEINFOGA_API_KEY=<redacted>
 export GHUNT_COMMAND=ghunt
-export GHUNT_COOKIE_PATH=/home/aidi/.config/ghunt/cookies.txt
+export GHUNT_COOKIE_PATH=/home/osint/.config/ghunt/cookies.txt
 ```
 
 CLI 适配器会在命令摘要中隐藏 URL query 和凭证明文。GHunt Cookie 刷新仍由运维侧处理，适配器不会自动获取或刷新 Cookie。

@@ -6,7 +6,7 @@ This is the closing document for the current OSINT Agent Network / 情报官 del
 
 ## Delivered State
 
-The platform baseline is complete and deployed on n100.
+The platform baseline is complete and deployed on <production-host>.
 
 Stable resident services:
 
@@ -33,9 +33,9 @@ On-demand tools:
 - `scripts/verify.sh` passes.
 - `scripts/healthcheck.sh` passes.
 - `scripts/production_readiness.py` returns `ready: true`.
-- n100 services are active.
+- <production-host> services are active.
 - Backup timer is enabled.
-- 2026-05-22 security hardening and n100 redeploy notes are recorded in [docs/UPDATE_LOG.md](UPDATE_LOG.md).
+- 2026-05-22 security hardening and <production-host> redeploy notes are recorded in [docs/UPDATE_LOG.md](UPDATE_LOG.md).
 
 ## Operational Rules
 

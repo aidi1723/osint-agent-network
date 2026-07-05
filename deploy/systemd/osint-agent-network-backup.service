@@ -3,6 +3,6 @@ Description=OSINT Agent Network Backup
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/aidi/apps/osint-agent-network
-EnvironmentFile=-/home/aidi/apps/osint-agent-network/.env
-ExecStart=/bin/bash /home/aidi/apps/osint-agent-network/scripts/backup.sh
+WorkingDirectory=/opt/osint-agent-network
+EnvironmentFile=-/opt/osint-agent-network/.env
+ExecStart=/bin/bash /opt/osint-agent-network/scripts/backup.sh

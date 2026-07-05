@@ -1,8 +1,8 @@
 # 情报官 OSINT Agent Network - 项目结尾、维护与部署日志
 
-**项目名称**: 情报官 OSINT Agent Network  
-**项目目录**: `/home/aidi/apps/osint-agent-network` (n100) / `/Users/aidi/情报官/osint-agent-network` (本地)  
-**最后更新**: 2026-07-02  
+**项目名称**: 情报官 OSINT Agent Network
+**项目目录**: `/opt/osint-agent-network` (<production-host>) / `/path/to/osint-agent-network` (本地)
+**最后更新**: 2026-07-02
 **项目状态**: 生产就绪 ✅
 
 ---
@@ -17,7 +17,7 @@
 - 项目初始化、架构搭建
 - 多 Agent 编排系统实现
 - 23 位图谱模板设计
-- n100 部署与 systemd 配置
+- <production-host> 部署与 systemd 配置
 - Intelligence Maturity Gate 实现
 - 证据账本、事实晋级、交叉验证矩阵
 
@@ -25,14 +25,14 @@
 - **Zero-Cost Intelligence Aggregation** 实施
 - 海关供应链分析功能
 - 联系方式/社交媒体/产品智能聚合
-- n100 生产部署与验证
+- <production-host> 生产部署与验证
 
 #### 可靠性部署阶段（2026-07-02）
 - 修复海关供应链错误语义，避免把凭证/上游失败显示为无数据。
 - 修复产品情报与社媒情报聚合契约，补齐回归测试。
 - 修复前端错误状态和 CSS 构建警告。
 - 修复 `production_readiness.py` 对受保护读接口的授权请求。
-- 重新部署到 n100，启用 user-level systemd 服务，并验证 `ready: true`。
+- 重新部署到 <production-host>，启用 user-level systemd 服务，并验证 `ready: true`。
 
 ### 1.2 最终项目状态
 
@@ -133,7 +133,7 @@
 │   ├── AGENT_PROTOCOL.md               # Agent 协议
 │   ├── CUSTOMS_SUPPLY_CHAIN.md         # 供应链功能文档
 │   ├── INTELLIGENCE_AGGREGATION.md     # 情报聚合文档
-│   ├── N100_DEPLOYMENT_RUNBOOK.md      # n100 部署 Runbook
+│   ├── N100_DEPLOYMENT_RUNBOOK.md      # <production-host> 部署 Runbook
 │   ├── REAL_OSINT_WORKFLOW.md          # 真实 OSINT 工作流
 │   └── ...
 │
@@ -207,11 +207,11 @@ curl -sS -o /dev/null -w "HTTP %{http_code}\n" http://127.0.0.1:3008/
 
 # 4. 数据库大小
 echo "4. 数据库大小:"
-ls -lh /home/aidi/apps/osint-agent-network/data/osint.sqlite
+ls -lh /opt/osint-agent-network/data/osint.sqlite
 
 # 5. 磁盘空间
 echo "5. 磁盘空间:"
-df -h /home/aidi/apps/osint-agent-network/
+df -h /opt/osint-agent-network/
 
 # 6. 最近错误日志
 echo "6. 最近错误 (过去 5 分钟):"
@@ -228,7 +228,7 @@ echo "=== 情报官每周健康检查 $(date) ==="
 
 # 1. 数据库完整性
 echo "1. 数据库完整性:"
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 python3 -c "
 import sqlite3
 conn = sqlite3.connect('data/osint.sqlite')
@@ -243,11 +243,11 @@ conn.close()
 
 # 2. 备份状态
 echo "2. 备份状态:"
-ls -lht /home/aidi/backups/osint-agent-network/ | head -6
+ls -lht /var/backups/osint-agent-network/ | head -6
 
 # 3. 磁盘使用趋势
 echo "3. 磁盘使用:"
-df -h /home/aidi/
+df -h /home/osint/
 
 # 4. 内存使用
 echo "4. 内存:"
@@ -260,7 +260,7 @@ ps -p $(systemctl --user show -p MainPID osint-agent-network-web.service | cut -
 
 # 6. 备份保留清理
 echo "6. 清理旧备份 (保留最近 14 份):"
-cd /home/aidi/backups/osint-agent-network/
+cd /var/backups/osint-agent-network/
 ls -t backup-* | tail -n +15 | xargs -r rm -f
 echo "  完成"
 ```
@@ -275,7 +275,7 @@ echo "=== 情报官月度维护检查 $(date) ==="
 
 # 1. 运行完整测试套件
 echo "1. 运行后端测试:"
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 PYTHONPATH=backend python3 -m unittest backend.tests.test_core backend.tests.test_agent_protocol backend.tests.test_worker backend.tests.test_graph backend.tests.test_customs_supply_chain
 
 # 2. 运行回归烟测
@@ -326,10 +326,10 @@ conn.close()
 
 ### 2.2 最近部署记录：2026-07-02 可靠性升级
 
-**目标主机**: `n100`  
-**目标路径**: `/home/aidi/apps/osint-agent-network`  
-**访问地址**: `http://10.0.0.184:3008/`  
-**API 地址**: `http://10.0.0.184:8088/api/health`  
+**目标主机**: `<production-host>`
+**目标路径**: `/opt/osint-agent-network`
+**访问地址**: `http://192.0.2.10:3008/`
+**API 地址**: `http://192.0.2.10:8088/api/health`
 **部署日志**: `docs/N100_DEPLOYMENT_LOG_2026-07-02.md`
 
 #### 部署结果
@@ -345,7 +345,7 @@ Web 服务: osint-agent-network-web.service active/enabled
 #### 备份
 
 ```text
-/home/aidi/backups/osint-agent-network/predeploy-20260702-163837.tar.gz
+/var/backups/osint-agent-network/predeploy-20260702-163837.tar.gz
 ```
 
 #### 验证结果
@@ -367,18 +367,18 @@ python3 scripts/production_readiness.py:
 
 ```bash
 # 1. 本地验证
-cd /Users/aidi/情报官/osint-agent-network
+cd /path/to/osint-agent-network
 bash scripts/verify.sh
 
 # 2. 远端备份
-ssh n100 'mkdir -p /home/aidi/backups/osint-agent-network && cd /home/aidi/apps && tar \
+ssh <production-host> 'mkdir -p /var/backups/osint-agent-network && cd /home/osint/apps && tar \
   --exclude=osint-agent-network/frontend/node_modules \
   --exclude=osint-agent-network/frontend/dist \
   --exclude=osint-agent-network/data/jobs \
   --exclude=osint-agent-network/data/artifacts \
   --exclude=osint-agent-network/data/*.sqlite \
   --exclude=osint-agent-network/reports \
-  -czf /home/aidi/backups/osint-agent-network/predeploy-$(date +%Y%m%d-%H%M%S).tar.gz \
+  -czf /var/backups/osint-agent-network/predeploy-$(date +%Y%m%d-%H%M%S).tar.gz \
   osint-agent-network'
 
 # 3. 安全同步，保留远端 .env、数据库、任务产物和报告
@@ -398,15 +398,15 @@ rsync -az \
   --exclude 'reports/' \
   --exclude '__pycache__/' \
   --exclude '*.pyc' \
-  ./ n100:/home/aidi/apps/osint-agent-network/
+  ./ <production-host>:/opt/osint-agent-network/
 
 # 4. 远端构建和验证
-ssh n100 'cd /home/aidi/apps/osint-agent-network/frontend && npm install && npm run build'
-ssh n100 'cd /home/aidi/apps/osint-agent-network && bash scripts/verify.sh'
+ssh <production-host> 'cd /opt/osint-agent-network/frontend && npm install && npm run build'
+ssh <production-host> 'cd /opt/osint-agent-network && bash scripts/verify.sh'
 
 # 5. 重启和验收
-ssh n100 'systemctl --user restart osint-agent-network-api.service osint-agent-network-web.service'
-ssh n100 'cd /home/aidi/apps/osint-agent-network && python3 scripts/production_readiness.py'
+ssh <production-host> 'systemctl --user restart osint-agent-network-api.service osint-agent-network-web.service'
+ssh <production-host> 'cd /opt/osint-agent-network && python3 scripts/production_readiness.py'
 ```
 
 #### 注意事项
@@ -432,7 +432,7 @@ Description=OSINT Agent Network Backup
 
 [Service]
 Type=oneshot
-ExecStart=/home/aidi/apps/osint-agent-network/scripts/backup.sh
+ExecStart=/opt/osint-agent-network/scripts/backup.sh
 StandardOutput=journal
 EOF
 
@@ -457,7 +457,7 @@ systemctl --user start osint-agent-network-backup.timer
 
 #### 备份内容
 ```
-备份位置: /home/aidi/backups/osint-agent-network/
+备份位置: /var/backups/osint-agent-network/
 备份频率: 每日 00:00
 保留份数: 14 份（通过 BACKUP_KEEP_LAST 调整）
 备份内容:
@@ -471,7 +471,7 @@ systemctl --user start osint-agent-network-backup.timer
 #### 手动备份
 ```bash
 # 立即执行备份
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 bash scripts/backup.sh
 
 # 自定义保留份数
@@ -487,7 +487,7 @@ BACKUP_KEEP_LAST=30 bash scripts/backup.sh
 | API 可用性 | 99.9% | `curl http://127.0.0.1:8088/api/health` |
 | Web 可用性 | 99.9% | `curl http://127.0.0.1:3008/` |
 | 数据库大小 | <500MB | `ls -lh data/osint.sqlite` |
-| 磁盘可用 | >1GB | `df -h /home/aidi/` |
+| 磁盘可用 | >1GB | `df -h /home/osint/` |
 | 内存使用 | <500MB | `free -h` |
 | 调查失败率 | <10% | SQL 查询 FAILED 调查占比 |
 | 备份延迟 | <24h | 检查备份时间戳 |
@@ -519,7 +519,7 @@ if [ "$DISK_AVAIL" -lt 1048576 ]; then
 fi
 
 # 检查备份是否在 24 小时内
-LATEST_BACKUP=$(ls -t /home/aidi/backups/osint-agent-network/backup-* 2>/dev/null | head -1)
+LATEST_BACKUP=$(ls -t /var/backups/osint-agent-network/backup-* 2>/dev/null | head -1)
 if [ -n "$LATEST_BACKUP" ]; then
     BACKUP_AGE=$(($(date +%s) - $(stat -f%m "$LATEST_BACKUP" 2>/dev/null || stat -c%Y "$LATEST_BACKUP")))
     if [ "$BACKUP_AGE" -gt 86400 ]; then
@@ -535,7 +535,7 @@ fi
 #### 数据库优化
 ```bash
 # 每月执行一次
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 python3 -c "
 import sqlite3
 conn = sqlite3.connect('data/osint.sqlite')
@@ -564,8 +564,8 @@ print('Database optimized.')
 #### 数据库备份（单独）
 ```bash
 # 只备份数据库
-cd /home/aidi/apps/osint-agent-network
-cp data/osint.sqlite "/home/aidi/backups/osint-agent-network/osint-$(date +%Y%m%d-%H%M%S).sqlite"
+cd /opt/osint-agent-network
+cp data/osint.sqlite "/var/backups/osint-agent-network/osint-$(date +%Y%m%d-%H%M%S).sqlite"
 ```
 
 ### 2.5 服务管理
@@ -573,7 +573,7 @@ cp data/osint.sqlite "/home/aidi/backups/osint-agent-network/osint-$(date +%Y%m%
 #### 启动
 ```bash
 # 方法 1: 使用项目脚本
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 bash scripts/start.sh
 
 # 方法 2: 使用 systemd
@@ -617,11 +617,11 @@ journalctl --user -u osint-agent-network-api.service -p err
 
 ```bash
 # 开发模式（本地）
-cd /Users/aidi/情报官/osint-agent-network/frontend
+cd /path/to/osint-agent-network/frontend
 npm run dev
 
-# 生产构建 + 部署（n100）
-cd /home/aidi/apps/osint-agent-network/frontend
+# 生产构建 + 部署（<production-host>）
+cd /opt/osint-agent-network/frontend
 npm run build                # 构建到 dist/
 systemctl --user restart osint-agent-network-web.service  # 重启 Web 服务
 ```
@@ -634,7 +634,7 @@ systemctl --user restart osint-agent-network-web.service  # 重启 Web 服务
 
 #### 部署 #1: 初始部署
 - **日期**: 2026-05-21
-- **目标**: n100 初始安装
+- **目标**: <production-host> 初始安装
 - **内容**: 项目基础架构、API Hub、Worker、Agent 协议
 - **结果**: 成功
 
@@ -647,7 +647,7 @@ systemctl --user restart osint-agent-network-web.service  # 重启 Web 服务
 
 #### 部署 #3: Zero-Cost Intelligence Features (本次)
 - **日期**: 2026-06-30 20:56-21:04 CST
-- **目标**: n100 (10.0.0.184)
+- **目标**: <production-host> (192.0.2.10)
 - **内容**: 海关供应链分析 + 智能情报聚合
 - **结果**: 成功
 - **报告**: N100_DEPLOYMENT_REPORT_2026-06-30.md
@@ -686,7 +686,7 @@ systemctl --user restart osint-agent-network-web.service  # 重启 Web 服务
 - [ ] 已准备回滚方案
 
 #### 部署步骤
-- [ ] SSH 登录 n100
+- [ ] SSH 登录 <production-host>
 - [ ] 创建备份
 - [ ] 同步代码（git pull 或 rsync）
 - [ ] 检查环境变量
@@ -699,8 +699,8 @@ systemctl --user restart osint-agent-network-web.service  # 重启 Web 服务
 - [ ] 创建部署报告
 
 #### 部署后检查
-- [ ] API: `http://10.0.0.184:8088/api/health` → 200
-- [ ] Web: `http://10.0.0.184:3008/` → 200
+- [ ] API: `http://192.0.2.10:8088/api/health` → 200
+- [ ] Web: `http://192.0.2.10:3008/` → 200
 - [ ] 新功能正常工作
 - [ ] 日志无异常
 - [ ] 数据库无损坏
@@ -724,18 +724,18 @@ systemctl --user stop osint-agent-network-web.service
 
 # 2. 备份当前状态
 echo "2. 备份当前状态..."
-tar czf /home/aidi/backups/osint-agent-network/pre-rollback-$(date +%Y%m%d-%H%M%S).tar.gz \
-  -C /home/aidi/apps/osint-agent-network . \
+tar czf /var/backups/osint-agent-network/pre-rollback-$(date +%Y%m%d-%H%M%S).tar.gz \
+  -C /opt/osint-agent-network . \
   --exclude=node_modules --exclude=__pycache__
 
 # 3. 恢复备份
 echo "3. 恢复备份..."
-tar xzf /home/aidi/backups/osint-agent-network/backup-$BACKUP_NAME.tar.gz \
-  -C /home/aidi/apps/osint-agent-network/
+tar xzf /var/backups/osint-agent-network/backup-$BACKUP_NAME.tar.gz \
+  -C /opt/osint-agent-network/
 
 # 4. 构建前端
 echo "4. 构建前端..."
-cd /home/aidi/apps/osint-agent-network/frontend
+cd /opt/osint-agent-network/frontend
 npm run build
 
 # 5. 启动服务
@@ -785,7 +785,7 @@ THEHARVESTER_PATH=/usr/local/bin/theHarvester
 ```
 ┌──────────────────────────────────────────────────┐
 │                    Web Browser                     │
-│                 http://10.0.0.184:3008             │
+│                 http://192.0.2.10:3008             │
 └───────────────┬──────────────────────────────────┘
                 │
                 ▼
@@ -829,9 +829,9 @@ Description=OSINT Agent Network API
 After=network.target
 
 [Service]
-WorkingDirectory=/home/aidi/apps/osint-agent-network
+WorkingDirectory=/opt/osint-agent-network
 Environment="PYTHONPATH=backend"
-EnvironmentFile=/home/aidi/apps/osint-agent-network/.env
+EnvironmentFile=/opt/osint-agent-network/.env
 ExecStart=/usr/bin/python3 -m app.main
 Restart=on-failure
 RestartSec=5
@@ -849,7 +849,7 @@ Description=OSINT Agent Network Web UI
 After=osint-agent-network-api.service
 
 [Service]
-WorkingDirectory=/home/aidi/apps/osint-agent-network/frontend
+WorkingDirectory=/opt/osint-agent-network/frontend
 ExecStart=/usr/bin/npm run preview --host 0.0.0.0 --port 3008
 Restart=on-failure
 RestartSec=5
@@ -867,7 +867,7 @@ WantedBy=default.target
 
 诊断:
   ss -tlnp | grep 8088                          # 检查端口占用
-  cd /home/aidi/apps/osint-agent-network
+  cd /opt/osint-agent-network
   PYTHONPATH=backend python3 -c "import app.main" # 检查导入
 
 解决:
@@ -926,10 +926,10 @@ WantedBy=default.target
 ## 五、联系方式与资源
 
 ### 项目资源
-- **n100 项目目录**: `/home/aidi/apps/osint-agent-network`
-- **n100 备份目录**: `/home/aidi/backups/osint-agent-network`
-- **n100 数据库**: `/home/aidi/apps/osint-agent-network/data/osint.sqlite`
-- **本地项目目录**: `/Users/aidi/情报官/osint-agent-network`
+- **<production-host> 项目目录**: `/opt/osint-agent-network`
+- **<production-host> 备份目录**: `/var/backups/osint-agent-network`
+- **<production-host> 数据库**: `/opt/osint-agent-network/data/osint.sqlite`
+- **本地项目目录**: `/path/to/osint-agent-network`
 
 ### 关键文档索引
 | 文档 | 位置 | 说明 |
@@ -940,7 +940,7 @@ WantedBy=default.target
 | Agent 协议 | docs/AGENT_PROTOCOL.md | 外部 Agent 接入 |
 | 供应链文档 | docs/CUSTOMS_SUPPLY_CHAIN.md | 海关供应链功能 |
 | 情报聚合文档 | docs/INTELLIGENCE_AGGREGATION.md | 情报聚合功能 |
-| n100 部署手册 | docs/N100_DEPLOYMENT_RUNBOOK.md | 部署步骤 |
+| <production-host> 部署手册 | docs/N100_DEPLOYMENT_RUNBOOK.md | 部署步骤 |
 | 交付总结 | DELIVERY_SUMMARY_2026-06-30.md | 最新交付 |
 | 部署报告 | N100_DEPLOYMENT_REPORT_2026-06-30.md | 最新部署详情 |
 | 本文件 | PROJECT_CLOSURE_MAINTENANCE_LOG.md | 结尾/维护/部署综合日志 |
@@ -952,8 +952,8 @@ WantedBy=default.target
 当项目移交给新的维护者时，请确保以下内容已交接：
 
 ### 交接清单
-- [ ] **源码目录**: `/home/aidi/apps/osint-agent-network` (n100)
-- [ ] **本地开发**: `/Users/aidi/情报官/osint-agent-network` (Mac)
+- [ ] **源码目录**: `/opt/osint-agent-network` (<production-host>)
+- [ ] **本地开发**: `/path/to/osint-agent-network` (Mac)
 - [ ] **数据库**: `data/osint.sqlite` - 已有备份
 - [ ] **环境变量**: `.env` 和 `.env.example` - Token 和 API Key
 - [ ] **服务管理**: systemd 用户服务配置
@@ -987,7 +987,7 @@ WantedBy=default.target
 - ✅ 空白 Lead 逆向补全
 - ✅ 海关供应链分析（零成本）
 - ✅ 智能情报聚合（联系方式/社媒/产品）
-- ✅ n100 生产部署
+- ✅ <production-host> 生产部署
 
 **使用边界**: 本项目只用于授权范围内的公开来源信息整理、证据留痕和人工复核。
 

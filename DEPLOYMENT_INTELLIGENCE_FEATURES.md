@@ -239,8 +239,8 @@ Authorization: Bearer {ADMIN_API_TOKEN}
 
 ### 环境变量检查
 ```bash
-# 在 n100 上检查
-cd /home/aidi/apps/osint-agent-network
+# 在 <production-host> 上检查
+cd /opt/osint-agent-network
 cat .env | grep -E "UPKUAJING|ADMIN_API_TOKEN|VITE_ADMIN"
 ```
 
@@ -253,19 +253,19 @@ cat .env | grep -E "UPKUAJING|ADMIN_API_TOKEN|VITE_ADMIN"
 ### 代码传输
 ```bash
 # 方法1: Git (推荐)
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 git pull origin main
 
 # 方法2: rsync (如果没有推送到Git)
 rsync -avz --exclude='node_modules' --exclude='data' \
-  /Users/aidi/情报官/osint-agent-network/ \
-  n100:/home/aidi/apps/osint-agent-network/
+  /path/to/osint-agent-network/ \
+  <production-host>:/opt/osint-agent-network/
 ```
 
 ### 依赖安装
 ```bash
 # 后端依赖 (无新增)
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 # 已有依赖: requests, urllib3
 
 # 前端依赖 (无新增)
@@ -275,11 +275,11 @@ npm install  # 已有依赖: lucide-react
 
 ### 前端构建
 ```bash
-cd /home/aidi/apps/osint-agent-network/frontend
+cd /opt/osint-agent-network/frontend
 
 # 检查环境变量
 cat .env.production
-# VITE_API_BASE_URL=http://10.0.0.184:8088
+# VITE_API_BASE_URL=http://192.0.2.10:8088
 # VITE_ADMIN_API_TOKEN=<your-token>
 
 # 构建生产版本
@@ -313,28 +313,28 @@ journalctl --user -u osint-agent-network-web.service -f
 ### 1. 健康检查
 ```bash
 # 后端健康
-curl http://10.0.0.184:8088/api/health
+curl http://192.0.2.10:8088/api/health
 # 预期: {"status": "ok", "service": "osint-agent-network"}
 
 # 系统状态
-curl http://10.0.0.184:8088/api/system/status
+curl http://192.0.2.10:8088/api/system/status
 # 预期: 包含 agent_count, job_count, investigation_count
 
 # 工具健康
-curl http://10.0.0.184:8088/api/tools/health
+curl http://192.0.2.10:8088/api/tools/health
 # 预期: 包含 customs_supply_chain 工具
 ```
 
 ### 2. API端点测试
 ```bash
 # 情报聚合端点 (使用真实调查ID)
-curl -sS http://10.0.0.184:8088/api/investigations/{id}/intelligence \
+curl -sS http://192.0.2.10:8088/api/investigations/{id}/intelligence \
   | python3 -m json.tool
 
 # 预期: 返回 contacts, social, products 三大模块
 
 # 供应链端点 (需要授权)
-curl -sS http://10.0.0.184:8088/api/customs/supply-chain \
+curl -sS http://192.0.2.10:8088/api/customs/supply-chain \
   -H "Authorization: Bearer $ADMIN_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -346,7 +346,7 @@ curl -sS http://10.0.0.184:8088/api/customs/supply-chain \
 ```
 
 ### 3. Web UI 验证
-访问: `http://10.0.0.184:3008/`
+访问: `http://192.0.2.10:3008/`
 
 **验证步骤**:
 1. 打开任意调查任务详情页
@@ -366,13 +366,13 @@ curl -sS http://10.0.0.184:8088/api/customs/supply-chain \
 ### 4. 数据质量检查
 ```bash
 # 查看数据库中的实体类型分布
-sqlite3 /home/aidi/apps/osint-agent-network/data/osint.sqlite \
+sqlite3 /opt/osint-agent-network/data/osint.sqlite \
   "SELECT type, COUNT(*) FROM entities GROUP BY type ORDER BY COUNT(*) DESC LIMIT 20;"
 
 # 预期看到: email, phone, profile_url, domain 等类型
 
 # 查看有联系方式的调查数量
-sqlite3 /home/aidi/apps/osint-agent-network/data/osint.sqlite \
+sqlite3 /opt/osint-agent-network/data/osint.sqlite \
   "SELECT COUNT(DISTINCT investigation_id) FROM entities WHERE type IN ('email','phone');"
 ```
 
@@ -384,15 +384,15 @@ sqlite3 /home/aidi/apps/osint-agent-network/data/osint.sqlite \
 
 ### 快速回滚
 ```bash
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 
 # 停止服务
 systemctl --user stop osint-agent-network-api.service
 systemctl --user stop osint-agent-network-web.service
 
 # 恢复备份 (假设有备份)
-cd /home/aidi/backups/osint-agent-network
-cp -r backup-YYYY-MM-DD/* /home/aidi/apps/osint-agent-network/
+cd /var/backups/osint-agent-network
+cp -r backup-YYYY-MM-DD/* /opt/osint-agent-network/
 
 # 重启服务
 systemctl --user start osint-agent-network-api.service

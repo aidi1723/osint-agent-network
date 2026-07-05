@@ -49,7 +49,7 @@ class AgentProtocolTests(unittest.TestCase):
             strategy_name="deep",
         )
         agent = store.register_agent(
-            agent_name="open-human-n100",
+            agent_name="open-human-production-host",
             agent_type="openhuman",
             capabilities=["domain", "sherlock", "amass"],
         )

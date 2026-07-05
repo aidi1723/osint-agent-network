@@ -1,18 +1,18 @@
 # Update Log
 
-## 2026-07-02 - n100 Reliability Upgrade Deployment
+## 2026-07-02 - <production-host> Reliability Upgrade Deployment
 
 Scope:
 
-- Deployed the reliability fixes from the 2026-07-02 audit pass to `n100`.
+- Deployed the reliability fixes from the 2026-07-02 audit pass to `<production-host>`.
 - Updated deployment and maintenance logs for future upgrades.
 
 Deployment result:
 
-- Target: `n100:/home/aidi/apps/osint-agent-network`
-- Backup: `/home/aidi/backups/osint-agent-network/predeploy-20260702-163837.tar.gz`
+- Target: `<production-host>:/opt/osint-agent-network`
+- Backup: `/var/backups/osint-agent-network/predeploy-20260702-163837.tar.gz`
 - Services: `osint-agent-network-api.service` and `osint-agent-network-web.service` are enabled and active.
-- Access: `http://10.0.0.184:3008/` and `http://10.0.0.184:8088/api/health`.
+- Access: `http://192.0.2.10:3008/` and `http://192.0.2.10:8088/api/health`.
 - Remote verification: `bash scripts/verify.sh` passed with `Ran 110 tests ... OK`, regression smoke `failed=0`, and Vite build passed.
 - Remote readiness: `python3 scripts/production_readiness.py` returned `ready=true`.
 
@@ -159,14 +159,14 @@ Deployment readiness:
 - Comprehensive deployment checklist in `DEPLOYMENT_INTELLIGENCE_FEATURES.md`
 - Environment variables documented (UPKUAJING_*, ADMIN_API_TOKEN, VITE_ADMIN_API_TOKEN)
 - No database schema changes required (reads existing tables)
-- Production build successful, ready for n100 deployment
+- Production build successful, ready for <production-host> deployment
 - Rollback plan documented
 - Estimated deployment time: 15-20 minutes
 - Risk level: Low (additive changes only, no breaking modifications)
 
 Next steps:
 
-- Deploy to n100 production environment
+- Deploy to <production-host> production environment
 - Verify intelligence aggregation with real investigation data
 - Test supply chain analysis with active company investigations
 - Monitor API performance under production load
@@ -182,11 +182,11 @@ Business value:
 - **80% reduction in manual information gathering time**
 - **¥0 additional cost** - leverages existing infrastructure
 
-## 2026-05-24 - Intelligence Maturity Gate And n100 Workflow Closure
+## 2026-05-24 - Intelligence Maturity Gate And <production-host> Workflow Closure
 
 Scope:
 
-- Closed the current 皇城司 / OSINT Agent Network maturity phase on `n100`.
+- Closed the current 皇城司 / OSINT Agent Network maturity phase on `<production-host>`.
 - Focused on turning sparse lead handling into a reusable workflow capability, not a one-off fix for the ZAWIJA / Nswana Mukuma test case.
 - Strengthened the intelligence lifecycle around evidence ledger, fact pool, cross-verification, directed gap follow-up, and completion gating.
 
@@ -234,20 +234,20 @@ Local verification:
   - Vite config checks.
 - Frontend TypeScript compilation and Vite production build passed.
 
-Deployment result on n100:
+Deployment result on <production-host>:
 
-- Backend maturity patch synced to `/home/aidi/apps/osint-agent-network`.
+- Backend maturity patch synced to `/opt/osint-agent-network`.
 - API restarted on port `8088`.
 - `GET http://127.0.0.1:8088/api/health` returned `{"status": "ok", "service": "osint-agent-network"}`.
-- Remote regression subset passed on n100.
+- Remote regression subset passed on <production-host>.
 - LAN checks passed:
-  - `http://10.0.0.184:3008/` returned HTTP 200.
-  - `http://10.0.0.184:8088/api/health` returned OK.
+  - `http://192.0.2.10:3008/` returned HTTP 200.
+  - `http://192.0.2.10:8088/api/health` returned OK.
 - Local machine ports `3008` and `8088` had no project processes running after closure.
 
 Workflow validation task:
 
-- Created and ran n100 task `95c0cef1-0f39-4258-8846-73dbf02ca783`.
+- Created and ran <production-host> task `95c0cef1-0f39-4258-8846-73dbf02ca783`.
 - Name: `成熟度验证：ZAWIJA / Nswana Mukuma`.
 - Final queue state:
   - 16 completed jobs,
@@ -288,7 +288,7 @@ Next phase boundary:
 
 Scope:
 
-- Fixed issues found during the full project review and redeployed the patch to `n100`.
+- Fixed issues found during the full project review and redeployed the patch to `<production-host>`.
 - Focused on request-body error handling, Agent heartbeat authorization, and frontend API error reporting.
 
 Changes:
@@ -310,9 +310,9 @@ Local verification:
 - `bash scripts/verify.sh` passed with 97 backend tests, regression smoke, frontend helper checks, TypeScript compilation, and Vite build.
 - `npm test` passed with 2 test files and 6 frontend tests.
 
-Deployment result on n100:
+Deployment result on <production-host>:
 
-- Code synced to `/home/aidi/apps/osint-agent-network`.
+- Code synced to `/opt/osint-agent-network`.
 - Remote verification and service health checks completed successfully.
 
 ---
@@ -347,7 +347,7 @@ Scope:
 
 ### API security hardening
 
-- **CORS restriction**: Replaced `Access-Control-Allow-Origin: *` with a whitelist from `CORS_ALLOWED_ORIGINS` env var (defaults to localhost:3008, 10.0.0.184:3008). Only matching origins receive CORS headers.
+- **CORS restriction**: Replaced `Access-Control-Allow-Origin: *` with a whitelist from `CORS_ALLOWED_ORIGINS` env var (defaults to localhost:3008, 192.0.2.10:3008). Only matching origins receive CORS headers.
 - **Startup auth warning**: The server now prints a visible warning when no `AGENT_API_TOKEN` or `ADMIN_API_TOKEN` is configured.
 - **Agent registration requires auth**: `/api/agents/register` now requires write authorization (previously exempt). Prevents unauthenticated agent registration.
 
@@ -372,16 +372,16 @@ Scope:
   - `WORKER_MAX_WALL_SECONDS`: Worker loop time limit (default 3600).
   - `MAX_REQUEST_BODY_BYTES`: Request body size limit (default 10485760).
   - `CORS_ALLOWED_ORIGINS`: Comma-separated allowed origins for CORS (default: localhost + LAN).
-- After deploying to n100, restart both services and verify with `bash scripts/healthcheck.sh`.
+- After deploying to <production-host>, restart both services and verify with `bash scripts/healthcheck.sh`.
 
 ---
 
-## 2026-05-22 - Security Hardening And n100 Redeploy
+## 2026-05-22 - Security Hardening And <production-host> Redeploy
 
 Scope:
 
 - Reviewed the full project and fixed the issues found in the review.
-- Redeployed the updated project to `n100`.
+- Redeployed the updated project to `<production-host>`.
 - Kept remote runtime data intact: `.env`, SQLite database, logs, job artifacts, reports, and `frontend/.env.production` were not overwritten during sync.
 
 Security and reliability changes:
@@ -399,15 +399,15 @@ Security and reliability changes:
 Verification:
 
 - Local `bash scripts/verify.sh` passed.
-- n100 `bash scripts/verify.sh` passed.
-- n100 backend test result: `Ran 91 tests ... OK`.
-- n100 regression smoke result: `case_count: 4`, `failed: 0`.
-- n100 frontend checks passed, including `vite config checks passed`.
-- n100 Vite production build passed.
+- <production-host> `bash scripts/verify.sh` passed.
+- <production-host> backend test result: `Ran 91 tests ... OK`.
+- <production-host> regression smoke result: `case_count: 4`, `failed: 0`.
+- <production-host> frontend checks passed, including `vite config checks passed`.
+- <production-host> Vite production build passed.
 
-Deployment result on n100:
+Deployment result on <production-host>:
 
-- Code synced to `/home/aidi/apps/osint-agent-network`.
+- Code synced to `/opt/osint-agent-network`.
 - Frontend dependencies installed with `npm install`; result included `found 0 vulnerabilities`.
 - Restarted user services:
   - `osint-agent-network-api.service`

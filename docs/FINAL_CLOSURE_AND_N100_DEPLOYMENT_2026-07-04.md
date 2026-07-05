@@ -1,13 +1,13 @@
-# Final Closure and n100 Deployment - 2026-07-04
+# Final Closure and <production-host> Deployment - 2026-07-04
 
 ## Scope
 
-This closure covers the local audit, hardening, verification, and n100 deployment handoff for the OSINT Agent Network / 情报官 project.
+This closure covers the local audit, hardening, verification, and <production-host> deployment handoff for the OSINT Agent Network / 情报官 project.
 
 The project directory is:
 
-- Local: `/Users/aidi/情报官/osint-agent-network`
-- n100 target: `/home/aidi/apps/osint-agent-network`
+- Local: `/path/to/osint-agent-network`
+- <production-host> target: `/opt/osint-agent-network`
 
 ## Local Closure Status
 
@@ -63,10 +63,10 @@ Verified:
 
 ## Deployment Plan
 
-1. Inspect n100 target path and service state.
+1. Inspect <production-host> target path and service state.
 2. Run remote backup before syncing code.
-3. Sync source files to `/home/aidi/apps/osint-agent-network`, preserving remote `.env`, `data/`, `reports/`, `frontend/node_modules/`, and local runtime artifacts.
-4. Build frontend on n100.
+3. Sync source files to `/opt/osint-agent-network`, preserving remote `.env`, `data/`, `reports/`, `frontend/node_modules/`, and local runtime artifacts.
+4. Build frontend on <production-host>.
 5. Restart user-level systemd services.
 6. Run remote API/Web/system readiness checks.
 
@@ -111,10 +111,10 @@ curl -sS http://127.0.0.1:3008/ | head
 
 ## Post-Deployment Checks
 
-Required checks on n100:
+Required checks on <production-host>:
 
 ```bash
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 python3 scripts/production_readiness.py
 bash scripts/healthcheck.sh
 systemctl --user status osint-agent-network-api.service osint-agent-network-web.service --no-pager
@@ -129,12 +129,12 @@ Expected:
 
 ## Deployment Result
 
-Deployment to n100 completed on 2026-07-04.
+Deployment to <production-host> completed on 2026-07-04.
 
 Remote backup created before sync:
 
 ```text
-/home/aidi/backups/osint-agent-network/20260704-075423
+/var/backups/osint-agent-network/20260704-075423
 ```
 
 Remote sync preserved runtime assets by excluding:
@@ -148,7 +148,7 @@ Remote sync preserved runtime assets by excluding:
 Remote verification passed:
 
 ```bash
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 bash scripts/verify.sh
 ```
 
@@ -194,7 +194,7 @@ Remote production readiness:
 LAN web check:
 
 ```text
-http://10.0.0.184:3008/ -> 200
+http://192.0.2.10:3008/ -> 200
 ```
 
 ## Known Residual Risks

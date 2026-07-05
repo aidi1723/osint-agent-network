@@ -1856,7 +1856,7 @@ In `docs/PROJECT_PACKAGE.md`, add under completed:
 - Intelligence Core v3：任务需求层、事实晋级、交叉验证矩阵和专业白皮书结构。
 ```
 
-- [ ] **Step 3: Update n100 runbook acceptance criteria**
+- [ ] **Step 3: Update <production-host> runbook acceptance criteria**
 
 In `docs/N100_DEPLOYMENT_RUNBOOK.md`, add to final acceptance:
 
@@ -1875,13 +1875,13 @@ bash scripts/verify.sh
 
 Expected: OK.
 
-- [ ] **Step 5: Deploy to n100**
+- [ ] **Step 5: Deploy to <production-host>**
 
 Run:
 
 ```bash
-rsync -az --exclude data --exclude reports --exclude frontend/node_modules --exclude frontend/dist --exclude .env --exclude frontend/.env.production --exclude .DS_Store /Users/aidi/情报官/osint-agent-network/ n100:/home/aidi/apps/osint-agent-network/
-ssh n100 'set -eu; cd /home/aidi/apps/osint-agent-network/frontend; npm run build; systemctl --user restart osint-agent-network-api.service osint-agent-network-web.service; sleep 3; cd /home/aidi/apps/osint-agent-network; bash scripts/verify.sh; curl -sS http://127.0.0.1:8088/api/health'
+rsync -az --exclude data --exclude reports --exclude frontend/node_modules --exclude frontend/dist --exclude .env --exclude frontend/.env.production --exclude .DS_Store /path/to/osint-agent-network/ <production-host>:/opt/osint-agent-network/
+ssh <production-host> 'set -eu; cd /opt/osint-agent-network/frontend; npm run build; systemctl --user restart osint-agent-network-api.service osint-agent-network-web.service; sleep 3; cd /opt/osint-agent-network; bash scripts/verify.sh; curl -sS http://127.0.0.1:8088/api/health'
 ```
 
 Expected:
@@ -1896,7 +1896,7 @@ core v3 helper checks passed
 
 ## Self-Review Checklist
 
-- Spec coverage: Tasks cover PIR/EEI, fact promotion, cross-verification matrix, quality/report updates, UI panels, creation payload, verification, docs, and n100 deployment.
+- Spec coverage: Tasks cover PIR/EEI, fact promotion, cross-verification matrix, quality/report updates, UI panels, creation payload, verification, docs, and <production-host> deployment.
 - Placeholder scan: no TBD/TODO/implement-later placeholders are used as implementation instructions.
 - Type consistency: `intelligence_requirements`, `cross_verification_matrix`, and `promotion_stage` are named consistently across backend, API, frontend types, and UI helpers.
 - Risk control: migration is additive; matrix is derived; old tasks are handled by default requirement generation at read time.

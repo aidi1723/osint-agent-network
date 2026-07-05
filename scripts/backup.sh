@@ -10,11 +10,8 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
   set +a
 fi
 
-BACKUP_ROOT="${BACKUP_ROOT:-/home/aidi/backups/osint-agent-network}"
+BACKUP_ROOT="${BACKUP_ROOT:-$ROOT_DIR/data/backups}"
 BACKUP_KEEP_LAST="${BACKUP_KEEP_LAST:-14}"
-if [[ "$BACKUP_ROOT" == /home/aidi/* && ! -d /home/aidi ]]; then
-  BACKUP_ROOT="$ROOT_DIR/data/backups"
-fi
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="$BACKUP_ROOT/$STAMP"

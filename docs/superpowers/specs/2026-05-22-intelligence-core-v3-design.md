@@ -36,7 +36,7 @@ The project already has:
 - Quality gate.
 - Whitepaper report area.
 - Intelligence memory and directed collection hints.
-- n100 systemd deployment.
+- <production-host> systemd deployment.
 
 The current gap is not basic execution. The gap is stricter analytical discipline: tasks need explicit intelligence requirements, facts need visible maturity stages, and key fields need a source-by-source verification view before entering the main conclusion.
 
@@ -491,7 +491,7 @@ End-to-end smoke:
 
 ## 12. Migration And Rollback
 
-Migration must be safe for n100:
+Migration must be safe for <production-host>:
 
 - Backup `data/osint.sqlite` before deployment.
 - Additive schema change only.
@@ -508,7 +508,7 @@ Rollback compatibility:
 Core v3 is accepted when:
 
 - `bash scripts/verify.sh` passes locally.
-- `bash scripts/verify.sh` passes on n100 after deployment.
+- `bash scripts/verify.sh` passes on <production-host> after deployment.
 - New investigations include default PIR / EEI.
 - Existing investigations load without manual migration.
 - Facts include promotion stages.

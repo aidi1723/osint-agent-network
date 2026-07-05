@@ -161,15 +161,15 @@ docs/UPDATE_LOG.md                                +本次更新
 
 ---
 
-## 五、部署到 n100
+## 五、部署到 <production-host>
 
 ### 前置条件检查
 ```bash
-# SSH 登录 n100
-ssh n100
+# SSH 登录 <production-host>
+ssh <production-host>
 
 # 检查环境变量
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 cat .env | grep -E "UPKUAJING|ADMIN_API_TOKEN"
 ```
 
@@ -184,22 +184,22 @@ cat .env | grep -E "UPKUAJING|ADMIN_API_TOKEN"
 #### 1. 代码传输
 ```bash
 # 方法A: Git (推荐)
-cd /home/aidi/apps/osint-agent-network
+cd /opt/osint-agent-network
 git pull origin main
 
 # 方法B: rsync (如果未推送)
 rsync -avz --exclude='node_modules' --exclude='data' \
-  /Users/aidi/情报官/osint-agent-network/ \
-  n100:/home/aidi/apps/osint-agent-network/
+  /path/to/osint-agent-network/ \
+  <production-host>:/opt/osint-agent-network/
 ```
 
 #### 2. 前端构建
 ```bash
-cd /home/aidi/apps/osint-agent-network/frontend
+cd /opt/osint-agent-network/frontend
 
 # 确认环境变量
 cat .env.production
-# VITE_API_BASE_URL=http://10.0.0.184:8088
+# VITE_API_BASE_URL=http://192.0.2.10:8088
 # VITE_ADMIN_API_TOKEN=<your-token>
 
 # 构建
@@ -220,20 +220,20 @@ systemctl --user status osint-agent-network-web.service
 #### 4. 健康检查
 ```bash
 # 后端健康
-curl http://10.0.0.184:8088/api/health
+curl http://192.0.2.10:8088/api/health
 # 预期: {"status": "ok", "service": "osint-agent-network"}
 
 # 工具健康
-curl http://10.0.0.184:8088/api/tools/health
+curl http://192.0.2.10:8088/api/tools/health
 # 预期: 包含 customs_supply_chain 工具
 
 # Web 可访问性
-curl -I http://10.0.0.184:3008/
+curl -I http://192.0.2.10:3008/
 # 预期: HTTP/1.1 200 OK
 ```
 
 #### 5. 功能验收
-1. 浏览器打开 `http://10.0.0.184:3008/`
+1. 浏览器打开 `http://192.0.2.10:3008/`
 2. 打开任意调查任务详情页
 3. 滚动到页面下方
 4. 验证"情报汇总"面板:
@@ -393,7 +393,7 @@ curl -I http://10.0.0.184:3008/
 
 ---
 
-**下一步行动**: 按照"五、部署到 n100"章节执行部署
+**下一步行动**: 按照"五、部署到 <production-host>"章节执行部署
 
 **预计工作量**: 15-20分钟
 

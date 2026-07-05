@@ -3,9 +3,9 @@
 ## Summary
 
 - Date: 2026-07-02
-- Target host: `n100`
-- Target IP: `10.0.0.184`
-- Target path: `/home/aidi/apps/osint-agent-network`
+- Target host: `<production-host>`
+- Target IP: `192.0.2.10`
+- Target path: `/opt/osint-agent-network`
 - Service mode: user-level systemd
 - Result: deployed and verified
 
@@ -25,20 +25,20 @@ This deployment promoted the reliability fixes for customs supply-chain errors, 
 Created before sync:
 
 ```text
-/home/aidi/backups/osint-agent-network/predeploy-20260702-163837.tar.gz
+/var/backups/osint-agent-network/predeploy-20260702-163837.tar.gz
 ```
 
 Backup command pattern:
 
 ```bash
-ssh n100 'mkdir -p /home/aidi/backups/osint-agent-network && cd /home/aidi/apps && tar \
+ssh <production-host> 'mkdir -p /var/backups/osint-agent-network && cd /home/osint/apps && tar \
   --exclude=osint-agent-network/frontend/node_modules \
   --exclude=osint-agent-network/frontend/dist \
   --exclude=osint-agent-network/data/jobs \
   --exclude=osint-agent-network/data/artifacts \
   --exclude=osint-agent-network/data/*.sqlite \
   --exclude=osint-agent-network/reports \
-  -czf /home/aidi/backups/osint-agent-network/predeploy-$(date +%Y%m%d-%H%M%S).tar.gz \
+  -czf /var/backups/osint-agent-network/predeploy-$(date +%Y%m%d-%H%M%S).tar.gz \
   osint-agent-network'
 ```
 
@@ -71,7 +71,7 @@ rsync -az \
   --exclude 'data/jobs/' \
   --exclude 'data/artifacts/' \
   --exclude 'reports/' \
-  ./ n100:/home/aidi/apps/osint-agent-network/
+  ./ <production-host>:/opt/osint-agent-network/
 ```
 
 Preserved on remote:
@@ -88,7 +88,7 @@ Preserved on remote:
 Build:
 
 ```bash
-ssh n100 'cd /home/aidi/apps/osint-agent-network/frontend && npm install && npm run build'
+ssh <production-host> 'cd /opt/osint-agent-network/frontend && npm install && npm run build'
 ```
 
 Observed:
@@ -103,7 +103,7 @@ CSS syntax warnings: none
 Full verification:
 
 ```bash
-ssh n100 'cd /home/aidi/apps/osint-agent-network && bash scripts/verify.sh'
+ssh <production-host> 'cd /opt/osint-agent-network && bash scripts/verify.sh'
 ```
 
 Observed:
@@ -118,7 +118,7 @@ Vite build: passed
 Production readiness:
 
 ```bash
-ssh n100 'cd /home/aidi/apps/osint-agent-network && python3 scripts/production_readiness.py'
+ssh <production-host> 'cd /opt/osint-agent-network && python3 scripts/production_readiness.py'
 ```
 
 Observed:
@@ -137,9 +137,9 @@ tool_attention=7
 Installed/refreshed:
 
 ```bash
-ssh n100 'mkdir -p ~/.config/systemd/user && \
-  cp /home/aidi/apps/osint-agent-network/deploy/systemd/osint-agent-network-api.service ~/.config/systemd/user/ && \
-  cp /home/aidi/apps/osint-agent-network/deploy/systemd/osint-agent-network-web.service ~/.config/systemd/user/ && \
+ssh <production-host> 'mkdir -p ~/.config/systemd/user && \
+  cp /opt/osint-agent-network/deploy/systemd/osint-agent-network-api.service ~/.config/systemd/user/ && \
+  cp /opt/osint-agent-network/deploy/systemd/osint-agent-network-web.service ~/.config/systemd/user/ && \
   systemctl --user daemon-reload && \
   systemctl --user enable --now osint-agent-network-api.service osint-agent-network-web.service'
 ```
@@ -147,7 +147,7 @@ ssh n100 'mkdir -p ~/.config/systemd/user && \
 Final restart:
 
 ```bash
-ssh n100 'systemctl --user restart osint-agent-network-api.service osint-agent-network-web.service'
+ssh <production-host> 'systemctl --user restart osint-agent-network-api.service osint-agent-network-web.service'
 ```
 
 Final status:
@@ -170,8 +170,8 @@ Web head: <!doctype html>
 
 Access:
 
-- Web UI: `http://10.0.0.184:3008/`
-- API health: `http://10.0.0.184:8088/api/health`
+- Web UI: `http://192.0.2.10:3008/`
+- API health: `http://192.0.2.10:8088/api/health`
 
 ## Issue Fixed During Deployment
 
@@ -195,7 +195,7 @@ production_readiness.py: ready=true
 1. Run local verification:
 
 ```bash
-cd /Users/aidi/情报官/osint-agent-network
+cd /path/to/osint-agent-network
 bash scripts/verify.sh
 ```
 
@@ -206,22 +206,22 @@ bash scripts/verify.sh
 4. Build and verify remotely:
 
 ```bash
-ssh n100 'cd /home/aidi/apps/osint-agent-network/frontend && npm install && npm run build'
-ssh n100 'cd /home/aidi/apps/osint-agent-network && bash scripts/verify.sh'
+ssh <production-host> 'cd /opt/osint-agent-network/frontend && npm install && npm run build'
+ssh <production-host> 'cd /opt/osint-agent-network && bash scripts/verify.sh'
 ```
 
 5. Restart and run readiness:
 
 ```bash
-ssh n100 'systemctl --user restart osint-agent-network-api.service osint-agent-network-web.service'
-ssh n100 'cd /home/aidi/apps/osint-agent-network && python3 scripts/production_readiness.py'
+ssh <production-host> 'systemctl --user restart osint-agent-network-api.service osint-agent-network-web.service'
+ssh <production-host> 'cd /opt/osint-agent-network && python3 scripts/production_readiness.py'
 ```
 
 6. Confirm access:
 
 ```bash
-curl -sS http://10.0.0.184:8088/api/health
-curl -sS http://10.0.0.184:3008/ | head
+curl -sS http://192.0.2.10:8088/api/health
+curl -sS http://192.0.2.10:3008/ | head
 ```
 
 ## Rollback Notes
@@ -229,8 +229,8 @@ curl -sS http://10.0.0.184:3008/ | head
 If a future deployment fails after service restart, inspect logs first:
 
 ```bash
-ssh n100 'journalctl --user -u osint-agent-network-api.service -n 80 --no-pager'
-ssh n100 'journalctl --user -u osint-agent-network-web.service -n 80 --no-pager'
+ssh <production-host> 'journalctl --user -u osint-agent-network-api.service -n 80 --no-pager'
+ssh <production-host> 'journalctl --user -u osint-agent-network-web.service -n 80 --no-pager'
 ```
 
 Restore from backup only after confirming `.env`, `data/`, and `reports/` preservation. Avoid copying old runtime data over current investigation data unless that is intentional.

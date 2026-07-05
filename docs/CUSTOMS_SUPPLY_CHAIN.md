@@ -97,7 +97,7 @@ Content-Type: application/json
 使用现有的agent_client（待集成）:
 
 ```bash
-cd /Users/aidi/情报官/osint-agent-network
+cd /path/to/osint-agent-network
 
 PYTHONPATH=backend python3 -c "
 from app.tools.customs_supply_chain import CustomsSupplyChainAdapter
@@ -323,7 +323,7 @@ for company in companies:
 
 ```bash
 # 查看后端日志
-tail -f /Users/aidi/情报官/osint-agent-network/data/api.log
+tail -f /path/to/osint-agent-network/data/api.log
 
 # 查看浏览器控制台
 # Chrome DevTools -> Console
@@ -345,7 +345,7 @@ curl -X POST http://127.0.0.1:8088/api/customs/supply-chain \
 ### 运行测试
 
 ```bash
-cd /Users/aidi/情报官/osint-agent-network
+cd /path/to/osint-agent-network
 PYTHONPATH=backend python3 -m unittest backend.tests.test_customs_supply_chain
 ```
 

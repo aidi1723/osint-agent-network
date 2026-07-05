@@ -611,7 +611,7 @@ def _get_allowed_origins() -> list[str]:
     env_value = os.getenv("CORS_ALLOWED_ORIGINS", "")
     if env_value:
         return [origin.strip() for origin in env_value.split(",") if origin.strip()]
-    return ["http://127.0.0.1:3008", "http://localhost:3008", "http://10.0.0.184:3008"]
+    return ["http://127.0.0.1:3008", "http://localhost:3008"]
 
 
 def requires_write_authorization(path: str) -> bool:

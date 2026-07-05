@@ -2,7 +2,7 @@
 
 Version: 0.1
 Date: 2026-05-19
-Deployment target: `/home/aidi/apps/osint-agent-network` on `n100`
+Deployment target: `/opt/osint-agent-network` on `<production-host>`
 
 > Current implementation note, 2026-05-20: this manual preserves the original architecture plan and target shape. The current running MVP uses a lightweight Python `http.server` API, SQLite store, React + TypeScript + Vite frontend, and role-based external Agent orchestration. For runbooks and current protocol details, use `README.md`, `docs/PROJECT_PACKAGE.md`, `docs/AGENT_PROTOCOL.md`, `docs/ORCHESTRATION_MODEL.md`, and `docs/GRAPH_TEMPLATE.md` as the source of truth.
 
@@ -36,7 +36,7 @@ Recommended stack:
 - Backend: Python 3.11+, FastAPI, SQLAlchemy, Pydantic, SQLite for MVP.
 - Background jobs: local worker loop with DB-backed task table for MVP; interface must allow future Redis/Celery migration.
 - Frontend: React, TypeScript, Vite, Tailwind, shadcn/ui-style source-owned components.
-- Deployment: Docker Compose on n100.
+- Deployment: Docker Compose on <production-host>.
 - Tool execution: subprocess wrappers for CLI tools, HTTP clients for REST tools, Docker-compatible command paths.
 
 Main runtime services:
@@ -963,7 +963,7 @@ DATABASE_URL=sqlite:///./data/osint.db
 JOB_WORKDIR=./data/jobs
 ARTIFACT_DIR=./data/artifacts
 
-OSINT_LLM_BASE_URL=http://10.0.0.184:6780/v1
+OSINT_LLM_BASE_URL=http://192.0.2.10:6780/v1
 OSINT_LLM_API_KEY=
 OSINT_LLM_MODEL=gpt-5.4
 OSINT_LLM_TIMEOUT=30
@@ -986,26 +986,26 @@ Rules:
 - Tool health page must show why a tool is disabled.
 - Secrets must never be printed in logs.
 
-## 14. Deployment on n100
+## 14. Deployment on <production-host>
 
 Target folder:
 
 ```text
-/home/aidi/apps/osint-agent-network
+/opt/osint-agent-network
 ```
 
 Initial setup:
 
 ```bash
-mkdir -p /home/aidi/apps/osint-agent-network
-cd /home/aidi/apps/osint-agent-network
+mkdir -p /opt/osint-agent-network
+cd /opt/osint-agent-network
 docker-compose up -d --build
 ```
 
 Ports:
 
-- Web UI: `http://n100:3008`
-- API: `http://n100:8088`
+- Web UI: `http://<production-host>:3008`
+- API: `http://<production-host>:8088`
 
 MVP can run backend and worker directly with Python before Docker is complete.
 
