@@ -1,0 +1,36 @@
+[
+  {
+    "id": "company_example_manufacturing",
+    "seed_type": "company",
+    "seed_value": "Example Manufacturing LLC",
+    "strategy": "standard",
+    "metadata": {}
+  },
+  {
+    "id": "sparse_lead_long_way",
+    "seed_type": "sparse_lead",
+    "seed_value": "Long Way / in19034126503jgqn",
+    "strategy": "deep",
+    "metadata": {
+      "platform": "Alibaba",
+      "member_id": "in19034126503jgqn",
+      "company_name_raw": "Long Way",
+      "purchase_category": "construction machinery spare parts",
+      "country_region": "India"
+    }
+  },
+  {
+    "id": "domain_example",
+    "seed_type": "domain",
+    "seed_value": "example.com",
+    "strategy": "standard",
+    "metadata": {}
+  },
+  {
+    "id": "email_buyer_example",
+    "seed_type": "email",
+    "seed_value": "buyer@example.com",
+    "strategy": "quick",
+    "metadata": {}
+  }
+]

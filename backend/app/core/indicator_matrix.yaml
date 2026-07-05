@@ -1,0 +1,102 @@
+version: "0.1"
+indicators:
+  - id: IND_PROJECT_SPEC_PROVIDED
+    scenario: real_procurement
+    description: Buyer provides drawings, quantity, destination, standards, or timeline.
+    weight: 0.28
+    polarity: positive
+    evidence_kinds:
+      - project_specification
+      - drawing_provided
+      - quantity_destination_timeline
+    keywords:
+      - drawing
+      - drawings
+      - specification
+      - quantity
+      - destination
+      - timeline
+      - standard
+      - project
+  - id: IND_GENERIC_PRICE_ONLY
+    scenario: price_benchmarking
+    description: Buyer asks only for generic price, MOQ, or catalog without project constraints.
+    weight: 0.22
+    polarity: caution
+    evidence_kinds:
+      - generic_price_request
+      - moq_only_request
+      - catalog_only_request
+    keywords:
+      - price
+      - moq
+      - catalog
+      - quotation
+  - id: IND_HARD_ASSET_IMPORT
+    scenario: hard_asset_confirmation
+    description: Public or authorized import/customs data indicates relevant HS code, cargo, or container movement.
+    weight: 0.34
+    polarity: positive
+    evidence_kinds:
+      - customs_record
+      - bill_of_lading
+      - import_record
+    keywords:
+      - HS
+      - 7604
+      - 7007
+      - import
+      - customs
+      - bill of lading
+      - container
+  - id: IND_OFFICIAL_REGISTRY_MATCH
+    scenario: hard_asset_confirmation
+    description: Official registry confirms company name, address, identifier, or active registration.
+    weight: 0.3
+    polarity: positive
+    evidence_kinds:
+      - government_registry
+      - regulatory_filing
+      - official_company_record
+    keywords:
+      - registry
+      - registration
+      - NIT
+      - RUES
+      - chamber
+      - active
+  - id: IND_SAME_NAME_NOISE
+    scenario: identity_uncertainty
+    description: Broad same-name result lacks country, platform, company, contact, or product constraints.
+    weight: 0.26
+    polarity: negative
+    evidence_kinds:
+      - same_name_noise
+      - weak_search_hit
+      - unrelated_public_figure
+    keywords:
+      - same name
+      - unrelated
+      - athlete
+      - football
+      - music
+      - crime
+      - prison
+  - id: IND_SUPPLY_CHAIN_SHIFT
+    scenario: supply_chain_movement
+    description: Hiring, warehouse, project, supplier, logistics, or expansion signal suggests procurement change.
+    weight: 0.24
+    polarity: positive
+    evidence_kinds:
+      - job_board
+      - warehouse_signal
+      - supplier_change
+      - logistics_signal
+      - project_news
+    keywords:
+      - hiring
+      - warehouse
+      - supplier
+      - logistics
+      - expansion
+      - project

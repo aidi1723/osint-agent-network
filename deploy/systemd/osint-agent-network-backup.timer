@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily OSINT Agent Network Backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+Unit=osint-agent-network-backup.service
+
+[Install]
+WantedBy=timers.target

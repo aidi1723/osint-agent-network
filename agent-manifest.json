@@ -1,0 +1,58 @@
+{
+  "version": "0.1",
+  "agents": [
+    {
+      "name": "enterprise_intel_agent",
+      "path": "agents/enterprise-intel-agent.md",
+      "skills": ["constrained-search", "evidence-promotion"],
+      "allowed_tool_families": ["official", "registry", "directory", "news", "tool", "operator"],
+      "output_contract": "entities,evidence,relationships,facts"
+    },
+    {
+      "name": "social_intel_agent",
+      "path": "agents/social-intel-agent.md",
+      "skills": ["constrained-search", "evidence-promotion"],
+      "allowed_tool_families": ["social", "directory", "search", "tool", "operator"],
+      "output_contract": "entities,evidence,relationships"
+    },
+    {
+      "name": "contact_discovery_agent",
+      "path": "agents/contact-discovery-agent.md",
+      "skills": ["constrained-search", "evidence-promotion"],
+      "allowed_tool_families": ["official", "directory", "tool", "operator"],
+      "output_contract": "entities,evidence,relationships,facts"
+    },
+    {
+      "name": "cross_verification_agent",
+      "path": "agents/cross-verification-agent.md",
+      "skills": ["cross-verification", "evidence-promotion"],
+      "allowed_tool_families": ["official", "registry", "directory", "news", "social", "tool", "operator"],
+      "output_contract": "facts,cross_verification_matrix,quality_notes"
+    },
+    {
+      "name": "analysis_judgement_agent",
+      "path": "agents/analysis-judgement-agent.md",
+      "skills": ["cross-verification", "bluf-reporting"],
+      "allowed_tool_families": ["official", "registry", "directory", "news", "social", "tool", "operator"],
+      "output_contract": "report_markdown,quality_notes,directed_collection"
+    }
+  ],
+  "skills": [
+    {
+      "name": "constrained-search",
+      "path": "skills/constrained-search/SKILL.md"
+    },
+    {
+      "name": "evidence-promotion",
+      "path": "skills/evidence-promotion/SKILL.md"
+    },
+    {
+      "name": "cross-verification",
+      "path": "skills/cross-verification/SKILL.md"
+    },
+    {
+      "name": "bluf-reporting",
+      "path": "skills/bluf-reporting/SKILL.md"
+    }
+  ]
+}

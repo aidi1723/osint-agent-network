@@ -1,0 +1,29 @@
+{
+  "name": "osint-agent-network-web",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 3008",
+    "build": "tsc && vite build",
+    "check:ui-copy": "node scripts/check-chinese-ui.mjs",
+    "preview": "vite preview --host 0.0.0.0 --port 3008",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "lucide-react": "^0.561.0",
+    "marked": "^18.0.4",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.4",
+    "vitest": "^4.1.7"
+  }
+}
