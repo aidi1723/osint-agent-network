@@ -1,5 +1,27 @@
 # Update Log
 
+## 2026-07-05 - Public Repository Privacy Cleanup
+
+Scope:
+
+- Removed local workstation paths, personal server home paths, private deployment host aliases, private LAN addresses, and private model gateway examples from the public branch.
+- Replaced deployment examples with public-safe placeholders such as `<production-host>`, `/opt/osint-agent-network`, `/var/backups/osint-agent-network`, and documentation-only IP examples.
+- Added `docs/PUBLIC_REPOSITORY_MAINTENANCE.md` as the ongoing privacy-hygiene rule for public repository maintenance.
+- Added `frontend/.env.production` to `.gitignore` so production frontend API/token settings stay local.
+
+Result:
+
+- Public `main` was updated by commit `44aa5e4` (`Remove local deployment details from public docs`).
+- This was a normal forward commit, not a Git history rewrite. Historical commits may still contain old deployment details and require a separate owner-approved history rewrite if complete removal from history is required.
+
+Verification:
+
+- `git grep -n -I -E '<private-path-or-host-patterns>' HEAD` returned no matches for the blocked personal path, private host, private LAN address, local email, or local machine-name patterns used in the cleanup check.
+- `rg -n --hidden -S -I ...` returned no worktree matches for the same blocked patterns, excluding `.git`, `frontend/node_modules`, and `frontend/dist`.
+- `git diff --check` passed before commit.
+- `python3 scripts/public_release_check.py` returned `ready: true`.
+- `git ls-remote origin refs/heads/main` confirmed remote `main` points to `44aa5e4`.
+
 ## 2026-07-02 - <production-host> Reliability Upgrade Deployment
 
 Scope:
