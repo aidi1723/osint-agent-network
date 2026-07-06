@@ -4,7 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 cd "$ROOT_DIR"
-PYTHONPATH=backend python3 -m unittest discover -s backend/tests
+if command -v uv >/dev/null 2>&1 && [ -f backend/uv.lock ]; then
+  PYTHONPATH=backend uv run --project backend python3 -m unittest discover -s backend/tests
+else
+  PYTHONPATH=backend python3 -m unittest discover -s backend/tests
+fi
 
 python3 scripts/check_agents.py
 python3 scripts/regression_smoke.py

@@ -752,7 +752,7 @@ Ran 8 tests in 2.054s
 OK
 ```
 
-- [ ] **Step 3: Run full project verification**
+- [x] **Step 3: Run full project verification**
 
 Run:
 
@@ -772,11 +772,9 @@ Evidence (2026-07-06):
 
 ```text
 Actual command: bash scripts/verify.sh
-Result: FAILED during backend unittest discovery.
-Summary: Ran 327 tests in 16.917s; FAILED (failures=1, errors=2).
-Root cause observed: scripts/verify.sh uses system Python 3.14, where reportlab is not installed.
-The same PDF tests pass in the backend uv environment.
-No production code was changed.
+Result: PASS after scripts/verify.sh was updated to run backend unittest discovery through uv when uv and backend/uv.lock are available.
+Backend summary: Ran 328 tests in 16.873s; OK.
+Frontend summary: vitest 2 files / 9 tests passed; npm run build completed.
 ```
 
 - [x] **Step 4: Generate a sample PDF for rendering verification**
