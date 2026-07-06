@@ -12,6 +12,9 @@ PROFILE_IDENTITY_TYPES = {"email", "username", "identity", "profile_url", "platf
 CONTACT_CHANNEL_TYPES = {"email", "phone", "whatsapp"}
 CONTACT_EMAIL_RE = re.compile(r"\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b", re.IGNORECASE)
 CONTACT_PHONE_RE = re.compile(r"(?:\+?\d[\d\s().-]{5,}\d)")
+CONFLICT_VERIFICATION_STATUSES = {"CONFLICT", "CONFLICTED", "CONTRADICTED", "HIGH_RISK_CONFLICT"}
+BUSINESS_SCOPE_FIELD_KEYS = {"business_scope", "product_scope", "purchase_category"}
+GENERIC_BUSINESS_SCOPE_TERMS = {"business", "product", "products", "scope", "service", "services"}
 NON_ACCEPTABLE_BLOCKERS = {
     "company_identity",
     "official_website",
@@ -293,7 +296,7 @@ def _has_non_acceptable_blocker(remaining_blockers: list[str], detail: dict) -> 
     if set(remaining_blockers) & NON_ACCEPTABLE_BLOCKERS:
         return True
     matrix = detail.get("cross_verification_matrix") or []
-    return any(str(row.get("status") or "").strip().upper() in {"CONFLICT", "CONTRADICTED", "HIGH_RISK_CONFLICT"} for row in matrix)
+    return any(str(row.get("status") or "").strip().upper() in CONFLICT_VERIFICATION_STATUSES for row in matrix)
 
 
 def _environment_blocked(gap_tool_plan: list[dict], gap_summary: dict) -> bool:
@@ -364,12 +367,11 @@ def _has_source_backed_official_website(detail: dict) -> bool:
 
 
 def _has_source_backed_business_scope(detail: dict) -> bool:
-    return _has_source_backed_value(
-        detail,
-        _entity_values(detail, {"business_scope", "product_scope"}),
-    ) or _has_source_backed_field(
-        detail,
-        {"business_scope", "business scope", "product_scope", "product scope", "business", "product", "scope"},
+    values = _concrete_business_scope_values(detail)
+    return (
+        _has_source_backed_value(detail, values)
+        or _has_source_backed_business_scope_fact(detail, values)
+        or _has_source_backed_business_scope_verification(detail, values)
     )
 
 
@@ -450,6 +452,71 @@ def _has_source_backed_field(detail: dict, values_or_terms: set[str]) -> bool:
             for key in ("statement", "predicate", "subject", "object", "value")
         )
         if any(term in haystack for term in terms):
+            return True
+    return False
+
+
+def _concrete_business_scope_values(detail: dict) -> set[str]:
+    return {
+        value
+        for value in _entity_values(detail, {"business_scope", "product_scope", "purchase_category"})
+        if value not in GENERIC_BUSINESS_SCOPE_TERMS
+    }
+
+
+def _has_source_backed_business_scope_fact(detail: dict, values: set[str]) -> bool:
+    source_backed_evidence_ids = _source_backed_evidence_ids(detail)
+    if not source_backed_evidence_ids:
+        return False
+    for fact in detail.get("facts") or []:
+        if not _fact_is_accepted(fact) or not _fact_has_source_backed_evidence(fact, source_backed_evidence_ids):
+            continue
+        predicate = str(fact.get("predicate") or "").strip().lower()
+        if any(field_key in predicate for field_key in BUSINESS_SCOPE_FIELD_KEYS):
+            return True
+        if not values:
+            continue
+        haystack = " ".join(
+            str(fact.get(key) or "").lower()
+            for key in ("statement", "object", "value")
+        )
+        if any(value in haystack for value in values):
+            return True
+    return False
+
+
+def _has_source_backed_business_scope_verification(detail: dict, values: set[str]) -> bool:
+    source_backed_evidence_ids = _source_backed_evidence_ids(detail)
+    source_backed_fact_ids = {
+        str(item.get("id") or "").strip()
+        for item in detail.get("facts") or []
+        if str(item.get("id") or "").strip()
+        and _fact_is_accepted(item)
+        and _fact_has_source_backed_evidence(item, source_backed_evidence_ids)
+    }
+    for item in detail.get("cross_verification_matrix") or []:
+        if str(item.get("status") or "").upper() not in SUPPORTED_VERIFICATION_STATUSES:
+            continue
+        field_key = str(item.get("field_key") or "").strip().lower()
+        if field_key not in BUSINESS_SCOPE_FIELD_KEYS:
+            continue
+        linked_evidence_ids = {
+            str(evidence_id).strip()
+            for evidence_id in item.get("linked_evidence_ids") or item.get("evidence_ids") or []
+            if str(evidence_id).strip()
+        }
+        linked_fact_ids = {
+            str(fact_id).strip()
+            for fact_id in item.get("linked_fact_ids") or item.get("fact_ids") or []
+            if str(fact_id).strip()
+        }
+        if linked_fact_ids:
+            if not linked_fact_ids & source_backed_fact_ids:
+                continue
+        elif not linked_evidence_ids & source_backed_evidence_ids:
+            continue
+        candidate_value = str(item.get("candidate_value") or "").strip().lower()
+        if not values or any(value in candidate_value for value in values):
             return True
     return False
 
@@ -610,7 +677,7 @@ def _contains_contact_value(value: str) -> bool:
     if CONTACT_PHONE_RE.search(normalized):
         return True
     if any(term in normalized for term in ("mailto:", "tel:", "whatsapp", "wa.me/")):
-            return True
+        return True
     return False
 
 

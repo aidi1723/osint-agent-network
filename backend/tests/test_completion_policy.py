@@ -699,6 +699,151 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertNotEqual(policy["recommended_status"], "COMPLETED")
         self.assertFalse(policy["limited_completion_ready"])
 
+    def test_conflicted_cross_verification_row_prevents_limited_completion(self):
+        detail = complete_company_detail()
+        detail["quality_assessment"] = {
+            "score": 78.0,
+            "completion_ready": False,
+            "missing_keys": ["decision_maker"],
+            "blocking_keys": ["decision_maker"],
+            "checks": [],
+        }
+        detail["gap_analysis"] = [{"gap_key": "decision_maker", "severity": "blocking"}]
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 1,
+            "blocking_gaps": 1,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 1,
+            "blocked_by_config": 0,
+            "exhausted": 1,
+            "manual_review_required": 0,
+        }
+        detail["cross_verification_matrix"] = [
+            *detail["cross_verification_matrix"],
+            {
+                "field_key": "official_website",
+                "status": "CONFLICTED",
+                "candidate_value": "https://conflicting-target.test",
+                "linked_evidence_ids": ["ev-1"],
+            },
+        ]
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "limited")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["limited_completion_ready"])
+
+    def test_generic_business_registry_text_does_not_satisfy_business_scope_floor(self):
+        detail = complete_company_detail()
+        detail["entities"] = [
+            item
+            for item in detail["entities"]
+            if item["type"] not in {"business_scope", "decision_maker"}
+        ]
+        detail["evidence_ledger"] = [
+            {
+                "id": "ev-1",
+                "source_url": "https://registry.example.test/sample-auto-parts",
+                "source_type": "business_registry",
+                "source_tool": "registry_lookup",
+                "snippet": "Business registry confirms Sample Auto Parts Co. identity.",
+            },
+            {
+                "id": "ev-2",
+                "source_url": "https://example-target.test/contact",
+                "source_type": "official_site_contact",
+                "source_tool": "official_site_extractor",
+                "snippet": "Official contact page lists sales@example-target.test.",
+            },
+        ]
+        detail["facts"] = [
+            {
+                "id": "fact-1",
+                "statement": "Sample Auto Parts Co. is the company identity on the business registry.",
+                "predicate": "company_identity",
+                "subject": "Sample Auto Parts Co.",
+                "object": "Sample Auto Parts Co.",
+                "status": "CONFIRMED",
+                "promotion_stage": "ACCEPTED_FACT",
+                "confidence": 0.86,
+                "evidence_ids": ["ev-1"],
+            },
+            {
+                "id": "fact-2",
+                "statement": "Sample Auto Parts Co. official website is https://example-target.test.",
+                "predicate": "official_website",
+                "subject": "Sample Auto Parts Co.",
+                "object": "https://example-target.test",
+                "status": "CONFIRMED",
+                "promotion_stage": "ACCEPTED_FACT",
+                "confidence": 0.84,
+                "evidence_ids": ["ev-1"],
+            },
+            {
+                "id": "fact-4",
+                "statement": "Sample Auto Parts Co. lists a source-backed contact channel.",
+                "predicate": "has_contact_email",
+                "subject": "Sample Auto Parts Co.",
+                "object": "sales@example-target.test",
+                "status": "CONFIRMED",
+                "promotion_stage": "ACCEPTED_FACT",
+                "confidence": 0.82,
+                "evidence_ids": ["ev-2"],
+            },
+        ]
+        detail["quality_assessment"] = {
+            "score": 95.0,
+            "completion_ready": True,
+            "missing_keys": [],
+            "blocking_keys": [],
+            "checks": [],
+        }
+        detail["gap_analysis"] = []
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 0,
+            "blocking_gaps": 0,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 0,
+            "blocked_by_config": 0,
+            "exhausted": 0,
+            "manual_review_required": 0,
+        }
+        detail["cross_verification_matrix"] = [
+            {
+                "field_key": "company_identity",
+                "status": "CONFIRMED",
+                "candidate_value": "Sample Auto Parts Co.",
+                "linked_evidence_ids": ["ev-1"],
+                "linked_fact_ids": ["fact-1"],
+            },
+            {
+                "field_key": "official_website",
+                "status": "SUPPORTED",
+                "candidate_value": "https://example-target.test",
+                "linked_evidence_ids": ["ev-1"],
+                "linked_fact_ids": ["fact-2"],
+            },
+            {
+                "field_key": "contact_channel",
+                "status": "SUPPORTED",
+                "candidate_value": "sales@example-target.test",
+                "linked_evidence_ids": ["ev-2"],
+                "linked_fact_ids": ["fact-4"],
+            },
+        ]
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["strict_completion_ready"])
+        self.assertFalse(policy["evidence_floor"]["business_scope"])
+
     def test_environment_blocked_without_useful_evidence_recommends_blocked(self):
         detail = {
             "seed_type": "domain",
