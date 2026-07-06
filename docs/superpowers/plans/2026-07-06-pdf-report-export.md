@@ -650,10 +650,13 @@ Protected behavior:
 - existing JSON, Markdown, and HTML report endpoints remain unchanged;
 - generated report content keeps redaction safeguards for tokens, local paths, private hosts, and private service URLs.
 
-Verification:
+Only the PDF/report unit tests are recorded as completed so far:
 
 - `PYTHONPATH=backend uv run --project backend python3 -m unittest discover -s backend/tests -p 'test_report_pdf_export.py' -v`
 - `PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_report_export.py' -v`
+
+Pending Task 6 final checks:
+
 - `bash scripts/verify.sh`
 - PDF render check with `pdftoppm` when available
 - added-line privacy scan from `docs/PUBLIC_REPOSITORY_MAINTENANCE.md`
@@ -796,7 +799,7 @@ title visible, metadata aligned, headings readable, long text wraps, footer visi
 Run:
 
 ```bash
-sed -n '/added-line privacy scan/,+35p' docs/PUBLIC_REPOSITORY_MAINTENANCE.md
+sed -n '/## Pre-Publish Check/,+80p' docs/PUBLIC_REPOSITORY_MAINTENANCE.md
 ```
 
 Then run the maintained added-line privacy scan command printed from that
