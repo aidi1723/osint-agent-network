@@ -472,7 +472,7 @@ git commit -m "test: add real sample parser regression pack"
 
 Expected: commit succeeds.
 
-- [ ] **Step 5: Push if the repository is clean and verification passed**
+- [x] **Step 5: Push if the repository is clean and verification passed**
 
 Run:
 
