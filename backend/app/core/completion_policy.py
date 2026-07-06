@@ -29,11 +29,16 @@ def build_completion_policy(detail: dict) -> dict:
         if "gap_analysis" in detail and detail["gap_analysis"] is not None
         else build_gap_analysis(planner_detail)
     )
-    gap_tool_plan = (
-        list(detail["gap_tool_plan"])
-        if "gap_tool_plan" in detail and detail["gap_tool_plan"] is not None
-        else build_gap_tool_plan({**planner_detail, "gap_analysis": gap_analysis})
-    )
+    if "gap_tool_plan" in detail and detail["gap_tool_plan"] is not None:
+        gap_tool_plan = list(detail["gap_tool_plan"])
+    elif "gap_analysis" in detail:
+        gap_tool_plan = (
+            build_gap_tool_plan(_planner_detail_for_explicit_gaps(planner_detail, gap_analysis))
+            if gap_analysis
+            else []
+        )
+    else:
+        gap_tool_plan = build_gap_tool_plan({**planner_detail, "gap_analysis": gap_analysis})
     gap_summary = (
         dict(detail["gap_followup_summary"])
         if "gap_followup_summary" in detail and detail["gap_followup_summary"] is not None
@@ -196,6 +201,29 @@ def _policy(
     }
 
 
+def _planner_detail_for_explicit_gaps(detail: dict, gap_analysis: list[dict]) -> dict:
+    missing_keys = [
+        gap_key
+        for gap in gap_analysis
+        for gap_key in [str(gap.get("gap_key") or "").strip()]
+        if gap_key
+    ]
+    blocking_keys = [
+        gap_key
+        for gap in gap_analysis
+        for gap_key in [str(gap.get("gap_key") or "").strip()]
+        if gap_key and str(gap.get("severity") or "").strip().lower() == "blocking"
+    ]
+    return {
+        **detail,
+        "quality_assessment": {
+            **dict(detail.get("quality_assessment") or {}),
+            "missing_keys": missing_keys,
+            "blocking_keys": blocking_keys,
+        },
+    }
+
+
 def _remaining_blockers(assessment: dict, gap_analysis: list[dict]) -> list[str]:
     blockers = {
         normalized
@@ -269,7 +297,7 @@ def _environment_blocked(gap_tool_plan: list[dict], gap_summary: dict) -> bool:
         return False
     if int(gap_summary.get("blocked_by_config") or 0) > 0:
         return True
-    return any(str(item.get("status") or "").lower() in BLOCKED_TOOL_STATUSES for item in gap_tool_plan)
+    return any(str(item.get("status") or "").strip().lower() in BLOCKED_TOOL_STATUSES for item in gap_tool_plan)
 
 
 def _has_useful_evidence(detail: dict) -> bool:
@@ -600,7 +628,7 @@ def _operator_actions(remaining_blockers: list[str]) -> list[str]:
 def _environment_actions(gap_tool_plan: list[dict]) -> list[str]:
     actions = []
     for item in gap_tool_plan:
-        status = str(item.get("status") or "").lower()
+        status = str(item.get("status") or "").strip().lower()
         if status not in BLOCKED_TOOL_STATUSES:
             continue
         tool_name = str(item.get("tool_name") or "unknown_tool")

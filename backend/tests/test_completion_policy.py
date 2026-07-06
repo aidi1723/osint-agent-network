@@ -228,6 +228,25 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertFalse(policy["auto_exhausted"])
         self.assertIn("official_website", policy["remaining_blockers"])
 
+    def test_explicit_empty_gap_analysis_without_tool_plan_does_not_rebuild_ready_tools(self):
+        detail = complete_company_detail()
+        detail["quality_assessment"] = {
+            "score": 20.0,
+            "completion_ready": False,
+            "missing_keys": ["official_website"],
+            "blocking_keys": ["official_website"],
+            "checks": [],
+        }
+        detail["gap_analysis"] = []
+        detail.pop("gap_tool_plan", None)
+        detail.pop("gap_followup_summary", None)
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "continue_collection")
+        self.assertTrue(policy["auto_exhausted"])
+        self.assertIn("official_website", policy["remaining_blockers"])
+
     def test_raw_unlinked_strict_quality_ready_does_not_complete_when_evidence_floor_false(self):
         detail = {
             "seed_type": "company",
@@ -575,6 +594,52 @@ class CompletionPolicyTests(unittest.TestCase):
             policy["operator_next_actions"],
             ["Restore httpx: httpx command is not installed"],
         )
+
+    def test_environment_blocked_treats_tool_status_whitespace_insensitively(self):
+        detail = {
+            "seed_type": "domain",
+            "seed_value": "example-target.test",
+            "entities": [],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "relationships": [],
+            "hypotheses": [],
+            "jobs": [{"tool_name": "httpx", "status": "BLOCKED"}],
+            "report_markdown": "",
+            "quality_assessment": {
+                "score": 0.0,
+                "completion_ready": False,
+                "missing_keys": ["official_website", "evidence_ledger"],
+                "blocking_keys": ["official_website", "evidence_ledger"],
+                "checks": [],
+            },
+            "gap_analysis": [{"gap_key": "official_website", "severity": "blocking"}],
+            "gap_tool_plan": [
+                {
+                    "gap_key": "official_website",
+                    "tool_name": "httpx",
+                    "status": " MISSING_EXECUTABLE ",
+                    "health_reason": "httpx command is not installed",
+                }
+            ],
+            "gap_followup_summary": {
+                "total_gaps": 1,
+                "blocking_gaps": 1,
+                "ready": 0,
+                "queued": 0,
+                "already_attempted": 0,
+                "blocked_by_config": 0,
+                "exhausted": 0,
+                "manual_review_required": 0,
+            },
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "blocked_by_environment")
+        self.assertEqual(policy["recommended_status"], "BLOCKED")
+        self.assertTrue(policy["environment_blocked"])
 
     def test_environment_blocked_with_only_raw_seed_entity_recommends_blocked(self):
         detail = {
