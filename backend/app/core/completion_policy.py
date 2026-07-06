@@ -38,7 +38,7 @@ def build_completion_policy(detail: dict) -> dict:
     )
     evidence_floor = _evidence_floor(detail)
     remaining_blockers = _remaining_blockers(assessment, gap_analysis)
-    strict_ready = bool(assessment.get("completion_ready"))
+    strict_ready = bool(assessment.get("completion_ready")) and all(evidence_floor.values())
     ready_tools = int(gap_summary.get("ready") or 0) + int(gap_summary.get("queued") or 0)
     auto_exhausted = ready_tools == 0 and bool(gap_analysis or remaining_blockers)
     environment_blocked = _environment_blocked(gap_tool_plan, gap_summary)
@@ -208,7 +208,7 @@ def _evidence_floor(detail: dict) -> dict:
             "business_scope": _has_entity_type(detail, {"business_scope", "product_scope"}) or _has_fact_predicate(detail, "business_scope"),
             "evidence_ledger": _has_evidence_ledger(detail),
             "fact_pool": _has_linked_fact(detail),
-            "cross_verification": _has_supported_verification(detail),
+            "cross_verification": _has_source_backed_verification(detail),
         }
     if seed_type in {"email", "username"}:
         return {
@@ -224,7 +224,7 @@ def _evidence_floor(detail: dict) -> dict:
         "contact_channel": _has_entity_type(detail, {"email", "phone", "whatsapp"}) or _has_contact_page(detail),
         "evidence_ledger": _has_evidence_ledger(detail),
         "fact_pool": _has_linked_fact(detail),
-        "cross_verification": _has_supported_verification(detail),
+        "cross_verification": _has_source_backed_verification(detail),
     }
 
 
@@ -313,17 +313,6 @@ def _has_fact_predicate(detail: dict, key: str) -> bool:
     return any(key in str(item.get("predicate") or "").lower() for item in detail.get("facts") or [])
 
 
-def _has_supported_verification(detail: dict) -> bool:
-    return any(
-        str(item.get("status") or "").upper() in SUPPORTED_VERIFICATION_STATUSES
-        and (
-            str(item.get("candidate_value") or "").strip()
-            or _has_any_id(item, ("evidence_ids", "linked_evidence_ids", "fact_ids", "linked_fact_ids"))
-        )
-        for item in detail.get("cross_verification_matrix") or []
-    )
-
-
 def _has_source_backed_verification(detail: dict) -> bool:
     source_backed_evidence_ids = {
         str(item.get("id") or "").strip()
@@ -358,18 +347,6 @@ def _has_source_backed_verification(detail: dict) -> bool:
             linked_evidence_ids & source_backed_evidence_ids
             or linked_fact_ids & source_backed_fact_ids
         ):
-            return True
-    return False
-
-
-def _has_any_id(item: dict, keys: tuple[str, ...]) -> bool:
-    for key in keys:
-        value = item.get(key)
-        if isinstance(value, (list, tuple, set)):
-            if any(str(entry).strip() for entry in value):
-                return True
-            continue
-        if str(value or "").strip():
             return True
     return False
 
