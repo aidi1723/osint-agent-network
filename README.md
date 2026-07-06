@@ -307,6 +307,7 @@ UI 人工验收：
 - [docs/ORCHESTRATION_MODEL.md](docs/ORCHESTRATION_MODEL.md): 多 Agent 编排、职责分工、数据流
 - [docs/GRAPH_TEMPLATE.md](docs/GRAPH_TEMPLATE.md): 23 位图谱模板和证据关系标准
 - [docs/PROJECT_PACKAGE.md](docs/PROJECT_PACKAGE.md): 成熟项目包、部署、运维、验收清单
+- [docs/TEMPORARY_CLOSURE_2026-07-06.md](docs/TEMPORARY_CLOSURE_2026-07-06.md): 当前阶段临时收尾、验证证据和剩余可选工作
 - [docs/N100_DEPLOYMENT_RUNBOOK.md](docs/N100_DEPLOYMENT_RUNBOOK.md): <production-host> 部署、systemd、烟测、备份和回滚 Runbook
 - [docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md](docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md): 2026-07-06 <production-host> 实际任务测试、修复、复测和收尾报告
 - [docs/REAL_TOOL_ENABLEMENT.md](docs/REAL_TOOL_ENABLEMENT.md): <production-host> 真实 OSINT 工具接线、缺口和验收清单

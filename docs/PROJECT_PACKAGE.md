@@ -48,6 +48,7 @@ osint-agent-network/
 - 推荐先用 `scripts/start.sh` 做原生烟测；长期运行使用用户级 systemd。
 - 详细部署、烟测、备份和回滚步骤见 `docs/N100_DEPLOYMENT_RUNBOOK.md`。
 - 最新 <production-host> 实际任务测试、ProjectDiscovery 域名 quick 链路达标、质量闸门修复、阻断状态修复和复测结论见 `docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md`。
+- 当前阶段临时收尾、验证证据和剩余可选工作见 `docs/TEMPORARY_CLOSURE_2026-07-06.md`。
 - 真实工具按需启用，不要求常驻后台；接线、剩余缺口和验收命令见 `docs/REAL_TOOL_ENABLEMENT.md`。
 
 ## 3. 启动方式
@@ -219,7 +220,7 @@ npm run build
 - ProjectDiscovery 社区工具链：`subfinder`、`httpx`、`katana`，以及内置 `official_site_extractor` 官网解析器。
 - 可选官网搜索层：`official_site_search` 支持 SearXNG 兼容端点，为 `company` 和 `sparse_lead` 任务补官网候选 URL。
 - `company`、`sparse_lead`、`domain`、`email`、`username`、`phone`、`url` 等目标类型与职责型 Agent 队列。
-- 依赖感知队列、并发保护、递进式推演和 IntelCore 预测分析输出合同。
+- 依赖感知队列、SQLite 可恢复后台 worker 队列、并发保护、递进式推演和 IntelCore 预测分析输出合同。
 - Intelligence Core v3：任务需求层、事实晋级、交叉验证矩阵和专业白皮书结构。
 - 情报循环式工作流：初采、首轮验证、有限定向扩展、深度工具门禁、最终分析。
 - 管理写接口 Token 保护，Agent 写回接口 Token 保护。
@@ -234,11 +235,11 @@ npm run build
 
 需要后续增强：
 
-- company/sparse_lead 的官网搜索层、决策人发现和跨来源佐证。
 - 更丰富的真实工具样本和解析回归测试。
 - 报告 PDF/HTML 导出模板。
 - 用户权限分层和审计日志。
 - 证据 URL、来源等级和人工复核状态字段。
+- 多主机 worker 需要时再评估外部队列 broker。
 
 ## 9. 交付验收标准
 

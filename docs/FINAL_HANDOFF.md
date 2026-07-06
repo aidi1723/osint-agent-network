@@ -6,7 +6,7 @@ This is the closing document for the current OSINT Agent Network / 情报官 del
 
 ## Delivered State
 
-The platform baseline is complete and deployed on <production-host>. The latest actual <production-host> task-test closure is recorded in [docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md](N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md).
+The platform baseline is complete and deployed on <production-host>. The latest temporary closure is recorded in [docs/TEMPORARY_CLOSURE_2026-07-06.md](TEMPORARY_CLOSURE_2026-07-06.md), and the latest actual <production-host> task-test closure is recorded in [docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md](N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md).
 
 Stable resident services:
 
@@ -22,14 +22,15 @@ On-demand tools:
 
 ## What Was Verified
 
-- Local backend tests passed: `278 passed`.
-- <production-host> `scripts/verify.sh` passed.
-- <production-host> frontend helper checks, Vitest, and Vite production build passed.
+- Full verification passed: `bash scripts/verify.sh`.
+- Backend tests passed: `306 tests OK`.
+- Frontend helper checks, Vitest, and Vite production build passed.
 - <production-host> `scripts/healthcheck.sh` passed.
 - <production-host> `scripts/production_readiness.py` returns `ready: true`.
 - <production-host> services are active.
 - Backup timer is enabled.
 - 2026-07-06 actual-task testing, ProjectDiscovery tool-chain closure, quality-gate fixes, and blocked-tool semantics are recorded in [docs/UPDATE_LOG.md](UPDATE_LOG.md).
+- Background `/run-jobs` execution is now SQLite-backed and recoverable after API process restart.
 
 ## Latest Actual Task Findings
 
@@ -55,20 +56,20 @@ Latest <production-host> readiness snapshot:
 
 - `scripts/healthcheck.sh`: `api=ok`, `database=ok`, `web=ok`.
 - `scripts/production_readiness.py`: `ready=true`, `severity=ok`.
-- Tool health: `ready=9`, `attention_required=7`.
+- Tool health is reported live by `/api/tools/health`; missing optional tools should remain visible as attention items rather than blocking the baseline.
 
 ## Next Optional Enhancements
 
-- Broader company/sparse-lead official website search, such as a controlled SearXNG layer.
-- Decision-maker discovery and corroboration for company/sparse-lead tasks.
 - More live tool samples and parser regression fixtures.
 - PDF/HTML report export.
 - Permission tiers and audit logs.
 - Evidence URL, source rank, and human review state fields.
+- External queue broker support only if multi-host workers become necessary.
 
 ## Entry Points
 
 - [README.md](../README.md)
+- [docs/TEMPORARY_CLOSURE_2026-07-06.md](TEMPORARY_CLOSURE_2026-07-06.md)
 - [docs/UPDATE_LOG.md](UPDATE_LOG.md)
 - [docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md](N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md)
 - [docs/PROJECT_PACKAGE.md](PROJECT_PACKAGE.md)
