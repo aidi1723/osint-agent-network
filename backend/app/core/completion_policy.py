@@ -289,7 +289,7 @@ def _has_non_acceptable_blocker(remaining_blockers: list[str], detail: dict) -> 
     if set(remaining_blockers) & NON_ACCEPTABLE_BLOCKERS:
         return True
     matrix = detail.get("cross_verification_matrix") or []
-    return any(str(row.get("status") or "").upper() in {"CONFLICT", "CONTRADICTED", "HIGH_RISK_CONFLICT"} for row in matrix)
+    return any(str(row.get("status") or "").strip().upper() in {"CONFLICT", "CONTRADICTED", "HIGH_RISK_CONFLICT"} for row in matrix)
 
 
 def _environment_blocked(gap_tool_plan: list[dict], gap_summary: dict) -> bool:
@@ -478,7 +478,7 @@ def _fact_has_source_backed_evidence(fact: dict, source_backed_evidence_ids: set
 
 
 def _fact_is_accepted(fact: dict) -> bool:
-    status = str(fact.get("status") or "").upper()
+    status = str(fact.get("status") or "").strip().upper()
     if status in NEGATIVE_FACT_STATUSES:
         return False
     promotion_stage = str(fact.get("promotion_stage") or "").upper()

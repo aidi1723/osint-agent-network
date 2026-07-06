@@ -934,6 +934,30 @@ class CompletionPolicyTests(unittest.TestCase):
                 self.assertNotEqual(policy["completion_mode"], "limited")
                 self.assertNotEqual(policy["recommended_status"], "COMPLETED")
 
+    def test_negative_status_with_whitespace_overrides_accepted_promotion_stage(self):
+        detail = complete_company_detail()
+        detail["facts"] = [
+            {**fact, "status": " REJECTED ", "promotion_stage": "ACCEPTED_FACT"}
+            for fact in detail["facts"]
+        ]
+        detail["quality_assessment"] = {
+            "score": 95.0,
+            "completion_ready": True,
+            "missing_keys": [],
+            "blocking_keys": [],
+            "checks": [],
+        }
+        detail["gap_analysis"] = []
+        detail["gap_tool_plan"] = []
+
+        policy = build_completion_policy(detail)
+
+        self.assertFalse(policy["evidence_floor"]["fact_pool"])
+        self.assertFalse(all(policy["evidence_floor"].values()))
+        self.assertFalse(policy["strict_completion_ready"])
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+
     def test_rejected_or_disproven_facts_do_not_satisfy_source_backed_field_floors(self):
         for status in ("REJECTED", "DISPROVEN"):
             with self.subTest(status=status):
@@ -1076,6 +1100,46 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertNotEqual(policy["recommended_status"], "COMPLETED")
         self.assertFalse(policy["limited_completion_ready"])
         self.assertFalse(policy["evidence_floor"]["cross_verification"])
+
+    def test_limited_completion_rejects_cross_verification_conflict_with_whitespace(self):
+        detail = complete_company_detail()
+        detail["entities"] = [
+            item for item in detail["entities"] if item["type"] != "decision_maker"
+        ]
+        detail["quality_assessment"] = {
+            "score": 78.0,
+            "completion_ready": False,
+            "missing_keys": ["decision_maker"],
+            "blocking_keys": ["decision_maker"],
+            "checks": [],
+        }
+        detail["gap_analysis"] = [{"gap_key": "decision_maker", "severity": "blocking"}]
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 1,
+            "blocking_gaps": 1,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 1,
+            "blocked_by_config": 0,
+            "exhausted": 1,
+            "manual_review_required": 0,
+        }
+        detail["cross_verification_matrix"] = [
+            *detail["cross_verification_matrix"],
+            {
+                "field_key": "company_identity",
+                "status": " CONFLICT ",
+                "candidate_value": "Sample Auto Parts LLC",
+                "linked_evidence_ids": ["ev-1"],
+            },
+        ]
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "limited")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["limited_completion_ready"])
 
     def test_username_strict_quality_ready_requires_source_backed_cross_verification(self):
         detail = {
