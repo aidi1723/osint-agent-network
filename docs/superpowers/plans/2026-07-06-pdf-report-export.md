@@ -527,7 +527,7 @@ git commit -m "feat: render pdf reports"
 - Modify: `backend/app/main.py`
 - Test: `backend/tests/test_report_pdf_export.py`
 
-- [ ] **Step 1: Update imports**
+- [x] **Step 1: Update imports**
 
 Change the report imports near the top of `backend/app/main.py` to:
 
@@ -536,7 +536,7 @@ from app.services.report_export import build_report_payload, render_report_html,
 from app.services.report_pdf import PDF_UNAVAILABLE_DETAIL, ReportPdfDependencyError, render_report_pdf
 ```
 
-- [ ] **Step 2: Add the PDF route before `/report`**
+- [x] **Step 2: Add the PDF route before `/report`**
 
 Insert this block before the existing `/api/investigations/{id}/report` route:
 
@@ -554,7 +554,7 @@ Insert this block before the existing `/api/investigations/{id}/report` route:
             return
 ```
 
-- [ ] **Step 3: Add a binary response helper**
+- [x] **Step 3: Add a binary response helper**
 
 Add this method after `_text()` in `backend/app/main.py`:
 
@@ -573,7 +573,7 @@ Add this method after `_text()` in `backend/app/main.py`:
         self.wfile.write(body)
 ```
 
-- [ ] **Step 4: Run PDF API tests**
+- [x] **Step 4: Run PDF API tests**
 
 Run:
 
@@ -587,7 +587,7 @@ Expected:
 OK
 ```
 
-- [ ] **Step 5: Run existing report export tests**
+- [x] **Step 5: Run existing report export tests**
 
 Run:
 
@@ -601,7 +601,7 @@ Expected:
 OK
 ```
 
-- [ ] **Step 6: Commit API route wiring**
+- [x] **Step 6: Commit API route wiring**
 
 Run:
 
