@@ -422,6 +422,64 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertNotEqual(policy["recommended_status"], "COMPLETED")
         self.assertFalse(policy["limited_completion_ready"])
 
+    def test_company_limited_completion_rejects_contact_page_url_without_contact_evidence(self):
+        detail = complete_company_detail()
+        detail["entities"] = [
+            item
+            for item in detail["entities"]
+            if item["type"] not in {"email", "phone", "decision_maker"}
+        ]
+        detail["evidence_ledger"] = [
+            {
+                "id": "ev-1",
+                "source_url": "https://example-target.test/about",
+                "source_type": "official_site_profile",
+                "source_tool": "official_site_extractor",
+                "snippet": "Official profile confirms Sample Auto Parts Co. identity and auto parts distribution.",
+            },
+            {
+                "id": "ev-2",
+                "source_url": "https://example-target.test/contact",
+                "source_type": "official_site_page",
+                "source_tool": "official_site_extractor",
+                "snippet": "Official site has a contact page.",
+            },
+        ]
+        detail["facts"] = [
+            fact for fact in detail["facts"] if fact["predicate"] != "has_contact_email"
+        ]
+        detail["quality_assessment"] = {
+            "score": 78.0,
+            "completion_ready": False,
+            "missing_keys": ["decision_maker"],
+            "blocking_keys": ["decision_maker"],
+            "checks": [],
+        }
+        detail["gap_analysis"] = [{"gap_key": "decision_maker", "severity": "blocking"}]
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 1,
+            "blocking_gaps": 1,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 1,
+            "blocked_by_config": 0,
+            "exhausted": 1,
+            "manual_review_required": 0,
+        }
+        detail["cross_verification_matrix"] = [
+            row
+            for row in detail["cross_verification_matrix"]
+            if row["field_key"] != "contact_channel"
+        ]
+
+        policy = build_completion_policy(detail)
+
+        self.assertFalse(policy["evidence_floor"]["contact_channel"])
+        self.assertNotEqual(policy["completion_mode"], "limited")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["limited_completion_ready"])
+
     def test_environment_blocked_without_useful_evidence_recommends_blocked(self):
         detail = {
             "seed_type": "domain",
@@ -468,6 +526,55 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertEqual(policy["recommended_status"], "BLOCKED")
         self.assertTrue(policy["environment_blocked"])
         self.assertTrue(policy["manual_decision_required"])
+
+    def test_environment_blocked_treats_tool_status_case_insensitively(self):
+        detail = {
+            "seed_type": "domain",
+            "seed_value": "example-target.test",
+            "entities": [],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "relationships": [],
+            "hypotheses": [],
+            "jobs": [{"tool_name": "httpx", "status": "BLOCKED"}],
+            "report_markdown": "",
+            "quality_assessment": {
+                "score": 0.0,
+                "completion_ready": False,
+                "missing_keys": ["official_website", "evidence_ledger"],
+                "blocking_keys": ["official_website", "evidence_ledger"],
+                "checks": [],
+            },
+            "gap_analysis": [{"gap_key": "official_website", "severity": "blocking"}],
+            "gap_tool_plan": [
+                {
+                    "gap_key": "official_website",
+                    "tool_name": "httpx",
+                    "status": "MISSING_EXECUTABLE",
+                    "health_reason": "httpx command is not installed",
+                }
+            ],
+            "gap_followup_summary": {
+                "total_gaps": 1,
+                "blocking_gaps": 1,
+                "ready": 0,
+                "queued": 0,
+                "already_attempted": 0,
+                "blocked_by_config": 0,
+                "exhausted": 0,
+                "manual_review_required": 0,
+            },
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "blocked_by_environment")
+        self.assertEqual(policy["recommended_status"], "BLOCKED")
+        self.assertEqual(
+            policy["operator_next_actions"],
+            ["Restore httpx: httpx command is not installed"],
+        )
 
     def test_environment_blocked_with_only_raw_seed_entity_recommends_blocked(self):
         detail = {
@@ -710,6 +817,31 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertTrue(policy["limited_completion_ready"])
         self.assertFalse(policy["strict_completion_ready"])
         self.assertEqual(policy["remaining_blockers"], ["decision_maker"])
+
+    def test_rejected_or_disproven_fact_does_not_satisfy_fact_pool(self):
+        for status in ("REJECTED", "DISPROVEN"):
+            with self.subTest(status=status):
+                detail = complete_company_detail()
+                detail["facts"] = [
+                    {**fact, "status": status, "promotion_stage": "REJECTED_CANDIDATE"}
+                    for fact in detail["facts"]
+                ]
+                detail["quality_assessment"] = {
+                    "score": 95.0,
+                    "completion_ready": True,
+                    "missing_keys": [],
+                    "blocking_keys": [],
+                    "checks": [],
+                }
+                detail["gap_analysis"] = []
+                detail["gap_tool_plan"] = []
+
+                policy = build_completion_policy(detail)
+
+                self.assertFalse(policy["evidence_floor"]["fact_pool"])
+                self.assertNotEqual(policy["completion_mode"], "strict")
+                self.assertNotEqual(policy["completion_mode"], "limited")
+                self.assertNotEqual(policy["recommended_status"], "COMPLETED")
 
     def test_limited_completion_requires_source_backed_cross_verification(self):
         detail = complete_company_detail()
@@ -1107,6 +1239,35 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertTrue(policy["manual_decision_required"])
         self.assertTrue(policy["auto_exhausted"])
         self.assertIn("official_website", policy["remaining_blockers"])
+
+    def test_remaining_blockers_normalizes_assessment_keys(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Example Manufacturing LLC",
+            "entities": [],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "relationships": [],
+            "hypotheses": [],
+            "jobs": [],
+            "report_markdown": "",
+            "quality_assessment": {
+                "score": 10.0,
+                "completion_ready": False,
+                "missing_keys": ["Official Website"],
+                "blocking_keys": [" Official Website "],
+                "checks": [],
+            },
+            "gap_analysis": [],
+            "gap_tool_plan": [],
+            "gap_followup_summary": {},
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertIn("official_website", policy["remaining_blockers"])
+        self.assertNotIn(" Official Website ", policy["remaining_blockers"])
 
     def test_representative_policies_return_required_key_set(self):
         details = [

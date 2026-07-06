@@ -196,13 +196,22 @@ def _policy(
 
 
 def _remaining_blockers(assessment: dict, gap_analysis: list[dict]) -> list[str]:
-    blockers = {str(item) for item in assessment.get("blocking_keys") or [] if str(item).strip()}
+    blockers = {
+        normalized
+        for item in assessment.get("blocking_keys") or []
+        for normalized in [_normalize_blocker_key(item)]
+        if normalized
+    }
     for gap in gap_analysis:
         if gap.get("severity") == "blocking":
-            gap_key = str(gap.get("gap_key") or "").strip()
+            gap_key = _normalize_blocker_key(gap.get("gap_key"))
             if gap_key:
                 blockers.add(gap_key)
     return sorted(blockers)
+
+
+def _normalize_blocker_key(value: object) -> str:
+    return str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
 
 
 def _evidence_floor(detail: dict) -> dict:
@@ -259,7 +268,7 @@ def _environment_blocked(gap_tool_plan: list[dict], gap_summary: dict) -> bool:
         return False
     if int(gap_summary.get("blocked_by_config") or 0) > 0:
         return True
-    return any(str(item.get("status") or "") in BLOCKED_TOOL_STATUSES for item in gap_tool_plan)
+    return any(str(item.get("status") or "").lower() in BLOCKED_TOOL_STATUSES for item in gap_tool_plan)
 
 
 def _has_useful_evidence(detail: dict) -> bool:
@@ -332,7 +341,11 @@ def _has_source_backed_business_scope(detail: dict) -> bool:
 
 
 def _has_source_backed_contact_channel(detail: dict) -> bool:
-    return _has_contact_page(detail) or _has_source_backed_contact_type(detail, CONTACT_CHANNEL_TYPES)
+    return (
+        _has_source_backed_contact_type(detail, CONTACT_CHANNEL_TYPES)
+        or _has_source_backed_contact_fact(detail)
+        or _has_source_backed_contact_verification(detail)
+    )
 
 
 def _has_source_backed_contact_type(detail: dict, accepted_types: set[str]) -> bool:
@@ -420,6 +433,70 @@ def _source_backed_evidence_ids(detail: dict) -> set[str]:
     }
 
 
+def _fact_has_source_backed_evidence(fact: dict, source_backed_evidence_ids: set[str]) -> bool:
+    return bool(
+        source_backed_evidence_ids
+        & {
+            str(evidence_id).strip()
+            for evidence_id in fact.get("evidence_ids") or []
+            if str(evidence_id).strip()
+        }
+    )
+
+
+def _fact_is_accepted(fact: dict) -> bool:
+    status = str(fact.get("status") or "").upper()
+    promotion_stage = str(fact.get("promotion_stage") or "").upper()
+    return status in SUPPORTED_VERIFICATION_STATUSES or promotion_stage == "ACCEPTED_FACT"
+
+
+def _has_source_backed_contact_fact(detail: dict) -> bool:
+    source_backed_evidence_ids = _source_backed_evidence_ids(detail)
+    if not source_backed_evidence_ids:
+        return False
+    for fact in detail.get("facts") or []:
+        if not _fact_is_accepted(fact) or not _fact_has_source_backed_evidence(fact, source_backed_evidence_ids):
+            continue
+        haystack = " ".join(
+            str(fact.get(key) or "").lower()
+            for key in ("statement", "predicate", "subject", "object", "value")
+        )
+        if any(term in haystack for term in ("contact", "email", "phone", "whatsapp")):
+            return True
+    return False
+
+
+def _has_source_backed_contact_verification(detail: dict) -> bool:
+    source_backed_evidence_ids = _source_backed_evidence_ids(detail)
+    source_backed_fact_ids = {
+        str(item.get("id") or "").strip()
+        for item in detail.get("facts") or []
+        if str(item.get("id") or "").strip()
+        and _fact_is_accepted(item)
+        and _fact_has_source_backed_evidence(item, source_backed_evidence_ids)
+    }
+    contact_fields = {"contact_channel", "contact_phone", "contact_email", "phone", "email", "whatsapp"}
+    for item in detail.get("cross_verification_matrix") or []:
+        if str(item.get("status") or "").upper() not in SUPPORTED_VERIFICATION_STATUSES:
+            continue
+        field_key = str(item.get("field_key") or "").strip().lower()
+        if field_key not in contact_fields:
+            continue
+        linked_evidence_ids = {
+            str(evidence_id).strip()
+            for evidence_id in item.get("linked_evidence_ids") or item.get("evidence_ids") or []
+            if str(evidence_id).strip()
+        }
+        linked_fact_ids = {
+            str(fact_id).strip()
+            for fact_id in item.get("linked_fact_ids") or item.get("fact_ids") or []
+            if str(fact_id).strip()
+        }
+        if linked_evidence_ids & source_backed_evidence_ids or linked_fact_ids & source_backed_fact_ids:
+            return True
+    return False
+
+
 def _has_contact_page(detail: dict) -> bool:
     for item in detail.get("evidence_ledger") or []:
         source_type = str(item.get("source_type") or "").lower()
@@ -442,7 +519,8 @@ def _has_linked_fact(detail: dict) -> bool:
     if not ledger_ids:
         return False
     return any(
-        ledger_ids
+        _fact_is_accepted(item)
+        and ledger_ids
         & {
             str(evidence_id).strip()
             for evidence_id in item.get("evidence_ids") or []
@@ -514,7 +592,7 @@ def _operator_actions(remaining_blockers: list[str]) -> list[str]:
 def _environment_actions(gap_tool_plan: list[dict]) -> list[str]:
     actions = []
     for item in gap_tool_plan:
-        status = str(item.get("status") or "")
+        status = str(item.get("status") or "").lower()
         if status not in BLOCKED_TOOL_STATUSES:
             continue
         tool_name = str(item.get("tool_name") or "unknown_tool")
