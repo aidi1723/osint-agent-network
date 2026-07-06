@@ -603,8 +603,8 @@ class WorkerTests(unittest.TestCase):
 
         self.assertEqual(result["completed"], 1)
         self.assertGreaterEqual(result["queued_followups"], 2)
-        self.assertIn(("katana", "url", "https://example-target.test"), job_keys)
-        self.assertIn(("official_site_extractor", "url", "https://example-target.test"), job_keys)
+        self.assertIn(("katana", "url", "https://example-target.test/"), job_keys)
+        self.assertIn(("official_site_extractor", "url", "https://example-target.test/"), job_keys)
 
     def test_official_site_search_url_queues_site_collection_followups(self):
         store = MemoryStore()
@@ -703,7 +703,7 @@ class WorkerTests(unittest.TestCase):
 
         self.assertGreaterEqual(result["queued_followups"], 2)
         self.assertNotIn(("theharvester", "domain", "example-target.test"), job_keys)
-        self.assertIn(("katana", "url", "https://example-target.test"), job_keys)
+        self.assertIn(("katana", "url", "https://example-target.test/"), job_keys)
 
     def test_worker_truncates_large_tool_output_before_writing_events(self):
         store = MemoryStore()

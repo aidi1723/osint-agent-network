@@ -29,6 +29,10 @@ class NormalizationTests(unittest.TestCase):
             normalize_target("url", "https://example.com/path?utm_source=test"),
             "https://example.com/path",
         )
+        self.assertEqual(
+            normalize_target("url", "https://example.com"),
+            "https://example.com/",
+        )
 
     def test_rejects_private_or_non_http_profile_urls(self):
         with self.assertRaises(NormalizationError):
@@ -375,8 +379,8 @@ class PlannerTests(unittest.TestCase):
         )
 
         job_keys = {(job.tool_name, job.target_type, job.target_value) for job in jobs}
-        self.assertIn(("katana", "url", "https://example-target.test"), job_keys)
-        self.assertIn(("official_site_extractor", "url", "https://example-target.test"), job_keys)
+        self.assertIn(("katana", "url", "https://example-target.test/"), job_keys)
+        self.assertIn(("official_site_extractor", "url", "https://example-target.test/"), job_keys)
 
     def test_quick_url_followup_keeps_site_crawl_and_official_site_extraction(self):
         registry = default_tool_registry()
@@ -390,8 +394,8 @@ class PlannerTests(unittest.TestCase):
         )
 
         job_keys = {(job.tool_name, job.target_type, job.target_value) for job in jobs}
-        self.assertIn(("katana", "url", "https://example-target.test"), job_keys)
-        self.assertIn(("official_site_extractor", "url", "https://example-target.test"), job_keys)
+        self.assertIn(("katana", "url", "https://example-target.test/"), job_keys)
+        self.assertIn(("official_site_extractor", "url", "https://example-target.test/"), job_keys)
 
     def test_progressive_inference_expands_website_email_phone_and_news(self):
         registry = default_tool_registry()

@@ -826,3 +826,60 @@ Design-goal conclusion:
 
 - The system now carries official-site decision-maker candidates from extraction into matrix/fact recognition.
 - This improves company/sparse-lead completion readiness without weakening source reliability rules.
+
+---
+
+## 2026-07-06 - Real SearXNG Official-Site Search Enablement
+
+Scope:
+
+- Enabled a controlled internal SearXNG-compatible search endpoint on <production-host> for real company and sparse-lead official website discovery.
+- Replayed public-safe company and sparse-lead tasks to verify that the route improves actual task execution, not only mock planning.
+
+Changes:
+
+- Configured the production task environment with `OFFICIAL_SITE_SEARCH_BASE_URL` pointing at the internal loopback SearXNG `/search` endpoint.
+- Persisted SearXNG settings so JSON output is enabled; the default container allowed only HTML and returned HTTP `403` for `format=json`.
+- Tightened `official_site_search` parsing:
+  - filters third-party content/forum/wiki/social/blog noise;
+  - ignores generic company-name tokens such as `company`, `group`, `domain`, and legal suffixes as strong host-match signals;
+  - raises confidence for candidates whose hostname contains a meaningful target token, allowing worker followups at the existing `0.58` threshold.
+- Normalized root URLs to a trailing slash to avoid duplicate `https://example.com` / `https://example.com/` jobs.
+- Added `SUBFINDER_RESULT_LIMIT` with default `300` to prevent large passive subdomain runs from overwhelming task reports and API responses.
+
+Verification:
+
+- <production-host> SearXNG JSON probe returned HTTP `200` and a standard JSON `results` array after enabling JSON output.
+- <production-host> readiness passed:
+  - `api=ok`;
+  - `database=ok`;
+  - `web=ok`;
+  - `ready=true`;
+  - tool health summary: total `18`, ready `10`, attention required `7`;
+  - `official_site_search=ready`.
+- Public-safe adapter tests against the real endpoint:
+  - `company` target `Example Domain`: return code `0`, one URL candidate `https://example.com/`;
+  - `sparse_lead` target `Example Domain`: return code `0`, one URL candidate `https://example.com/`.
+- Public-safe API tasks:
+  - company task: `official_site_search` completed, wrote `official_site_search_result`, queued URL followups, and executed `httpx(url)` without failed or blocked jobs;
+  - sparse-lead task: `official_site_search` completed, wrote `official_site_search_result`, queued URL followups, and executed bounded followup work without failed or blocked jobs.
+- Targeted tests passed locally and on <production-host>:
+  - `SubfinderAdapterTests`;
+  - `OfficialSiteSearchAdapterTests`;
+  - `NormalizationTests`;
+  - `WorkerTests.test_official_site_search_url_queues_site_collection_followups`;
+  - remote targeted result: `13 tests OK`.
+
+Issues found and resolved:
+
+- SearXNG default `search.formats` omitted `json`, causing `format=json` calls to return `403`.
+- Search results were initially too noisy and admitted Reddit/blog/domain-registration pages as official candidates.
+- Accepted root-domain candidates could score below the worker followup threshold, preventing site collection.
+- URL root normalization mismatch caused duplicate followup jobs.
+- A broad `subfinder` followup produced thousands of subdomain entities in one sample task and made synchronous API/report handling slow; parser output is now capped.
+
+Design-goal conclusion:
+
+- Company and sparse-lead tasks now have a real, controlled official-website discovery path on <production-host>.
+- The task success rate should be higher than the previous stage because one more core blocker moved from `attention_required` to `ready`, and real tasks now produce official-site URL evidence plus site-collection followups.
+- Remaining improvements are orchestration-level: long-running `/run-jobs` remains synchronous, so larger batches should be run in bounded chunks or moved to a background worker.

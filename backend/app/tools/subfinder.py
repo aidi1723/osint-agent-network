@@ -22,10 +22,17 @@ class SubfinderAdapter:
     target_type = "domain"
     base_confidence = 0.48
 
-    def __init__(self, command: str | None = None, max_time_minutes: int | None = None, request_timeout_seconds: int | None = None):
+    def __init__(
+        self,
+        command: str | None = None,
+        max_time_minutes: int | None = None,
+        request_timeout_seconds: int | None = None,
+        result_limit: int | None = None,
+    ):
         self.command = command or os.getenv("SUBFINDER_COMMAND", "subfinder")
         self.max_time_minutes = max_time_minutes or int(os.getenv("SUBFINDER_MAX_TIME_MINUTES", "1"))
         self.request_timeout_seconds = request_timeout_seconds or int(os.getenv("SUBFINDER_TIMEOUT_SECONDS", "8"))
+        self.result_limit = max(1, result_limit or int(os.getenv("SUBFINDER_RESULT_LIMIT", "300")))
 
     def validate_target(self, target_type: str, target_value: str) -> str:
         if target_type != self.target_type:
@@ -91,7 +98,10 @@ class SubfinderAdapter:
             NormalizedEntity("domain", normalized_domain, self.name, self.base_confidence),
         )
 
+        emitted_subdomains = 0
         for record in records:
+            if emitted_subdomains >= self.result_limit:
+                break
             raw_host = str(record.get("host") or record.get("input") or record.get("fqdn") or "").strip()
             if not raw_host:
                 continue
@@ -101,6 +111,8 @@ class SubfinderAdapter:
                 continue
             if host == normalized_domain:
                 continue
+            if ("subdomain", host) not in seen_entities:
+                emitted_subdomains += 1
             append_unique_entity(
                 entities,
                 seen_entities,

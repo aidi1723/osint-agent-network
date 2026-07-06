@@ -177,29 +177,47 @@ def _result_records(raw: dict) -> list[dict]:
 
 
 def _looks_like_official_result(target: str, url: str, title: str, snippet: str) -> bool:
-    host = parse.urlsplit(url).netloc.lower()
+    parsed = parse.urlsplit(url)
+    host = parsed.netloc.lower()
     if not host or any(token in host for token in _EXCLUDED_HOST_TOKENS):
         return False
+    if _is_third_party_content_result(host, parsed.path, title, snippet):
+        return False
     text = f"{title} {snippet} {host}".lower()
-    target_tokens = [token for token in _tokenize(target) if len(token) >= 4]
-    matched_tokens = sum(1 for token in target_tokens if token in text)
-    return matched_tokens >= 1 or any(token in text for token in ("official", "contact", "about us"))
+    target_tokens = _target_signal_tokens(target)
+    host_token_matches = sum(1 for token in target_tokens if token in host)
+    text_token_matches = sum(1 for token in target_tokens if token in text)
+    if host_token_matches >= 1:
+        return True
+    return text_token_matches >= 1 and "official" in f"{title} {host}".lower()
+
+
+def _is_third_party_content_result(host: str, path: str, title: str, snippet: str) -> bool:
+    text = f"{host} {path} {title} {snippet}".lower()
+    return any(token in text for token in _THIRD_PARTY_CONTENT_TOKENS)
 
 
 def _candidate_confidence(target: str, url: str, title: str, snippet: str) -> float:
-    text = f"{title} {snippet} {parse.urlsplit(url).netloc}".lower()
+    host = parse.urlsplit(url).netloc.lower()
+    text = f"{title} {snippet} {host}".lower()
     score = 0.50
+    if any(token in host for token in _target_signal_tokens(target)):
+        score += 0.08
     if "official" in text:
         score += 0.08
     if "contact" in text or "about" in text:
         score += 0.04
-    if sum(1 for token in _tokenize(target) if len(token) >= 4 and token in text) >= 2:
+    if sum(1 for token in _target_signal_tokens(target) if token in text) >= 2:
         score += 0.05
     return min(score, 0.68)
 
 
 def _tokenize(value: str) -> list[str]:
     return [token for token in "".join(ch.lower() if ch.isalnum() else " " for ch in value).split() if token]
+
+
+def _target_signal_tokens(value: str) -> list[str]:
+    return [token for token in _tokenize(value) if len(token) >= 4 and token not in _TARGET_TOKEN_STOPWORDS]
 
 
 def _snippet(title: str, snippet: str, url: str) -> str:
@@ -221,6 +239,16 @@ _EXCLUDED_HOST_TOKENS = (
     "facebook",
     "twitter",
     "instagram",
+    "reddit",
+    "stackexchange",
+    "wikipedia",
+    "medium",
+    "blogspot",
+    "wordpress",
+    "youtube",
+    "tiktok",
+    "pinterest",
+    "crunchbase",
     "alibaba",
     "yellowpages",
     "zoominfo",
@@ -229,6 +257,33 @@ _EXCLUDED_HOST_TOKENS = (
     "google",
     "bing",
 )
+
+_THIRD_PARTY_CONTENT_TOKENS = (
+    "/blog/",
+    "/wiki/",
+    "/questions/",
+    "/r/",
+    " blog article ",
+    " discussion ",
+    " forum ",
+    " third-party ",
+)
+
+_TARGET_TOKEN_STOPWORDS = {
+    "company",
+    "corporation",
+    "corp",
+    "domain",
+    "global",
+    "group",
+    "inc",
+    "international",
+    "limited",
+    "llc",
+    "official",
+    "trading",
+    "website",
+}
 
 
 if __name__ == "__main__":

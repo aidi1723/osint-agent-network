@@ -211,6 +211,17 @@ class SubfinderAdapterTests(unittest.TestCase):
             relationships,
         )
 
+    def test_parser_caps_large_passive_subdomain_results(self):
+        adapter = SubfinderAdapter(result_limit=2)
+        records = [{"host": f"host-{index}.example.com", "source": "crtsh"} for index in range(5)]
+
+        parsed = adapter.parse_jsonl(records, domain="example.com")
+
+        subdomains = [item for item in parsed.entities if item.type == "subdomain"]
+        self.assertEqual(len(subdomains), 2)
+        self.assertEqual(len(parsed.evidence), 2)
+        self.assertEqual(len(parsed.relationships), 2)
+
     def test_build_command_outputs_jsonl_artifact(self):
         adapter = SubfinderAdapter(command="subfinder")
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -323,6 +334,44 @@ class OfficialSiteSearchAdapterTests(unittest.TestCase):
             ("Sample Auto Parts Co.", "https://www.example-target.test/about", "company_has_official_site_candidate"),
             relationships,
         )
+
+    def test_parser_filters_third_party_search_noise(self):
+        adapter = OfficialSiteSearchAdapter(base_url="http://search.local/search")
+        raw = {
+            "results": [
+                {
+                    "title": "Example Domain",
+                    "url": "https://example.com/",
+                    "content": "This domain is for use in documentation examples.",
+                },
+                {
+                    "title": "Professional email address when your own domain is taken",
+                    "url": "https://www.reddit.com/r/productivity/comments/znibk5/professional_email_address_when_your_own_domain/",
+                    "content": "Discussion mentioning Example Domain contact options.",
+                },
+                {
+                    "title": "Example Domain setup notes",
+                    "url": "https://laurens.io/blog/example-domain/",
+                    "content": "A blog article about the Example Domain website.",
+                },
+                {
+                    "title": "Register a domain name",
+                    "url": "https://domain.by/en/domain-register/",
+                    "content": "Domain registrar page unrelated to Example Domain.",
+                },
+                {
+                    "title": "Directory Listing",
+                    "url": "https://business-directory.example/example-domain",
+                    "content": "Third-party listing for Example Domain.",
+                },
+            ]
+        }
+
+        parsed = adapter.parse_json(raw, target_type="company", target_value="Example Domain")
+
+        url_entities = [item for item in parsed.entities if item.type == "url"]
+        self.assertEqual({item.value for item in url_entities}, {"https://example.com/"})
+        self.assertGreaterEqual(url_entities[0].confidence, 0.58)
 
     def test_build_command_uses_internal_module_with_query_params(self):
         adapter = OfficialSiteSearchAdapter(base_url="http://search.local/search", command="python3")
@@ -680,7 +729,7 @@ class MaigretAdapterTests(unittest.TestCase):
         self.assertIn(("bio_snippet", "Open source builder in Singapore"), entities)
         self.assertIn(("declared_location", "Singapore"), entities)
         self.assertIn(("profile_image_url", "https://avatars.githubusercontent.com/u/1"), entities)
-        self.assertIn(("external_link", "https://admin.example.com"), entities)
+        self.assertIn(("external_link", "https://admin.example.com/"), entities)
         self.assertNotIn(("profile_url", "https://www.reddit.com/user/admin"), entities)
         self.assertIn(("https://github.com/admin", "social_profile_exists"), evidence)
         self.assertIn(("admin", "https://github.com/admin", "username_has_social_profile"), relationships)
@@ -764,7 +813,7 @@ class ProfileParserAdapterTests(unittest.TestCase):
         self.assertIn(("profile_url", "https://github.com/admin"), entities)
         self.assertIn(("bio_snippet", "Builder, runner, fintech operator in Singapore"), entities)
         self.assertIn(("profile_image_url", "https://example.com/avatar.jpg"), entities)
-        self.assertIn(("external_link", "https://admin.example.com"), entities)
+        self.assertIn(("external_link", "https://admin.example.com/"), entities)
         self.assertIn(("declared_location", "Singapore"), entities)
         self.assertIn(("interest_tag", "fintech"), entities)
         self.assertIn(("https://github.com/admin", "Singapore", "profile_declares_location"), relationships)

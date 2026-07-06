@@ -149,3 +149,53 @@ Conclusion:
 
 - `official_site_search` is ready for controlled internal SearXNG-backed company and sparse-lead discovery.
 - Keep `OFFICIAL_SITE_SEARCH_BASE_URL` empty in the default public/package environment and set it only in the task runner environment when official-site discovery is required.
+
+## Real SearXNG Enablement - 2026-07-06
+
+<production-host> now has a controlled internal SearXNG-compatible endpoint for real official-site discovery.
+
+Operational setup:
+
+- Bind SearXNG to loopback only.
+- Enable JSON output in SearXNG settings:
+
+```yaml
+search:
+  formats:
+    - html
+    - json
+```
+
+- Set only the production task environment to:
+
+```bash
+OFFICIAL_SITE_SEARCH_BASE_URL=http://127.0.0.1:<internal-search-port>/search
+```
+
+Do not put production hostnames, paths, tokens, cookies, or real lead data in repository files.
+
+Verification evidence:
+
+- Before enabling JSON, `format=json` returned HTTP `403`.
+- After enabling JSON, the same endpoint returned HTTP `200` with a JSON `results` array.
+- Tool health moved to:
+  - total tools: `18`;
+  - ready: `10`;
+  - attention required: `7`;
+  - `official_site_search`: `ready`.
+- Public-safe real endpoint adapter checks for `Example Domain`:
+  - company target returned only `https://example.com/` as the URL candidate;
+  - sparse-lead target returned only `https://example.com/` as the URL candidate.
+- Public-safe API checks confirmed that `official_site_search` writes `official_site_search_result` evidence and queues URL followups.
+
+Hardening added after real testing:
+
+- Third-party result filtering for forums, wiki/content sites, social platforms, blogs, directories, and domain-registration pages.
+- Generic company-name stopwords are not used as strong hostname evidence.
+- Root URLs normalize to a trailing slash for followup deduplication.
+- `SUBFINDER_RESULT_LIMIT` caps passive subdomain output, default `300`, to keep reports and synchronous API responses bounded.
+
+Runbook note:
+
+- For larger real tasks, run `/api/investigations/<id>/run-jobs` in bounded batches.
+- A future background worker remains recommended for long collector chains, because the current endpoint is synchronous.

@@ -67,7 +67,7 @@ def normalize_target(target_type: str, value: str) -> str:
             (
                 parsed.scheme.lower(),
                 parsed.netloc.lower(),
-                parsed.path or "",
+                parsed.path or "/",
                 "",
                 "",
             )
