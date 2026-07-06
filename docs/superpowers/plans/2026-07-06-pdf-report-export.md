@@ -796,19 +796,30 @@ title visible, metadata aligned, headings readable, long text wraps, footer visi
 
 - [ ] **Step 6: Run added-line privacy scan**
 
-Run:
+Run this diff-scoped added-line scan from the repository root. It extracts the
+maintained privacy pattern from `docs/PUBLIC_REPOSITORY_MAINTENANCE.md`, scans
+only lines added or changed relative to `HEAD`, and prints only findings:
 
 ```bash
-sed -n '/## Pre-Publish Check/,+80p' docs/PUBLIC_REPOSITORY_MAINTENANCE.md
+set -euo pipefail
+privacy_pattern="$(
+  awk "/^rg -n --hidden -S / { line=\$0; sub(/^rg -n --hidden -S \047/, \"\", line); sub(/\047[[:space:]]*\\\\\$/, \"\", line); print line; exit }" docs/PUBLIC_REPOSITORY_MAINTENANCE.md
+)"
+findings="$(
+  git diff --unified=0 HEAD -- . \
+    | awk '/^\+/ && !/^\+\+\+/{sub(/^\+/, ""); print}' \
+    | rg -n --pcre2 "$privacy_pattern" || true
+)"
+if [ -n "$findings" ]; then
+  printf '%s\n' "$findings"
+  exit 1
+fi
 ```
-
-Then run the maintained added-line privacy scan command printed from that
-document.
 
 Expected:
 
 ```text
-no output
+no output and exit 0; any output is a finding to review before committing
 ```
 
 - [ ] **Step 7: Commit final plan status if the plan file was updated**
