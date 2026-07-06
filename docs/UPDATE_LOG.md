@@ -1,5 +1,37 @@
 # Update Log
 
+## 2026-07-06 - Gap-to-Tool Follow-up Planner
+
+Scope:
+
+- Implemented the P0 Gap-to-Tool Automatic Follow-up Planner from
+  [NEXT_PHASE_ROADMAP_2026-07-06.md](NEXT_PHASE_ROADMAP_2026-07-06.md).
+- Added deterministic explanation of why a task remains `NEEDS_REVIEW` or
+  blocked by missing evidence.
+- Connected quality gaps to ready, unavailable, already-attempted, or manual
+  review follow-up actions.
+
+Changes:
+
+- `backend/app/core/gap_followups.py` now builds `gap_analysis`,
+  `gap_tool_plan`, and `gap_followup_summary`.
+- Investigation detail now exposes gap planner fields for both in-memory and
+  SQLite stores.
+- Worker gap follow-up planning now reads tool health, queues only ready
+  non-duplicate actions, and records blocked tools in worker events.
+- Structured reports now include `## 卡点与补采计划` with blockers, missing
+  evidence, available tools, attempted tools, unavailable tools, and manual
+  review hints.
+
+Verification:
+
+- `test_gap_to_tool_planner.py`: 7 tests passed.
+- `test_quality_gate.py`: 14 tests passed.
+- `test_worker.py`: 26 tests passed.
+- Full `bash scripts/verify.sh`: backend 338 tests passed, agent governance
+  manifest valid, regression smoke 4 cases / 0 failed, frontend copy/state
+  checks passed, Vitest 9 tests passed, and production build passed.
+
 ## 2026-07-06 - Temporary Closure And Documentation Alignment
 
 Scope:

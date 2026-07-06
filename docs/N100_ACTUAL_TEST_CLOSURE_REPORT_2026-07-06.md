@@ -258,6 +258,36 @@ Backups created before remote file replacement:
 3. Review whether historical blocked/failed domain tasks should be retried or left as historical records.
 4. Commit the tested code changes after reviewing the working tree and deciding whether to keep or remove local generated artifacts.
 
+## Follow-up Planner Completion Note
+
+The next local development pass implemented the Gap-to-Tool follow-up planner
+recommended by this closure report.
+
+New behavior:
+
+- `NEEDS_REVIEW` investigation detail includes `gap_analysis`,
+  `gap_tool_plan`, and `gap_followup_summary`.
+- Reports include `## 卡点与补采计划`, explaining where the task is stuck, what
+  evidence is missing, which tools can run, which tools were already attempted,
+  which tools are unavailable, and when manual review is required.
+- Worker follow-up planning uses tool health before queuing automatic gap jobs.
+- Unavailable tools are recorded as configuration or environment blockers in
+  worker events rather than generic task failures.
+
+Local verification for this follow-up pass:
+
+- `test_gap_to_tool_planner.py`: 7 tests passed.
+- `test_quality_gate.py`: 14 tests passed.
+- `test_worker.py`: 26 tests passed.
+- `bash scripts/verify.sh`: backend 338 tests passed, regression smoke 4 cases
+  / 0 failed, frontend Vitest 9 tests passed, and production build passed.
+
+Deployment note:
+
+- This section records the local implementation state. A separate deployment
+  and public-safe actual-task verification pass should be run before claiming
+  the <production-host> deployment has the follow-up planner active.
+
 ## Addendum - PDF Export Deployment Retest
 
 Date: 2026-07-06

@@ -65,6 +65,28 @@ Acceptance:
 - Unknown or exhausted gaps include manual-review guidance.
 - `bash scripts/verify.sh` passes.
 
+Progress:
+
+- Implemented `gap_analysis`, `gap_tool_plan`, and `gap_followup_summary` in
+  investigation detail.
+- Added deterministic tool mapping with `ready`, `missing_config`,
+  `missing_executable`, `credential_blocked`, `disabled`, and
+  `already_attempted` states.
+- Worker gap follow-up planning now uses tool health, queues only ready
+  non-duplicate jobs, and records queued plus blocked follow-up actions in
+  events.
+- Structured reports now include `## 卡点与补采计划`, listing blockers,
+  missing evidence, ready tools, attempted tools, unavailable tools, and manual
+  review hints.
+
+Verification:
+
+- `PYTHONPATH=backend backend/.venv/bin/python -m unittest discover -s backend/tests -p 'test_gap_to_tool_planner.py' -v`
+- `PYTHONPATH=backend backend/.venv/bin/python -m unittest discover -s backend/tests -p 'test_quality_gate.py' -v`
+- `PYTHONPATH=backend backend/.venv/bin/python -m unittest discover -s backend/tests -p 'test_worker.py' -v`
+- `bash scripts/verify.sh`: backend 338 tests passed, regression smoke 4 cases
+  / 0 failed, frontend Vitest 9 tests passed, production build passed.
+
 ### P1 - Real Sample Regression Pack
 
 Goal:
