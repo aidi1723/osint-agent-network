@@ -258,7 +258,7 @@ def _get_bytes_with_store(path: str, api_store: MemoryStore) -> tuple[int, dict,
 Run:
 
 ```bash
-PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_report_pdf_export.py' -v
+PYTHONPATH=backend uv run --project backend python3 -m unittest discover -s backend/tests -p 'test_report_pdf_export.py' -v
 ```
 
 Expected:
@@ -327,10 +327,10 @@ and record in the task notes that `backend/uv.lock` was not updated in this envi
 
 - [x] **Step 3: Confirm dependency imports work**
 
-Run:
+Run from the backend directory:
 
 ```bash
-python3 -c "import reportlab, pypdf; print('pdf deps ok')"
+uv run python3 -c "import reportlab, pypdf; print('pdf deps ok')"
 ```
 
 Expected:
@@ -503,7 +503,7 @@ def _xml(value: str) -> str:
 Run:
 
 ```bash
-PYTHONPATH=backend python3 -m unittest backend.tests.test_report_pdf_export.ReportPdfServiceTests -v
+PYTHONPATH=backend uv run --project backend python3 -m unittest backend.tests.test_report_pdf_export.ReportPdfServiceTests -v
 ```
 
 Expected:
@@ -578,7 +578,7 @@ Add this method after `_text()` in `backend/app/main.py`:
 Run:
 
 ```bash
-PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_report_pdf_export.py' -v
+PYTHONPATH=backend uv run --project backend python3 -m unittest discover -s backend/tests -p 'test_report_pdf_export.py' -v
 ```
 
 Expected:
@@ -652,7 +652,7 @@ Protected behavior:
 
 Verification:
 
-- `PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_report_pdf_export.py' -v`
+- `PYTHONPATH=backend uv run --project backend python3 -m unittest discover -s backend/tests -p 'test_report_pdf_export.py' -v`
 - `PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_report_export.py' -v`
 - `bash scripts/verify.sh`
 - PDF render check with `pdftoppm` when available
@@ -695,7 +695,7 @@ git commit -m "docs: document pdf report export"
 Run:
 
 ```bash
-PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_report_pdf_export.py' -v
+PYTHONPATH=backend uv run --project backend python3 -m unittest discover -s backend/tests -p 'test_report_pdf_export.py' -v
 ```
 
 Expected:
@@ -741,7 +741,7 @@ frontend build passes
 Run:
 
 ```bash
-PYTHONPATH=backend python3 - <<'PY'
+PYTHONPATH=backend uv run --project backend python3 - <<'PY'
 from pathlib import Path
 from backend.tests.test_report_pdf_export import _sample_detail
 from app.services.report_pdf import render_report_pdf
