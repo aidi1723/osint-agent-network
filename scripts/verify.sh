@@ -6,8 +6,29 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 if command -v uv >/dev/null 2>&1 && [ -f backend/uv.lock ]; then
   PYTHONPATH=backend uv run --project backend python3 -m unittest discover -s backend/tests
+elif [ -x backend/.venv/bin/python ]; then
+  PYTHONPATH=backend backend/.venv/bin/python -m unittest discover -s backend/tests
 else
-  PYTHONPATH=backend python3 -m unittest discover -s backend/tests
+  PYTHON_BIN=""
+  for candidate in python3.14 python3.13 python3.12 python3.11 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      PYTHON_BIN="$(command -v "$candidate")"
+      break
+    fi
+  done
+  if [ -z "$PYTHON_BIN" ]; then
+    echo "Python 3.11 or newer is required, but no python3 executable was found." >&2
+    exit 1
+  fi
+  if ! "$PYTHON_BIN" - <<'PY'
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+PY
+  then
+    echo "Python 3.11 or newer is required, but $PYTHON_BIN is too old." >&2
+    exit 1
+  fi
+  PYTHONPATH=backend "$PYTHON_BIN" -m unittest discover -s backend/tests
 fi
 
 python3 scripts/check_agents.py

@@ -11,7 +11,10 @@ class VerifyScriptTests(unittest.TestCase):
 
         self.assertIn("command -v uv", script)
         self.assertIn("uv run --project backend python3 -m unittest discover -s backend/tests", script)
-        self.assertIn("PYTHONPATH=backend python3 -m unittest discover -s backend/tests", script)
+        self.assertIn("backend/.venv/bin/python -m unittest discover -s backend/tests", script)
+        self.assertIn("python3.14 python3.13 python3.12 python3.11 python3", script)
+        self.assertIn("sys.version_info >= (3, 11)", script)
+        self.assertIn("Python 3.11 or newer is required", script)
 
 
 if __name__ == "__main__":
