@@ -40,7 +40,11 @@ def build_completion_policy(detail: dict) -> dict:
     )
     evidence_floor = _evidence_floor(detail)
     remaining_blockers = _remaining_blockers(assessment, gap_analysis)
-    strict_ready = bool(assessment.get("completion_ready")) and all(evidence_floor.values())
+    strict_ready = (
+        bool(assessment.get("completion_ready"))
+        and all(evidence_floor.values())
+        and not remaining_blockers
+    )
     ready_tools = int(gap_summary.get("ready") or 0) + int(gap_summary.get("queued") or 0)
     auto_exhausted = ready_tools == 0 and bool(gap_analysis or remaining_blockers)
     environment_blocked = _environment_blocked(gap_tool_plan, gap_summary)

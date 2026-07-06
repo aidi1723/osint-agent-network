@@ -159,6 +159,34 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertTrue(policy["strict_completion_ready"])
         self.assertFalse(policy["manual_decision_required"])
 
+    def test_strict_completion_rejects_explicit_blocking_gap(self):
+        detail = complete_company_detail()
+        detail["quality_assessment"] = {
+            "score": 95.0,
+            "completion_ready": True,
+            "missing_keys": [],
+            "blocking_keys": [],
+            "checks": [],
+        }
+        detail["gap_analysis"] = [{"gap_key": "official_website", "severity": "blocking"}]
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 1,
+            "blocking_gaps": 1,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 0,
+            "blocked_by_config": 0,
+            "exhausted": 0,
+            "manual_review_required": 0,
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertIn("official_website", policy["remaining_blockers"])
+
     def test_ready_gap_tools_continue_collection(self):
         detail = {
             "seed_type": "company",
