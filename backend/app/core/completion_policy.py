@@ -205,9 +205,9 @@ def _evidence_floor(detail: dict) -> dict:
     seed_type = str(detail.get("seed_type") or "company")
     if seed_type in {"domain", "url"}:
         return {
-            "identity": _has_entity_type(detail, {"company", "organization", "domain", "url", "website", "official_website"}),
-            "official_website": _has_entity_type(detail, {"domain", "url", "website", "official_website"}) or _has_source_url(detail),
-            "business_scope": _has_entity_type(detail, {"business_scope", "product_scope"}) or _has_fact_predicate(detail, "business_scope"),
+            "identity": _has_source_backed_identity(detail),
+            "official_website": _has_source_backed_official_website(detail),
+            "business_scope": _has_source_backed_business_scope(detail),
             "evidence_ledger": _has_evidence_ledger(detail),
             "fact_pool": _has_linked_fact(detail),
             "cross_verification": _has_source_backed_verification(detail),
@@ -222,9 +222,9 @@ def _evidence_floor(detail: dict) -> dict:
             "cross_verification": _has_source_backed_verification(detail),
         }
     return {
-        "identity": _has_entity_type(detail, {"company", "organization"}) or _has_fact_predicate(detail, "company_identity"),
-        "official_website": _has_entity_type(detail, {"domain", "url", "website", "official_website"}) or _has_source_url(detail),
-        "business_scope": _has_entity_type(detail, {"business_scope", "product_scope"}) or _has_fact_predicate(detail, "business_scope"),
+        "identity": _has_source_backed_identity(detail),
+        "official_website": _has_source_backed_official_website(detail),
+        "business_scope": _has_source_backed_business_scope(detail),
         "contact_channel": _has_source_backed_contact_channel(detail),
         "evidence_ledger": _has_evidence_ledger(detail),
         "fact_pool": _has_linked_fact(detail),
@@ -273,10 +273,6 @@ def _execution_failed_without_evidence(detail: dict) -> bool:
     return all(str(job.get("status") or "") in {"FAILED", "PARTIAL_FAILED"} for job in jobs)
 
 
-def _has_entity_type(detail: dict, accepted_types: set[str]) -> bool:
-    return any(str(item.get("type") or "") in accepted_types and str(item.get("value") or "").strip() for item in detail.get("entities") or [])
-
-
 def _entity_values(detail: dict, accepted_types: set[str]) -> set[str]:
     return {
         str(item.get("value") or "").strip().lower()
@@ -294,6 +290,43 @@ def _has_source_backed_profile_identity(detail: dict) -> bool:
     return _has_source_backed_value(detail, values)
 
 
+def _has_source_backed_identity(detail: dict) -> bool:
+    values = _entity_values(
+        detail,
+        {"company", "organization", "domain", "url", "website", "official_website"},
+    )
+    seed_type = str(detail.get("seed_type") or "")
+    seed_value = str(detail.get("seed_value") or "").strip().lower()
+    if seed_type in {"company", "domain", "url"} and seed_value:
+        values.add(seed_value)
+    return _has_source_backed_value(detail, values) or _has_source_backed_field(
+        detail,
+        {"company_identity", "company identity", "organization identity"},
+    )
+
+
+def _has_source_backed_official_website(detail: dict) -> bool:
+    values = _entity_values(detail, {"domain", "url", "website", "official_website"})
+    seed_type = str(detail.get("seed_type") or "")
+    seed_value = str(detail.get("seed_value") or "").strip().lower()
+    if seed_type in {"domain", "url"} and seed_value:
+        values.add(seed_value)
+    return _has_source_backed_value(detail, values) or _has_source_backed_field(
+        detail,
+        {"official_website", "official website", "website", "source boundary"},
+    )
+
+
+def _has_source_backed_business_scope(detail: dict) -> bool:
+    return _has_source_backed_value(
+        detail,
+        _entity_values(detail, {"business_scope", "product_scope"}),
+    ) or _has_source_backed_field(
+        detail,
+        {"business_scope", "business scope", "product_scope", "product scope", "business", "product", "scope"},
+    )
+
+
 def _has_source_backed_contact_channel(detail: dict) -> bool:
     return _has_contact_page(detail) or _has_source_backed_contact_type(detail, CONTACT_CHANNEL_TYPES)
 
@@ -306,11 +339,7 @@ def _has_source_backed_value(detail: dict, values: set[str]) -> bool:
     values = {value for value in values if value}
     if not values:
         return False
-    source_backed_ledger = [
-        item
-        for item in detail.get("evidence_ledger") or []
-        if item.get("source_url") or item.get("source_type")
-    ]
+    source_backed_ledger = _source_backed_ledger(detail)
     for item in source_backed_ledger:
         haystack = " ".join(
             str(item.get(key) or "").lower()
@@ -319,11 +348,7 @@ def _has_source_backed_value(detail: dict, values: set[str]) -> bool:
         if any(value in haystack for value in values):
             return True
 
-    source_backed_evidence_ids = {
-        str(item.get("id") or "").strip()
-        for item in source_backed_ledger
-        if str(item.get("id") or "").strip()
-    }
+    source_backed_evidence_ids = _source_backed_evidence_ids(detail)
     if not source_backed_evidence_ids:
         return False
     for fact in detail.get("facts") or []:
@@ -343,8 +368,52 @@ def _has_source_backed_value(detail: dict, values: set[str]) -> bool:
     return False
 
 
-def _has_source_url(detail: dict) -> bool:
-    return any(str(item.get("source_url") or "").startswith(("http://", "https://")) for item in detail.get("evidence_ledger") or [])
+def _has_source_backed_field(detail: dict, values_or_terms: set[str]) -> bool:
+    terms = {str(term).strip().lower() for term in values_or_terms if str(term).strip()}
+    if not terms:
+        return False
+    for item in _source_backed_ledger(detail):
+        haystack = " ".join(
+            str(item.get(key) or "").lower()
+            for key in ("entity_value", "subject", "object", "source_url", "source_type", "snippet")
+        )
+        if any(term in haystack for term in terms):
+            return True
+
+    source_backed_evidence_ids = _source_backed_evidence_ids(detail)
+    if not source_backed_evidence_ids:
+        return False
+    for fact in detail.get("facts") or []:
+        linked_evidence_ids = {
+            str(evidence_id).strip()
+            for evidence_id in fact.get("evidence_ids") or []
+            if str(evidence_id).strip()
+        }
+        if not linked_evidence_ids & source_backed_evidence_ids:
+            continue
+        haystack = " ".join(
+            str(fact.get(key) or "").lower()
+            for key in ("statement", "predicate", "subject", "object", "value")
+        )
+        if any(term in haystack for term in terms):
+            return True
+    return False
+
+
+def _source_backed_ledger(detail: dict) -> list[dict]:
+    return [
+        item
+        for item in detail.get("evidence_ledger") or []
+        if item.get("source_url") or item.get("source_type")
+    ]
+
+
+def _source_backed_evidence_ids(detail: dict) -> set[str]:
+    return {
+        str(item.get("id") or "").strip()
+        for item in _source_backed_ledger(detail)
+        if str(item.get("id") or "").strip()
+    }
 
 
 def _has_contact_page(detail: dict) -> bool:
@@ -353,7 +422,7 @@ def _has_contact_page(detail: dict) -> bool:
         source_url = str(item.get("source_url") or "").lower()
         if "contact" in source_type or "/contact" in source_url:
             return True
-    return any("contact" in str(item.get("evidence_kind") or "").lower() for item in detail.get("evidence") or [])
+    return _has_source_backed_field(detail, {"contact"})
 
 
 def _has_evidence_ledger(detail: dict) -> bool:
@@ -377,10 +446,6 @@ def _has_linked_fact(detail: dict) -> bool:
         }
         for item in detail.get("facts") or []
     )
-
-
-def _has_fact_predicate(detail: dict, key: str) -> bool:
-    return any(key in str(item.get("predicate") or "").lower() for item in detail.get("facts") or [])
 
 
 def _has_source_backed_verification(detail: dict) -> bool:

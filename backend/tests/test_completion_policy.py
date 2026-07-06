@@ -39,6 +39,14 @@ def complete_company_detail() -> dict:
         "evidence_ledger": [
             {
                 "id": "ev-1",
+                "source_url": "https://example-target.test/about",
+                "source_type": "official_site_profile",
+                "source_tool": "official_site_extractor",
+                "admiralty_code": "A-2",
+                "snippet": "Official profile confirms Sample Auto Parts Co. identity and auto parts distribution.",
+            },
+            {
+                "id": "ev-2",
                 "source_url": "https://example-target.test/contact",
                 "source_type": "official_site_contact",
                 "source_tool": "official_site_extractor",
@@ -49,13 +57,47 @@ def complete_company_detail() -> dict:
         "facts": [
             {
                 "id": "fact-1",
-                "statement": "Sample Auto Parts Co. lists a source-backed contact channel.",
-                "predicate": "has_contact_email",
-                "object": "sales@example-target.test",
+                "statement": "Sample Auto Parts Co. is the company identity on the official website.",
+                "predicate": "company_identity",
+                "subject": "Sample Auto Parts Co.",
+                "object": "Sample Auto Parts Co.",
+                "status": "CONFIRMED",
+                "promotion_stage": "ACCEPTED_FACT",
+                "confidence": 0.86,
+                "evidence_ids": ["ev-1"],
+            },
+            {
+                "id": "fact-2",
+                "statement": "Sample Auto Parts Co. official website is https://example-target.test.",
+                "predicate": "official_website",
+                "subject": "Sample Auto Parts Co.",
+                "object": "https://example-target.test",
+                "status": "CONFIRMED",
+                "promotion_stage": "ACCEPTED_FACT",
+                "confidence": 0.84,
+                "evidence_ids": ["ev-1"],
+            },
+            {
+                "id": "fact-3",
+                "statement": "Sample Auto Parts Co. business scope is auto parts distribution.",
+                "predicate": "business_scope",
+                "subject": "Sample Auto Parts Co.",
+                "object": "auto parts distribution",
                 "status": "CONFIRMED",
                 "promotion_stage": "ACCEPTED_FACT",
                 "confidence": 0.82,
                 "evidence_ids": ["ev-1"],
+            },
+            {
+                "id": "fact-4",
+                "statement": "Sample Auto Parts Co. lists a source-backed contact channel.",
+                "predicate": "has_contact_email",
+                "subject": "Sample Auto Parts Co.",
+                "object": "sales@example-target.test",
+                "status": "CONFIRMED",
+                "promotion_stage": "ACCEPTED_FACT",
+                "confidence": 0.82,
+                "evidence_ids": ["ev-2"],
             }
         ],
         "hypotheses": [{"id": "h1", "status": "MOST_LIKELY", "support_score": 0.8}],
@@ -66,13 +108,33 @@ def complete_company_detail() -> dict:
             "eeis": [{"id": "eei_company_identity", "field_key": "company_identity", "required": True, "status": "CONFIRMED"}],
         },
         "cross_verification_matrix": [
-            {"field_key": "company_identity", "status": "CONFIRMED", "candidate_value": "Sample Auto Parts Co."},
+            {
+                "field_key": "company_identity",
+                "status": "CONFIRMED",
+                "candidate_value": "Sample Auto Parts Co.",
+                "linked_evidence_ids": ["ev-1"],
+                "linked_fact_ids": ["fact-1"],
+            },
             {
                 "field_key": "official_website",
                 "status": "SUPPORTED",
                 "candidate_value": "https://example-target.test",
                 "linked_evidence_ids": ["ev-1"],
-                "linked_fact_ids": ["fact-1"],
+                "linked_fact_ids": ["fact-2"],
+            },
+            {
+                "field_key": "business_scope",
+                "status": "SUPPORTED",
+                "candidate_value": "auto parts distribution",
+                "linked_evidence_ids": ["ev-1"],
+                "linked_fact_ids": ["fact-3"],
+            },
+            {
+                "field_key": "contact_channel",
+                "status": "SUPPORTED",
+                "candidate_value": "sales@example-target.test",
+                "linked_evidence_ids": ["ev-2"],
+                "linked_fact_ids": ["fact-4"],
             },
         ],
         "gap_followup_summary": {
@@ -193,6 +255,144 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertNotEqual(policy["recommended_status"], "COMPLETED")
         self.assertNotEqual(policy["completion_mode"], "strict")
         self.assertFalse(all(policy["evidence_floor"].values()))
+
+    def test_company_strict_quality_ready_rejects_bare_entities_and_fact_predicates(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Example Manufacturing LLC",
+            "entities": [
+                {"type": "company", "value": "Example Manufacturing LLC", "confidence": 0.96},
+                {"type": "domain", "value": "example-target.test", "confidence": 0.88},
+                {"type": "url", "value": "https://example-target.test", "confidence": 0.88},
+                {"type": "business_scope", "value": "industrial equipment", "confidence": 0.82},
+                {"type": "email", "value": "sales@example-target.test", "confidence": 0.8},
+            ],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [
+                {
+                    "id": "fact-identity",
+                    "statement": "Example Manufacturing LLC is a company.",
+                    "predicate": "company_identity",
+                    "subject": "Example Manufacturing LLC",
+                    "object": "Example Manufacturing LLC",
+                    "status": "CONFIRMED",
+                    "evidence_ids": [],
+                },
+                {
+                    "id": "fact-website",
+                    "statement": "Example Manufacturing LLC official website is https://example-target.test.",
+                    "predicate": "official_website",
+                    "subject": "Example Manufacturing LLC",
+                    "object": "https://example-target.test",
+                    "status": "CONFIRMED",
+                    "evidence_ids": [],
+                },
+                {
+                    "id": "fact-scope",
+                    "statement": "Example Manufacturing LLC sells industrial equipment.",
+                    "predicate": "business_scope",
+                    "subject": "Example Manufacturing LLC",
+                    "object": "industrial equipment",
+                    "status": "CONFIRMED",
+                    "evidence_ids": [],
+                },
+            ],
+            "relationships": [],
+            "hypotheses": [],
+            "report_markdown": "## BLUF\nBare entities and unlinked fact predicates only.",
+            "quality_assessment": {
+                "score": 95.0,
+                "completion_ready": True,
+                "missing_keys": [],
+                "blocking_keys": [],
+                "checks": [],
+            },
+            "gap_analysis": [],
+            "gap_tool_plan": [],
+            "gap_followup_summary": {
+                "total_gaps": 0,
+                "blocking_gaps": 0,
+                "ready": 0,
+                "queued": 0,
+                "already_attempted": 0,
+                "blocked_by_config": 0,
+                "exhausted": 0,
+                "manual_review_required": 0,
+            },
+            "cross_verification_matrix": [
+                {
+                    "field_key": "company_identity",
+                    "status": "CONFIRMED",
+                    "candidate_value": "Example Manufacturing LLC",
+                },
+                {
+                    "field_key": "official_website",
+                    "status": "SUPPORTED",
+                    "candidate_value": "https://example-target.test",
+                },
+                {
+                    "field_key": "business_scope",
+                    "status": "SUPPORTED",
+                    "candidate_value": "industrial equipment",
+                },
+            ],
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["strict_completion_ready"])
+        self.assertFalse(policy["evidence_floor"]["identity"])
+        self.assertFalse(policy["evidence_floor"]["official_website"])
+        self.assertFalse(policy["evidence_floor"]["business_scope"])
+
+    def test_company_limited_completion_rejects_raw_unlinked_contact_page_evidence(self):
+        detail = complete_company_detail()
+        detail["entities"] = [
+            {"type": "company", "value": "Sample Auto Parts Co.", "confidence": 0.9},
+            {"type": "domain", "value": "example-target.test", "confidence": 0.82},
+            {"type": "url", "value": "https://example-target.test", "confidence": 0.82},
+            {"type": "business_scope", "value": "auto parts distribution", "confidence": 0.8},
+        ]
+        detail["evidence"] = [
+            {
+                "entity_value": "sales@example-target.test",
+                "evidence_kind": "official_site_contact",
+                "source_tool": "official_site_extractor",
+            }
+        ]
+        detail["evidence_ledger"] = []
+        detail["facts"] = []
+        detail["quality_assessment"] = {
+            "score": 78.0,
+            "completion_ready": False,
+            "missing_keys": ["contact_phone"],
+            "blocking_keys": ["contact_phone"],
+            "checks": [],
+        }
+        detail["gap_analysis"] = [{"gap_key": "contact_phone", "severity": "blocking"}]
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 1,
+            "blocking_gaps": 1,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 1,
+            "blocked_by_config": 0,
+            "exhausted": 1,
+            "manual_review_required": 0,
+        }
+        detail["cross_verification_matrix"] = []
+
+        policy = build_completion_policy(detail)
+
+        self.assertFalse(policy["evidence_floor"]["contact_channel"])
+        self.assertNotIn("contact_phone", policy["acceptable_limitations"])
+        self.assertNotEqual(policy["completion_mode"], "limited")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["limited_completion_ready"])
 
     def test_environment_blocked_without_useful_evidence_recommends_blocked(self):
         detail = {
