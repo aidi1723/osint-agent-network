@@ -57,7 +57,7 @@ def build_cross_verification_matrix(detail: dict[str, Any]) -> list[dict[str, An
     ledger = detail.get("evidence_ledger") or []
     facts = detail.get("facts") or []
     ledger_by_id = {item.get("id"): item for item in ledger}
-    source_families_by_value = _source_families_by_value(entities, evidence, ledger)
+    source_families_by_value = _source_families_by_value(entities, evidence, ledger, facts)
     linked_evidence_by_value = _linked_evidence_by_value(evidence, ledger)
     fact_ids_by_value = _fact_ids_by_value(facts)
 
@@ -105,8 +105,9 @@ def build_cross_verification_matrix(detail: dict[str, Any]) -> list[dict[str, An
     return rows
 
 
-def _source_families_by_value(entities: list[dict], evidence: list[dict], ledger: list[dict]) -> dict[str, set[str]]:
+def _source_families_by_value(entities: list[dict], evidence: list[dict], ledger: list[dict], facts: list[dict]) -> dict[str, set[str]]:
     result: dict[str, set[str]] = defaultdict(set)
+    ledger_by_id = {str(item.get("id") or ""): item for item in ledger}
     for entity in entities:
         value = str(entity.get("value") or "")
         if value:
@@ -125,6 +126,14 @@ def _source_families_by_value(entities: list[dict], evidence: list[dict], ledger
                 continue
             if re.search(r'\b' + re.escape(value) + r'\b', snippet, re.IGNORECASE):
                 result[value].add(family)
+    for fact in facts:
+        value = str(fact.get("object") or fact.get("object_value") or "")
+        if not value:
+            continue
+        for evidence_id in fact.get("evidence_ids") or []:
+            record = ledger_by_id.get(str(evidence_id))
+            if record:
+                result[value].add(classify_source_family(record.get("source_type"), record.get("source_tool")))
     return result
 
 
@@ -160,6 +169,8 @@ def _fact_ids_by_value(facts: list[dict]) -> dict[str, set[str]]:
 def _fact_matches_field(fact: dict, field_key: str, entity_types: set[str]) -> bool:
     predicate = str(fact.get("predicate") or "").lower()
     if field_key == "company_identity" and predicate in {"identity", "has_company_identity"}:
+        return True
+    if field_key == "decision_maker" and predicate in {"has_decision_maker_candidate", "has_public_profile_candidate"}:
         return True
     if predicate == field_key or predicate.endswith(f"_{field_key}"):
         return True

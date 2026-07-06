@@ -101,6 +101,42 @@ class CrossVerificationTests(unittest.TestCase):
         self.assertEqual(email["candidate_value"], "")
         self.assertEqual(phone["candidate_value"], "")
 
+    def test_decision_maker_candidate_fact_supports_decision_maker_field(self):
+        detail = {
+            "entities": [],
+            "facts": [
+                {
+                    "id": "fact-decision-candidate",
+                    "subject": "Sample Auto Parts Co.",
+                    "predicate": "has_decision_maker_candidate",
+                    "object_value": "Jane Smith - Export Manager",
+                    "status": "LIKELY",
+                    "promotion_stage": "NEEDS_REVIEW",
+                    "confidence": 0.66,
+                    "evidence_ids": ["ev-person"],
+                }
+            ],
+            "evidence_ledger": [
+                {
+                    "id": "ev-person",
+                    "source_type": "official_site_decision_maker_candidate",
+                    "source_tool": "official_site_extractor",
+                    "source_url": "https://example.com/team",
+                    "admiralty_code": "A-3",
+                    "snippet": "Official site lists Jane Smith - Export Manager",
+                }
+            ],
+            "evidence": [],
+            "relationships": [],
+        }
+
+        rows = build_cross_verification_matrix(detail)
+        decision = next(row for row in rows if row["field_key"] == "decision_maker")
+
+        self.assertEqual(decision["candidate_value"], "Jane Smith - Export Manager")
+        self.assertIn(decision["status"], {"SUPPORTED", "LIKELY"})
+        self.assertIn("fact-decision-candidate", decision["linked_fact_ids"])
+
 
 if __name__ == "__main__":
     unittest.main()

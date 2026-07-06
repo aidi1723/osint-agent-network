@@ -192,6 +192,43 @@ class QualityGateTests(unittest.TestCase):
         self.assertIn("evidence_ledger", assessment["blocking_keys"])
         self.assertFalse(assessment["completion_ready"])
 
+    def test_decision_maker_candidate_fact_satisfies_decision_maker_without_completion(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Sample Auto Parts Co.",
+            "entities": [{"type": "company", "value": "Sample Auto Parts Co.", "confidence": 0.82}],
+            "facts": [
+                {
+                    "id": "fact-decision-candidate",
+                    "predicate": "has_decision_maker_candidate",
+                    "object_value": "Jane Smith - Export Manager",
+                    "status": "LIKELY",
+                    "promotion_stage": "NEEDS_REVIEW",
+                    "confidence": 0.66,
+                    "evidence_ids": ["ev-person"],
+                }
+            ],
+            "evidence": [],
+            "evidence_ledger": [
+                {
+                    "id": "ev-person",
+                    "source_url": "https://example.com/team",
+                    "source_type": "official_site_decision_maker_candidate",
+                    "admiralty_code": "A-3",
+                    "snippet": "Official site lists Jane Smith - Export Manager",
+                }
+            ],
+            "relationships": [],
+            "hypotheses": [],
+            "report_markdown": "",
+        }
+
+        assessment = build_quality_assessment(detail)
+
+        self.assertNotIn("decision_maker", assessment["missing_keys"])
+        self.assertIn("bluf_report", assessment["blocking_keys"])
+        self.assertFalse(assessment["completion_ready"])
+
     def test_domain_recon_quality_gate_does_not_require_decision_maker(self):
         detail = {
             "seed_type": "domain",

@@ -258,6 +258,8 @@ def _fact_supports_field(fact: dict, key: str) -> bool:
     predicate = str(fact.get("predicate") or "").lower()
     if not predicate:
         return False
+    if key == "decision_maker" and predicate in {"has_decision_maker_candidate", "has_public_profile_candidate"}:
+        return True
     return predicate == key or predicate.endswith(f"_{key}")
 
 
