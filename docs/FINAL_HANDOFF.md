@@ -60,6 +60,8 @@ Latest <production-host> readiness snapshot:
 
 ## Next Optional Enhancements
 
+The next phase task plan is recorded in [docs/NEXT_PHASE_ROADMAP_2026-07-06.md](NEXT_PHASE_ROADMAP_2026-07-06.md).
+
 - More live tool samples and parser regression fixtures.
 - PDF/HTML report export.
 - Permission tiers and audit logs.
@@ -70,6 +72,7 @@ Latest <production-host> readiness snapshot:
 
 - [README.md](../README.md)
 - [docs/TEMPORARY_CLOSURE_2026-07-06.md](TEMPORARY_CLOSURE_2026-07-06.md)
+- [docs/NEXT_PHASE_ROADMAP_2026-07-06.md](NEXT_PHASE_ROADMAP_2026-07-06.md)
 - [docs/UPDATE_LOG.md](UPDATE_LOG.md)
 - [docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md](N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md)
 - [docs/PROJECT_PACKAGE.md](PROJECT_PACKAGE.md)

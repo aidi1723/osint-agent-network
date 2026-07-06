@@ -5,6 +5,7 @@
 Scope:
 
 - Added the temporary closure record: [TEMPORARY_CLOSURE_2026-07-06.md](TEMPORARY_CLOSURE_2026-07-06.md).
+- Added the next phase roadmap: [NEXT_PHASE_ROADMAP_2026-07-06.md](NEXT_PHASE_ROADMAP_2026-07-06.md).
 - Aligned README, final handoff, project package, runbook, real-tool notes, actual-task closure report, and queue design docs around the current SQLite-backed recoverable background queue.
 - Confirmed old synchronous `/run-jobs` and "future persistent queue" wording no longer appears in current handoff documents.
 

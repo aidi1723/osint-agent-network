@@ -102,6 +102,8 @@ Design and implementation records:
 
 ## Remaining Optional Work
 
+The next phase is defined in
+[NEXT_PHASE_ROADMAP_2026-07-06.md](NEXT_PHASE_ROADMAP_2026-07-06.md).
 These are optional next phases, not blockers for this temporary closure:
 
 - collect more real public-safe tool artifacts and parser fixtures;
