@@ -538,11 +538,25 @@ def _has_source_backed_contact_verification(detail: dict) -> bool:
             for fact_id in item.get("linked_fact_ids") or item.get("fact_ids") or []
             if str(fact_id).strip()
         }
-        if _contains_contact_value(str(item.get("candidate_value") or "")) and (
-            linked_evidence_ids & source_backed_evidence_ids
-            or linked_fact_ids & source_backed_fact_ids
-        ):
-            return True
+        candidate_tokens = _contact_candidate_tokens(str(item.get("candidate_value") or ""))
+        if candidate_tokens:
+            for evidence_id in linked_evidence_ids & source_backed_evidence_ids:
+                evidence = evidence_by_id.get(evidence_id) or {}
+                haystack = " ".join(
+                    str(evidence.get(key) or "")
+                    for key in ("entity_value", "subject", "object", "source_url", "source_type", "snippet")
+                )
+                if _content_supports_contact_candidate(haystack, candidate_tokens):
+                    return True
+            for fact_id in linked_fact_ids & source_backed_fact_ids:
+                fact = fact_by_id.get(fact_id) or {}
+                haystack = " ".join(
+                    str(fact.get(key) or "")
+                    for key in ("statement", "predicate", "subject", "object", "value")
+                )
+                if _content_supports_contact_candidate(haystack, candidate_tokens):
+                    return True
+            continue
         for evidence_id in linked_evidence_ids & source_backed_evidence_ids:
             evidence = evidence_by_id.get(evidence_id) or {}
             haystack = " ".join(
@@ -560,6 +574,31 @@ def _has_source_backed_contact_verification(detail: dict) -> bool:
             if _contains_contact_value(haystack):
                 return True
     return False
+
+
+def _contact_candidate_tokens(value: str) -> set[str]:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return set()
+    tokens = {match.group(0).lower() for match in CONTACT_EMAIL_RE.finditer(normalized)}
+    for match in CONTACT_PHONE_RE.finditer(normalized):
+        digits = re.sub(r"\D", "", match.group(0))
+        if digits:
+            tokens.add(digits)
+    if not tokens and any(term in normalized for term in ("mailto:", "tel:", "whatsapp", "wa.me/")):
+        tokens.add(normalized)
+    return tokens
+
+
+def _content_supports_contact_candidate(content: str, candidate_tokens: set[str]) -> bool:
+    normalized = str(content or "").strip().lower()
+    if not normalized:
+        return False
+    content_tokens = _contact_candidate_tokens(normalized)
+    if candidate_tokens & content_tokens:
+        return True
+    content_digits = re.sub(r"\D", "", normalized)
+    return any(token.isdigit() and token in content_digits for token in candidate_tokens)
 
 
 def _contains_contact_value(value: str) -> bool:
