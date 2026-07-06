@@ -16,6 +16,8 @@ system already completes tasks reliably.
 
 Primary direction:
 
+- turn `NEEDS_REVIEW` and `BLOCKED` outcomes into concrete gap explanations,
+  evidence requirements, and tool-driven follow-up plans;
 - turn more real public-safe tool output into stable parser fixtures;
 - make reports easier to export and hand off;
 - add permission tiers and audit trails for production operations;
@@ -27,6 +29,41 @@ need. The current SQLite-backed queue is sufficient for the single-host N100
 deployment model.
 
 ## Priority Order
+
+### P0 - Gap-to-Tool Automatic Follow-up Planner
+
+Goal:
+
+Make every incomplete investigation explain where it is stuck, what evidence is
+missing, which existing tools can try to fill the gap, and which tools are
+blocked by configuration or prior attempts.
+
+Design and execution documents:
+
+- [docs/superpowers/specs/2026-07-06-gap-to-tool-followup-planner-design.md](superpowers/specs/2026-07-06-gap-to-tool-followup-planner-design.md)
+- [docs/superpowers/plans/2026-07-06-gap-to-tool-followup-planner.md](superpowers/plans/2026-07-06-gap-to-tool-followup-planner.md)
+
+Tasks:
+
+- Add `gap_analysis` to describe concrete blockers, missing evidence, and
+  manual review hints.
+- Add `gap_tool_plan` to map gaps to ready, unavailable, already attempted, or
+  exhausted tools.
+- Use tool health to explain `missing_config`, `missing_executable`, and
+  `credential_blocked` states.
+- Queue only ready, non-duplicate, budget-safe follow-up jobs.
+- Add report output for `卡点与补采计划`.
+- Keep the first implementation deterministic and use existing worker,
+  registry, tool health, and report modules.
+
+Acceptance:
+
+- `NEEDS_REVIEW` task detail names specific gaps and required evidence.
+- The report explains blockers, attempted tools, unavailable tools, and next
+  actions.
+- Ready tools are queued automatically within budget.
+- Unknown or exhausted gaps include manual-review guidance.
+- `bash scripts/verify.sh` passes.
 
 ### P1 - Real Sample Regression Pack
 
@@ -161,15 +198,16 @@ Acceptance:
 
 ## Recommended First Task
 
-Start with **P1 - Real Sample Regression Pack**.
+Start with **P0 - Gap-to-Tool Automatic Follow-up Planner**.
 
 Reason:
 
-- It raises confidence in the real OSINT pipeline without changing production
-  architecture.
-- It protects recent improvements to official-site discovery and URL
-  collection.
-- It creates safer test data for later report export and evidence review work.
+- It directly addresses the next product goal: automatic progression with clear
+  explanations when the system cannot complete a task.
+- It builds on the existing quality gate, intelligence memory, tool health, and
+  worker queue instead of adding new infrastructure.
+- It makes later real-sample regression work more valuable because fixtures can
+  assert exact gap explanations and follow-up actions.
 
 ## Verification Baseline For Every Next-Phase Task
 
