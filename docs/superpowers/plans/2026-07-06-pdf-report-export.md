@@ -705,7 +705,7 @@ git commit -m "docs: document pdf report export"
 **Files:**
 - Test: all changed backend and documentation files
 
-- [ ] **Step 1: Run PDF tests**
+- [x] **Step 1: Run PDF tests**
 
 Run:
 
@@ -720,7 +720,16 @@ Ran 6 tests
 OK
 ```
 
-- [ ] **Step 2: Run existing report export tests**
+Evidence (2026-07-06):
+
+```text
+Actual command: cd backend && uv run python3 -m unittest discover -s tests -p 'test_report_pdf_export.py' -v
+Initial sandboxed run could not access the uv cache; reran with approval for uv cache access.
+Ran 6 tests in 1.591s
+OK
+```
+
+- [x] **Step 2: Run existing report export tests**
 
 Run:
 
@@ -732,6 +741,14 @@ Expected:
 
 ```text
 Ran 8 tests
+OK
+```
+
+Evidence (2026-07-06):
+
+```text
+Actual command: PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_report_export.py' -v
+Ran 8 tests in 2.054s
 OK
 ```
 
@@ -751,7 +768,18 @@ frontend checks pass
 frontend build passes
 ```
 
-- [ ] **Step 4: Generate a sample PDF for rendering verification**
+Evidence (2026-07-06):
+
+```text
+Actual command: bash scripts/verify.sh
+Result: FAILED during backend unittest discovery.
+Summary: Ran 327 tests in 16.917s; FAILED (failures=1, errors=2).
+Root cause observed: scripts/verify.sh uses system Python 3.14, where reportlab is not installed.
+The same PDF tests pass in the backend uv environment.
+No production code was changed.
+```
+
+- [x] **Step 4: Generate a sample PDF for rendering verification**
 
 Run:
 
@@ -774,7 +802,15 @@ Expected:
 tmp/pdfs/sample-investigation-report.pdf
 ```
 
-- [ ] **Step 5: Render first PDF pages to PNG**
+Evidence (2026-07-06):
+
+```text
+Actual command: cd backend && uv run python3 -c '...'
+Used imports: tests.test_report_pdf_export._sample_detail and app.services.report_pdf.render_report_pdf
+Output: ../tmp/pdfs/sample-investigation-report.pdf
+```
+
+- [x] **Step 5: Render first PDF pages to PNG**
 
 Run:
 
@@ -794,7 +830,17 @@ Open or inspect the PNG locally and confirm:
 title visible, metadata aligned, headings readable, long text wraps, footer visible, no overlapping text
 ```
 
-- [ ] **Step 6: Run added-line privacy scan**
+Evidence (2026-07-06):
+
+```text
+Actual command: pdftoppm -png tmp/pdfs/sample-investigation-report.pdf tmp/pdfs/sample-investigation-report
+Generated:
+- tmp/pdfs/sample-investigation-report-1.png
+- tmp/pdfs/sample-investigation-report-2.png
+Visual inspection: title visible, metadata aligned, headings readable, long text wraps, footers visible, no obvious overlapping text.
+```
+
+- [x] **Step 6: Run added-line privacy scan**
 
 Run this diff-scoped added-line scan from the repository root. It extracts the
 maintained privacy pattern from `docs/PUBLIC_REPOSITORY_MAINTENANCE.md`, scans
@@ -822,7 +868,15 @@ Expected:
 no output and exit 0; any output is a finding to review before committing
 ```
 
-- [ ] **Step 7: Commit final plan status if the plan file was updated**
+Evidence (2026-07-06):
+
+```text
+Actual command: plan diff-scoped added-line privacy scan
+Output: no output
+Exit status: 0
+```
+
+- [x] **Step 7: Commit final plan status if the plan file was updated**
 
 Run:
 
@@ -832,6 +886,12 @@ git commit -m "docs: record pdf report verification"
 ```
 
 Skip this commit only if the plan file has no changes after Task 5.
+
+Evidence (2026-07-06):
+
+```text
+Plan file updated with Task 6 evidence and prepared for the requested docs-only commit.
+```
 
 ## Task 7: Push And Final Handoff
 
