@@ -18,6 +18,7 @@ class StartScriptTests(unittest.TestCase):
         script = (ROOT_DIR / "scripts" / "start.sh").read_text(encoding="utf-8")
 
         self.assertIn("find_python_bin", script)
+        self.assertIn("backend/.venv/bin/python", script)
         self.assertIn("python3.14 python3.13 python3.12 python3.11 python3", script)
         self.assertIn("Python 3.11 or newer is required", script)
         self.assertIn("sys.version_info >= (3, 11)", script)

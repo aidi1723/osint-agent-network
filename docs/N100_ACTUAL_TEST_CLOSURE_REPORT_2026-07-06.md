@@ -258,6 +258,50 @@ Backups created before remote file replacement:
 3. Review whether historical blocked/failed domain tasks should be retried or left as historical records.
 4. Commit the tested code changes after reviewing the working tree and deciding whether to keep or remove local generated artifacts.
 
+## Addendum - PDF Export Deployment Retest
+
+Date: 2026-07-06
+
+Scope:
+
+- Deployed the PDF report export update to <production-host>.
+- Re-ran local and <production-host> verification.
+- Created a public-safe sample investigation on <production-host>, ran a bounded job batch, and requested the PDF report endpoint.
+
+Issues found during actual deployment testing:
+
+- Remote default `python3` was Python 3.6, so verification scripts that reused bare `python3` failed after the backend suite.
+- The remote frontend dependency tree was incomplete; `jsdom` was present in `package-lock.json` but missing from `node_modules`.
+- A macOS tar fallback uploaded AppleDouble `._*` metadata files, and Vitest treated one as a test file.
+- The native API startup script used `/usr/bin/python3.11`, which did not have `reportlab`; the live PDF endpoint returned `503` even though verification passed with `backend/.venv`.
+
+Fixes:
+
+- `scripts/verify.sh` now selects a Python 3.11+ interpreter once and reuses it for backend tests and verification scripts.
+- Remote frontend dependencies were reinstalled with `npm ci`.
+- Generated `._*` and `.DS_Store` files were removed from <production-host>; `.gitignore` and the deployment runbook now exclude them.
+- `scripts/start.sh` now honors explicit `PYTHON_BIN`, then prefers `backend/.venv/bin/python`, then falls back to system Python 3.11+.
+- The deployment runbook now installs backend dependencies in `backend/.venv` and uses that venv in the systemd API example.
+
+Verification evidence:
+
+- Local `bash scripts/verify.sh`: backend `329 tests OK`, regression smoke `4` cases / `0` failed, frontend helper checks passed, Vitest `2` files / `9` tests passed, production build passed.
+- <production-host> `bash scripts/verify.sh`: backend `329 tests OK`, regression smoke `4` cases / `0` failed, frontend helper checks passed, Vitest `2` files / `9` tests passed, production build passed.
+- <production-host> native restart via `scripts/start.sh`:
+  - API ready on `127.0.0.1:8088`;
+  - Web ready on `127.0.0.1:3008`;
+  - API process used `backend/.venv/bin/python`.
+- Public-safe live API smoke:
+  - create investigation: HTTP `201`;
+  - enqueue bounded run: HTTP `200`, mode `background`;
+  - final status: `NEEDS_REVIEW`;
+  - job counts after bounded run: `COMPLETED=2`, `QUEUED=4`;
+  - PDF report: HTTP `200`, `Content-Type: application/pdf`, body starts with `%PDF`, size about `7 KB`.
+
+Operational note:
+
+- The tested <production-host> project directory did not contain `.env` at test time. In non-production mode the API permits unauthenticated management calls; for production exposure, keep `.env` only on the host and set `APP_ENV=production` plus `ADMIN_API_TOKEN`, `AGENT_API_TOKEN`, and `READ_API_TOKEN`.
+
 ## Continuation Backlog - 2026-07-06
 
 The next optimization pass should focus on raising actual task completion rate rather than only improving result classification.

@@ -107,7 +107,7 @@ The next phase is defined in
 These are optional next phases, not blockers for this temporary closure:
 
 - collect more real public-safe tool artifacts and parser fixtures;
-- add PDF/HTML report export templates;
+- add bundled report downloads and export audit records;
 - implement permission tiers and audit logs;
 - add evidence URL/source rank/review-state product fields;
 - consider an external broker only if multi-host worker execution becomes

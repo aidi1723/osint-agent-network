@@ -63,7 +63,7 @@ Latest <production-host> readiness snapshot:
 The next phase task plan is recorded in [docs/NEXT_PHASE_ROADMAP_2026-07-06.md](NEXT_PHASE_ROADMAP_2026-07-06.md).
 
 - More live tool samples and parser regression fixtures.
-- PDF/HTML report export.
+- Bundled report download and export audit records.
 - Permission tiers and audit logs.
 - Evidence URL, source rank, and human review state fields.
 - External queue broker support only if multi-host workers become necessary.

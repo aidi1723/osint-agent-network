@@ -939,3 +939,41 @@ Design-goal conclusion:
 
 - The project now uses bounded execution slots more effectively: one candidate website can reach probe, crawl, and extraction evidence before wider domain enumeration begins.
 - This should improve actual company/sparse-lead task usefulness in short runs because the report gets deeper website evidence earlier.
+
+---
+
+## 2026-07-06 - PDF Export Production Retest And Deployment Hygiene
+
+Scope:
+
+- Deployed the report PDF export update to <production-host>.
+- Re-ran local verification, <production-host> verification, service restart, and a public-safe live API/PDF smoke test.
+
+Issues found and resolved:
+
+- Remote default `python3` was too old for verification helper scripts; `scripts/verify.sh` now selects a Python 3.11+ interpreter once and reuses it for all Python verification steps.
+- Remote frontend dependencies were incomplete after deploy; the runbook now uses `npm ci` for lockfile-consistent installs.
+- macOS tar fallback uploaded AppleDouble `._*` metadata files; `.gitignore` and the deployment runbook now exclude `._*`, and the remote tree was cleaned before retest.
+- Native API startup used system Python without `reportlab`, causing live PDF export to return `503`; `scripts/start.sh` now prefers `backend/.venv/bin/python`, and the runbook systemd example uses the same venv.
+
+Verification:
+
+- Local full verification passed:
+  - backend unit suite: `329 tests OK`;
+  - regression smoke: `4` cases, failed `0`;
+  - frontend helper checks, Vitest `9` tests, and production build passed.
+- <production-host> full verification passed after dependency install and metadata cleanup:
+  - backend unit suite: `329 tests OK`;
+  - regression smoke: `4` cases, failed `0`;
+  - frontend helper checks, Vitest `9` tests, and production build passed.
+- <production-host> native restart confirmed the API process uses `backend/.venv/bin/python`.
+- Public-safe live API/PDF smoke passed:
+  - investigation create HTTP `201`;
+  - bounded `/run-jobs` enqueue HTTP `200`;
+  - final status `NEEDS_REVIEW`;
+  - bounded job counts `COMPLETED=2`, `QUEUED=4`;
+  - PDF export HTTP `200`, `application/pdf`, `%PDF` header present.
+
+Operational note:
+
+- The tested <production-host> project directory did not contain `.env`. Do not commit secrets; production exposure should set host-only `.env` with `APP_ENV=production` and required API tokens.

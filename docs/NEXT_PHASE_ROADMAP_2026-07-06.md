@@ -62,19 +62,25 @@ Goal:
 
 Make investigation output easier to deliver outside the web UI.
 
-Tasks:
+Completed:
 
-- Add HTML report export using the existing structured report content.
-- Add PDF export after HTML output is stable.
-- Include BLUF, PIR answers, EEI matrix, quality gate, evidence appendix,
+- HTML, Markdown, and PDF report endpoints using structured report content.
+- BLUF, PIR answers, EEI matrix, quality gate, evidence appendix,
   source-backed facts, ACH/I&W, and next collection actions.
-- Add redaction safeguards for private tokens, local paths, and deployment
+- Redaction safeguards for private tokens, local paths, and deployment
   details.
-- Add tests for report sections and export file creation.
+- Tests for report sections, dependency-missing behavior, redaction, and CJK
+  PDF text.
+
+Remaining:
+
+- Add a bundled export package only if operators need Markdown, HTML, PDF, and
+  evidence appendices in one download.
+- Add export audit records after P3 audit logging exists.
 
 Acceptance:
 
-- A completed investigation can produce an HTML report from the API or script.
+- A completed investigation can produce HTML, Markdown, and PDF reports from the API.
 - Export tests verify required sections.
 - Privacy scan of generated sample report passes.
 
@@ -228,53 +234,33 @@ Verification:
 
 ## P2 Progress - Report Export Package
 
-Implemented first-stage report export for completed investigations:
+Implemented:
 
-- structured report JSON;
-- Markdown report;
-- self-contained HTML report.
+- structured Markdown report payload;
+- HTML report endpoint;
+- PDF report endpoint at `/api/investigations/{id}/report.pdf`;
+- token, local-path, and deployment-detail redaction for exported reports;
+- CJK-safe PDF rendering with `reportlab`;
+- unit and API coverage for PDF success, missing investigation, missing
+  dependency, redaction, and CJK text extraction.
 
-Protected behavior:
+Production retest on <production-host> confirmed:
 
-- export reuses the existing structured report and quality assessment;
-- HTML output includes BLUF, PIR answers, EEI coverage, quality gate,
-  source-backed facts, evidence appendix, ACH/I&W, gaps, and next actions;
-- export responses apply redaction before returning content;
-- missing investigations return `404`.
+- live public-safe investigation creation works;
+- bounded `/run-jobs` enqueue returns immediately in background mode;
+- live PDF export returns HTTP `200`, `application/pdf`, and a valid `%PDF`
+  body when the API is started with `backend/.venv/bin/python`.
+
+Remaining P2 work:
+
+- add a packaged download flow if operators need to export Markdown, HTML, PDF,
+  and evidence appendices together;
+- add an operator-facing export audit record after P3 audit logs exist;
+- keep report fixtures public-safe and privacy-scanned before publishing.
 
 Verification:
 
 - `PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_report_export.py' -v`
-- `PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_*.py' -v`
-- `bash scripts/verify.sh`
-- added-line privacy scan from `docs/PUBLIC_REPOSITORY_MAINTENANCE.md`
-
-Deferred:
-
-- PDF export remains a follow-up after the HTML contract is stable.
-
-## P2b Progress - PDF Report Export
-
-Implemented PDF report export for completed investigations:
-
-- `GET /api/investigations/{id}/report.pdf`;
-- PDF rendering from the same redacted structured report payload as JSON, Markdown, and HTML;
-- explicit `503` response when the PDF dependency is unavailable;
-- PDF text verification for required report sections.
-
-Protected behavior:
-
-- PDF export does not parse HTML or read the database directly;
-- existing JSON, Markdown, and HTML report endpoints remain unchanged;
-- generated report content keeps redaction safeguards for tokens, local paths, private hosts, and private service URLs.
-
-Only the PDF/report unit tests are recorded as completed so far:
-
 - `PYTHONPATH=backend uv run --project backend python3 -m unittest discover -s backend/tests -p 'test_report_pdf_export.py' -v`
-- `PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_report_export.py' -v`
-
-Pending Task 6 final checks:
-
 - `bash scripts/verify.sh`
-- PDF render check with `pdftoppm` when available
 - added-line privacy scan from `docs/PUBLIC_REPOSITORY_MAINTENANCE.md`

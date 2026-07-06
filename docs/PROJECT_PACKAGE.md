@@ -229,6 +229,7 @@ npm run build
 - 证据、实体、关系图谱生成。
 - 风险复核、白皮书报告和质量闸门。
 - 完整验证脚本：后端测试、前端状态检查、图谱/报告 bundle 检查、Vite build。
+- Markdown、HTML 和 PDF 报告导出，导出内容复用结构化报告并应用脱敏。
 - 稳定性收尾包：schema 版本记录、`/api/system/status`、`scripts/backup.sh`、`scripts/healthcheck.sh` 和前端系统自检面板。
 - 运维增强包：`/api/tools/health` 真实工具就绪检查、固定样本回归库、`BACKUP_KEEP_LAST` 备份保留策略、user-level systemd 定时备份和 `scripts/production_readiness.py` 成熟版本验收脚本。
 - <production-host> 域名 quick 链路已达到当前设计目标：最终任务 `<final-domain-task-id>` 为 `COMPLETED`，质量分 `78.1 / 100`，`subfinder`、`httpx`、`katana`、`official_site_extractor` 全部完成，失败和阻断均为 `0`。
@@ -236,7 +237,7 @@ npm run build
 需要后续增强：
 
 - 更丰富的真实工具样本和解析回归测试。
-- 报告 PDF/HTML 导出模板。
+- 打包式报告下载、导出审计记录和证据附件整理。
 - 用户权限分层和审计日志。
 - 证据 URL、来源等级和人工复核状态字段。
 - 多主机 worker 需要时再评估外部队列 broker。

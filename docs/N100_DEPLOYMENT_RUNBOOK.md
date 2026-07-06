@@ -1,6 +1,6 @@
 # N100 Deployment Runbook
 
-Version: 1.2
+Version: 1.3
 Updated: 2026-07-06
 Target host: `<production-host>`
 Target path: `/opt/osint-agent-network`
@@ -176,8 +176,12 @@ For the current <production-host> real-tool wiring and remaining install list, s
 Install dependencies:
 
 ```bash
+cd /opt/osint-agent-network/backend
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -e .
+
 cd /opt/osint-agent-network/frontend
-npm install
+npm ci
 npm run build
 ```
 
@@ -240,6 +244,7 @@ ssh <production-host> 'mkdir -p /var/backups/osint-agent-network && cd /home/osi
 rsync -az \
   --exclude '.env' \
   --exclude '.DS_Store' \
+  --exclude '._*' \
   --exclude '__pycache__/' \
   --exclude '*.pyc' \
   --exclude '.pytest_cache/' \
@@ -264,12 +269,49 @@ rsync -az \
   ./ <production-host>:/opt/osint-agent-network/
 ```
 
+If `rsync` is unavailable on the remote host, create a tar package from macOS
+with AppleDouble metadata disabled and excluded:
+
+```bash
+COPYFILE_DISABLE=1 tar \
+  --exclude '.env' \
+  --exclude '.DS_Store' \
+  --exclude '._*' \
+  --exclude '__pycache__' \
+  --exclude '*.pyc' \
+  --exclude '.pytest_cache' \
+  --exclude '.mypy_cache' \
+  --exclude '.ruff_cache' \
+  --exclude 'frontend/node_modules' \
+  --exclude 'frontend/dist' \
+  --exclude 'frontend/.vite' \
+  --exclude 'frontend/.env.production' \
+  --exclude '.playwright-cli' \
+  --exclude 'frontend/.playwright-cli' \
+  --exclude 'output' \
+  --exclude 'data/*.sqlite' \
+  --exclude 'data/*.sqlite-*' \
+  --exclude 'data/*.db' \
+  --exclude 'data/*.log' \
+  --exclude 'data/*.pid' \
+  --exclude 'data/jobs' \
+  --exclude 'data/artifacts' \
+  --exclude 'reports' \
+  -czf /tmp/osint-agent-network-deploy.tgz .
+scp /tmp/osint-agent-network-deploy.tgz <production-host>:/tmp/
+ssh <production-host> 'cd /opt/osint-agent-network && tar -xzf /tmp/osint-agent-network-deploy.tgz && rm -f /tmp/osint-agent-network-deploy.tgz'
+```
+
 4. Build and verify remotely:
 
 ```bash
-ssh <production-host> 'cd /opt/osint-agent-network/frontend && npm install && npm run build'
+ssh <production-host> 'cd /opt/osint-agent-network/frontend && npm ci && npm run build'
+ssh <production-host> 'cd /opt/osint-agent-network && find . \( -name "._*" -o -name ".DS_Store" \) -print'
 ssh <production-host> 'cd /opt/osint-agent-network && bash scripts/verify.sh'
 ```
+
+The metadata check should print no files. If it prints any `._*` or `.DS_Store`
+paths, remove those generated metadata files before running frontend tests.
 
 5. Restart services and run readiness:
 
@@ -312,7 +354,7 @@ Type=simple
 WorkingDirectory=/opt/osint-agent-network
 EnvironmentFile=/opt/osint-agent-network/.env
 Environment=PYTHONPATH=/opt/osint-agent-network/backend
-ExecStart=/usr/bin/python3 -m app.main
+ExecStart=/opt/osint-agent-network/backend/.venv/bin/python -m app.main
 Restart=always
 RestartSec=3
 
