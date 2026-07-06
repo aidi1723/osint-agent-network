@@ -1021,3 +1021,37 @@ Updated design-goal status:
 
 - The project execution success rate is higher than before this follow-up: the official-site search component moved from unconfigured to ready, and real company/sparse-lead tasks now produce website candidate evidence and followup jobs.
 - The largest remaining execution risk is not missing search coverage, but orchestration: `/run-jobs` is synchronous, so large collector batches can block API responses. Use bounded batches until a background worker is introduced.
+
+## URL Site-Collection Priority Follow-up - 2026-07-06
+
+This follow-up addresses a practical execution issue found after enabling real official-site search: when several URL and domain followups are queued, a bounded run should complete a deep evidence chain for one strong URL before broadening to other candidates.
+
+Root causes found during actual testing:
+
+1. Worker priority treated multiple URL candidates mostly by tool name.
+   - Result: bounded runs could execute `httpx` for several URLs before running `katana` and `official_site_extractor` for the first URL.
+   - Fix: group URL site-collection jobs by candidate URL and run `httpx`, `katana`, and `official_site_extractor` for the active URL group before domain/subdomain expansion.
+2. A third-party foundation profile database could be accepted as an official-site candidate.
+   - Fix: filter `foundationcenter`-style hostnames and treat `foundation` as a generic organization token.
+3. `katana` output could contain malformed URL/log lines.
+   - Result: one malformed line could fail the whole job with `Invalid IPv6 URL`.
+   - Fix: ignore malformed per-line URL values during parsing.
+
+Fresh verification:
+
+- Local targeted tests passed for worker priority, official-site search filtering, and katana malformed-line parsing.
+- <production-host> targeted tests passed: `9 tests OK`.
+- <production-host> public-safe API retest with `Python Software Foundation`:
+  - first run queued official-site URL followups;
+  - second bounded run: started `3`, completed `3`, failed `0`, blocked `0`;
+  - completed the first URL chain:
+    - `httpx(url)`;
+    - `katana(url)`;
+    - `official_site_extractor(url)`;
+  - domain expansion stayed queued;
+  - sample quality score reached `89.1`.
+
+Updated design-goal status:
+
+- Short company/sparse-lead runs now produce deeper website evidence earlier.
+- The next major optimization remains background/asynchronous job execution for larger batches.

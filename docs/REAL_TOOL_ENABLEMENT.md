@@ -199,3 +199,4 @@ Runbook note:
 
 - For larger real tasks, run `/api/investigations/<id>/run-jobs` in bounded batches.
 - A future background worker remains recommended for long collector chains, because the current endpoint is synchronous.
+- After official-site search queues multiple URL candidates, bounded runs prioritize one URL evidence chain first: `httpx(url)`, `katana(url)`, then `official_site_extractor(url)`. Domain expansion remains queued behind the active URL group.

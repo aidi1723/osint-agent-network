@@ -373,6 +373,28 @@ class OfficialSiteSearchAdapterTests(unittest.TestCase):
         self.assertEqual({item.value for item in url_entities}, {"https://example.com/"})
         self.assertGreaterEqual(url_entities[0].confidence, 0.58)
 
+    def test_parser_filters_third_party_foundation_database_results(self):
+        adapter = OfficialSiteSearchAdapter(base_url="http://search.local/search")
+        raw = {
+            "results": [
+                {
+                    "title": "Grantmaker Profile",
+                    "url": "https://fconline.foundationcenter.org/fdo-grantmaker-profile/",
+                    "content": "Profile and contact information for Python Software Foundation.",
+                },
+                {
+                    "title": "Python Software Foundation",
+                    "url": "https://www.python.org/psf/about/",
+                    "content": "About the Python Software Foundation.",
+                },
+            ]
+        }
+
+        parsed = adapter.parse_json(raw, target_type="company", target_value="Python Software Foundation")
+
+        urls = {item.value for item in parsed.entities if item.type == "url"}
+        self.assertEqual(urls, {"https://www.python.org/psf/about/"})
+
     def test_build_command_uses_internal_module_with_query_params(self):
         adapter = OfficialSiteSearchAdapter(base_url="http://search.local/search", command="python3")
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -417,6 +439,17 @@ class KatanaAdapterTests(unittest.TestCase):
             ("https://example.com", "https://example.com/contact", "site_has_relevant_page"),
             relationships,
         )
+
+    def test_parser_ignores_malformed_output_lines(self):
+        adapter = KatanaAdapter()
+        records = [
+            {"url": "http://[bad-ipv6"},
+            {"url": "https://example.com/contact"},
+        ]
+
+        parsed = adapter.parse_jsonl(records, url="https://example.com")
+
+        self.assertIn(("url", "https://example.com/contact"), {(item.type, item.value) for item in parsed.entities})
 
     def test_build_command_crawls_url_with_jsonl_output(self):
         adapter = KatanaAdapter(command="katana")

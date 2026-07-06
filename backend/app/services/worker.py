@@ -540,10 +540,14 @@ def _evidence_credibility(item) -> float:
     return 0.52
 
 
-def _job_priority(job: dict, detail: dict) -> tuple[int, int, str]:
+def _job_priority(job: dict, detail: dict) -> tuple[int, int, int, int, int, str]:
     tool_name = str(job.get("tool_name") or "")
     role = str(job.get("agent_role") or "tool_agent")
+    target_type = str(job.get("target_type") or "")
     depth = int(job.get("depth") or 0)
+    target_preference = _target_preference(target_type, tool_name)
+    target_group_preference = _target_group_preference(job, detail)
+    tool_preference = _tool_preference(tool_name, target_type)
     has_completed_collection = any(
         item.get("status") == "COMPLETED"
         and item.get("tool_name") not in {"cross_verification", "identity_match_review", "analysis_judgement"}
@@ -555,19 +559,19 @@ def _job_priority(job: dict, detail: dict) -> tuple[int, int, str]:
     )
     if role == "tool_agent":
         if tool_name == "lead_anchor_extraction":
-            return (0, depth, _tool_preference(tool_name), tool_name)
+            return (0, depth, target_preference, target_group_preference, tool_preference, tool_name)
         if tool_name in HEAVY_ENRICHMENT_TOOLS:
             if _is_inferred_job(job):
-                return (85, depth, _tool_preference(tool_name), tool_name)
-            return ((18 if has_completed_cross else 60), depth, _tool_preference(tool_name), tool_name)
+                return (85, depth, target_preference, target_group_preference, tool_preference, tool_name)
+            return ((18 if has_completed_cross else 60), depth, target_preference, target_group_preference, tool_preference, tool_name)
         if has_completed_cross and depth <= 1 and _pre_analysis_followups_completed(detail) < PRE_ANALYSIS_FOLLOWUP_LIMIT:
-            return (18, depth, _tool_preference(tool_name), tool_name)
-        return ((40 if has_completed_collection else 10), depth, _tool_preference(tool_name), tool_name)
+            return (18, depth, target_preference, target_group_preference, tool_preference, tool_name)
+        return ((40 if has_completed_collection else 10), depth, target_preference, target_group_preference, tool_preference, tool_name)
     if tool_name in {"cross_verification", "identity_match_review"}:
-        return ((15 if has_completed_collection else 70), depth, 0, tool_name)
+        return ((15 if has_completed_collection else 70), depth, 0, 0, 0, tool_name)
     if tool_name == "analysis_judgement":
-        return ((20 if has_completed_cross else 90), depth, 0, tool_name)
-    return (30, depth, 0, tool_name)
+        return ((20 if has_completed_cross else 90), depth, 0, 0, 0, tool_name)
+    return (30, depth, target_preference, target_group_preference, tool_preference, tool_name)
 
 
 def _dependencies_satisfied(job: dict, detail: dict) -> bool:
@@ -617,7 +621,41 @@ def _is_inferred_job(job: dict) -> bool:
     return "inferred_from:" in str(job.get("depends_on") or "")
 
 
-def _tool_preference(tool_name: str) -> int:
+def _target_preference(target_type: str, tool_name: str) -> int:
+    if target_type == "url" and tool_name in {"httpx", "katana", "official_site_extractor"}:
+        return 0
+    if target_type == "profile_url":
+        return 1
+    if target_type in {"domain", "subdomain"}:
+        return 5
+    return 3
+
+
+def _target_group_preference(job: dict, detail: dict) -> int:
+    target_type = str(job.get("target_type") or "")
+    tool_name = str(job.get("tool_name") or "")
+    target_value = str(job.get("target_value") or "")
+    if target_type != "url" or tool_name not in {"httpx", "katana", "official_site_extractor"}:
+        return 0
+    for index, candidate in enumerate(detail.get("jobs", [])):
+        if (
+            candidate.get("target_type") == "url"
+            and candidate.get("target_value") == target_value
+            and candidate.get("tool_name") in {"httpx", "katana", "official_site_extractor"}
+        ):
+            return index
+    return 0
+
+
+def _tool_preference(tool_name: str, target_type: str = "") -> int:
+    if target_type == "url":
+        url_order = {
+            "httpx": 6,
+            "katana": 7,
+            "official_site_extractor": 8,
+        }
+        if tool_name in url_order:
+            return url_order[tool_name]
     order = {
         "lead_anchor_extraction": 0,
         "official_site_search": 3,

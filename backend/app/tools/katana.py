@@ -109,7 +109,10 @@ class KatanaAdapter:
 
         append_unique_entity(entities, seen_entities, NormalizedEntity("url", root_url, self.name, self.base_confidence))
         for record in records:
-            discovered = redacted_url(str(record.get("url") or record.get("request", {}).get("endpoint") or "").strip())
+            try:
+                discovered = redacted_url(str(record.get("url") or record.get("request", {}).get("endpoint") or "").strip())
+            except ValueError:
+                continue
             if not discovered:
                 continue
             page_type = _page_type(discovered)

@@ -883,3 +883,45 @@ Design-goal conclusion:
 - Company and sparse-lead tasks now have a real, controlled official-website discovery path on <production-host>.
 - The task success rate should be higher than the previous stage because one more core blocker moved from `attention_required` to `ready`, and real tasks now produce official-site URL evidence plus site-collection followups.
 - Remaining improvements are orchestration-level: long-running `/run-jobs` remains synchronous, so larger batches should be run in bounded chunks or moved to a background worker.
+
+---
+
+## 2026-07-06 - URL Site-Collection Priority Optimization
+
+Scope:
+
+- Improved worker scheduling after official-site search finds multiple URL candidates.
+- The goal is to finish a useful website evidence chain for the best current URL before spending the next slots on broad domain expansion or probing every candidate URL shallowly.
+
+Changes:
+
+- Worker priority now groups URL site-collection jobs by candidate URL and runs the chain in order:
+  - `httpx(url)`;
+  - `katana(url)`;
+  - `official_site_extractor(url)`.
+- Domain/subdomain expansion jobs such as `subfinder(domain)` and `httpx(domain)` remain queued behind the active URL collection group.
+- `official_site_search` now filters `foundationcenter`-style third-party grant/profile databases and treats `foundation` as a generic organization token rather than strong hostname evidence.
+- `katana` parsing now ignores malformed output URL lines instead of failing the whole job with `Invalid IPv6 URL`.
+
+Verification:
+
+- Local targeted tests passed:
+  - `WorkerTests.test_url_site_collection_jobs_run_before_domain_expansion_jobs`;
+  - adjacent official-site followup tests;
+  - `OfficialSiteSearchAdapterTests`;
+  - `KatanaAdapterTests`.
+- <production-host> targeted tests passed: `9 tests OK`.
+- <production-host> real public-safe API retest with `Python Software Foundation`:
+  - first run queued URL followups from official-site search;
+  - second bounded run started `3`, completed `3`, failed `0`, blocked `0`;
+  - completed site jobs for the first URL candidate:
+    - `httpx(url)`;
+    - `katana(url)`;
+    - `official_site_extractor(url)`;
+  - domain expansion remained queued;
+  - final sample quality score: `89.1`.
+
+Design-goal conclusion:
+
+- The project now uses bounded execution slots more effectively: one candidate website can reach probe, crawl, and extraction evidence before wider domain enumeration begins.
+- This should improve actual company/sparse-lead task usefulness in short runs because the report gets deeper website evidence earlier.

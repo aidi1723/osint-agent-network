@@ -314,6 +314,37 @@ class OfficialSiteOutputAdapter:
         )
 
 
+class MinimalCompleteAdapter:
+    def __init__(self, name: str):
+        self.name = name
+
+    def run(self, target_type: str, target_value: str, workdir: Path, timeout_seconds: int):
+        artifact = workdir / f"{self.name}.json"
+        write_json_artifact(artifact, {"target": target_value})
+        return ToolRunResult(
+            command=ToolCommand(
+                args=[f"fake-{self.name}", target_value],
+                cwd=workdir,
+                expected_artifact=artifact,
+                timeout_seconds=timeout_seconds,
+            ),
+            returncode=0,
+            stdout_excerpt="ok",
+            stderr_excerpt="",
+        )
+
+    def parse_artifact(self, artifact_path: Path, target_value: str):
+        target_type = "url" if target_value.startswith(("http://", "https://")) else "domain"
+        return ParsedToolOutput(
+            tool=self.name,
+            target_type=target_type,
+            target_value=target_value,
+            entities=[NormalizedEntity(target_type, target_value, self.name, 0.52)],
+            evidence=[],
+            relationships=[],
+        )
+
+
 class MissingCommandAdapter:
     name = "missing_tool"
 
@@ -417,6 +448,119 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(any("递进推演" in event["message"] for event in detail["events"]))
         self.assertTrue(detail["risk_report"]["review_required"])
         self.assertEqual(detail["status"], "NEEDS_REVIEW")
+
+    def test_url_site_collection_jobs_run_before_domain_expansion_jobs(self):
+        store = MemoryStore()
+        investigation = store.create_investigation(
+            name="Official site followup priority",
+            seed_type="domain",
+            seed_value="example-target.test",
+            strategy_name="standard",
+        )
+        first_job = store.list_jobs(investigation.id)[0]
+        def job(overrides: dict, index: int) -> dict:
+            return {**first_job, "id": f"{first_job['id']}-{index}", **overrides}
+
+        store.replace_jobs(
+            investigation.id,
+            [
+                job({
+                    "tool_name": "httpx",
+                    "target_type": "domain",
+                    "target_value": "example-target.test",
+                    "depth": 0,
+                    "status": "COMPLETED",
+                }, 0),
+                job({
+                    "tool_name": "httpx",
+                    "target_type": "url",
+                    "target_value": "https://example-target.test/",
+                    "agent_role": "tool_agent",
+                    "depth": 1,
+                    "status": "QUEUED",
+                }, 1),
+                job({
+                    "tool_name": "katana",
+                    "target_type": "url",
+                    "target_value": "https://example-target.test/",
+                    "agent_role": "tool_agent",
+                    "depth": 1,
+                    "status": "QUEUED",
+                }, 2),
+                job({
+                    "tool_name": "official_site_extractor",
+                    "target_type": "url",
+                    "target_value": "https://example-target.test/",
+                    "agent_role": "tool_agent",
+                    "depth": 1,
+                    "status": "QUEUED",
+                }, 3),
+                job({
+                    "tool_name": "httpx",
+                    "target_type": "url",
+                    "target_value": "https://second-target.test/",
+                    "agent_role": "tool_agent",
+                    "depth": 1,
+                    "status": "QUEUED",
+                }, 4),
+                job({
+                    "tool_name": "katana",
+                    "target_type": "url",
+                    "target_value": "https://second-target.test/",
+                    "agent_role": "tool_agent",
+                    "depth": 1,
+                    "status": "QUEUED",
+                }, 5),
+                job({
+                    "tool_name": "official_site_extractor",
+                    "target_type": "url",
+                    "target_value": "https://second-target.test/",
+                    "agent_role": "tool_agent",
+                    "depth": 1,
+                    "status": "QUEUED",
+                }, 6),
+                job({
+                    "tool_name": "subfinder",
+                    "target_type": "domain",
+                    "target_value": "example-target.test",
+                    "agent_role": "tool_agent",
+                    "depth": 1,
+                    "status": "QUEUED",
+                }, 7),
+                job({
+                    "tool_name": "httpx",
+                    "target_type": "domain",
+                    "target_value": "example-target.test",
+                    "agent_role": "tool_agent",
+                    "depth": 1,
+                    "status": "QUEUED",
+                }, 8),
+            ],
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            result = run_investigation_jobs(
+                store,
+                investigation.id,
+                max_jobs=3,
+                artifact_root=Path(tmpdir),
+                adapter_factory=lambda name: MinimalCompleteAdapter(name),
+            )
+
+        statuses = {
+            (job["tool_name"], job["target_type"], job["target_value"]): job["status"]
+            for job in store.list_jobs(investigation.id)
+        }
+
+        self.assertEqual(result["completed"], 3)
+        self.assertEqual(statuses[("httpx", "url", "https://example-target.test/")], "COMPLETED")
+        self.assertEqual(statuses[("katana", "url", "https://example-target.test/")], "COMPLETED")
+        self.assertEqual(statuses[("official_site_extractor", "url", "https://example-target.test/")], "COMPLETED")
+        self.assertEqual(statuses[("httpx", "url", "https://second-target.test/")], "QUEUED")
+        self.assertEqual(statuses[("katana", "url", "https://second-target.test/")], "QUEUED")
+        self.assertEqual(statuses[("official_site_extractor", "url", "https://second-target.test/")], "QUEUED")
+        self.assertEqual(statuses[("httpx", "domain", "example-target.test")], "QUEUED")
+        self.assertEqual(statuses[("subfinder", "domain", "example-target.test")], "QUEUED")
 
     def test_missing_external_tool_marks_investigation_blocked(self):
         store = MemoryStore()
