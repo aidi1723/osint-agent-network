@@ -258,7 +258,7 @@ def _has_useful_evidence(detail: dict) -> bool:
     return bool(
         _has_evidence_ledger(detail)
         or _has_linked_fact(detail)
-        or _has_supported_verification(detail)
+        or _has_source_backed_verification(detail)
     )
 
 
@@ -322,6 +322,44 @@ def _has_supported_verification(detail: dict) -> bool:
         )
         for item in detail.get("cross_verification_matrix") or []
     )
+
+
+def _has_source_backed_verification(detail: dict) -> bool:
+    source_backed_evidence_ids = {
+        str(item.get("id") or "").strip()
+        for item in detail.get("evidence_ledger") or []
+        if str(item.get("id") or "").strip() and (item.get("source_url") or item.get("source_type"))
+    }
+    source_backed_fact_ids = {
+        str(item.get("id") or "").strip()
+        for item in detail.get("facts") or []
+        if str(item.get("id") or "").strip()
+        and source_backed_evidence_ids
+        & {
+            str(evidence_id).strip()
+            for evidence_id in item.get("evidence_ids") or []
+            if str(evidence_id).strip()
+        }
+    }
+    for item in detail.get("cross_verification_matrix") or []:
+        if str(item.get("status") or "").upper() not in SUPPORTED_VERIFICATION_STATUSES:
+            continue
+        linked_evidence_ids = {
+            str(evidence_id).strip()
+            for evidence_id in item.get("linked_evidence_ids") or item.get("evidence_ids") or []
+            if str(evidence_id).strip()
+        }
+        linked_fact_ids = {
+            str(fact_id).strip()
+            for fact_id in item.get("linked_fact_ids") or item.get("fact_ids") or []
+            if str(fact_id).strip()
+        }
+        if (
+            linked_evidence_ids & source_backed_evidence_ids
+            or linked_fact_ids & source_backed_fact_ids
+        ):
+            return True
+    return False
 
 
 def _has_any_id(item: dict, keys: tuple[str, ...]) -> bool:

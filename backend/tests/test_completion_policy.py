@@ -263,6 +263,60 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertTrue(policy["environment_blocked"])
         self.assertTrue(policy["manual_decision_required"])
 
+    def test_environment_blocked_with_bare_cross_verification_candidate_recommends_blocked(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Example Manufacturing LLC",
+            "entities": [{"type": "company", "value": "Example Manufacturing LLC", "confidence": 0.72}],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "relationships": [],
+            "hypotheses": [],
+            "jobs": [{"tool_name": "official_site_search", "status": "BLOCKED"}],
+            "report_markdown": "",
+            "quality_assessment": {
+                "score": 5.0,
+                "completion_ready": False,
+                "missing_keys": ["official_website", "evidence_ledger"],
+                "blocking_keys": ["official_website", "evidence_ledger"],
+                "checks": [],
+            },
+            "gap_analysis": [{"gap_key": "official_website", "severity": "blocking"}],
+            "gap_tool_plan": [
+                {
+                    "gap_key": "official_website",
+                    "tool_name": "official_site_search",
+                    "status": "missing_config",
+                    "health_reason": "search provider API key is not configured",
+                }
+            ],
+            "gap_followup_summary": {
+                "total_gaps": 1,
+                "blocking_gaps": 1,
+                "ready": 0,
+                "queued": 0,
+                "already_attempted": 0,
+                "blocked_by_config": 1,
+                "exhausted": 0,
+                "manual_review_required": 0,
+            },
+            "cross_verification_matrix": [
+                {
+                    "field_key": "company_identity",
+                    "status": "CONFIRMED",
+                    "candidate_value": "Example Manufacturing LLC",
+                }
+            ],
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "blocked_by_environment")
+        self.assertEqual(policy["recommended_status"], "BLOCKED")
+        self.assertTrue(policy["environment_blocked"])
+        self.assertTrue(policy["manual_decision_required"])
+
     def test_limited_completion_with_only_decision_maker_remaining_recommends_completed(self):
         detail = complete_company_detail()
         detail["entities"] = [
