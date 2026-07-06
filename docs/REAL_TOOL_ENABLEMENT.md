@@ -116,3 +116,36 @@ ProjectDiscovery tools are now proven in a real sample domain task:
 - Final status: `COMPLETED`
 
 Remaining quality-gate work is now broader company/sparse-lead coverage, not basic execution of the ProjectDiscovery domain quick chain.
+
+## Official-Site Search Design Verification - 2026-07-06
+
+A <production-host> mock SearXNG verification was run with a local JSON endpoint and an in-memory investigation store. The mock endpoint returned one official candidate and one third-party directory candidate for `Sample Auto Parts Co.`.
+
+Passed checks:
+
+- `OFFICIAL_SITE_SEARCH_BASE_URL` absent: `official_site_search` is skipped cleanly during health-aware planning.
+- `OFFICIAL_SITE_SEARCH_BASE_URL` present: `official_site_search` is included in the company standard plan.
+- Official candidate URL normalized from `https://www.example-target.test/about?utm_source=test` to `https://www.example-target.test/about`.
+- Directory candidate `directory.example` was filtered out.
+- Evidence kind `official_site_search_result` was written.
+- Followups queued:
+  - `httpx`
+  - `katana`
+  - `official_site_extractor`
+  - `profile_parser`
+  - domain quick expansion for `example-target.test`
+- Worker result:
+  - started: `1`
+  - completed: `1`
+  - failed: `0`
+  - blocked: `0`
+  - queued followups: `6`
+
+Verification finding:
+
+- A first standalone mock run did not load deployment `.env`, so health-aware planning could not see `KATANA_COMMAND` and skipped the external crawler followup. Loading `.env` before the mock run made `httpx`, `katana`, `official_site_extractor`, `official_site_search`, and `profile_parser` all report `ready`.
+
+Conclusion:
+
+- `official_site_search` is ready for controlled internal SearXNG-backed company and sparse-lead discovery.
+- Keep `OFFICIAL_SITE_SEARCH_BASE_URL` empty in the default public/package environment and set it only in the task runner environment when official-site discovery is required.

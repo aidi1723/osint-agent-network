@@ -714,3 +714,32 @@ Operational note:
 
 - Leave `OFFICIAL_SITE_SEARCH_BASE_URL` empty by default for public/package use.
 - Configure it to a controlled internal SearXNG endpoint when company or sparse-lead official website discovery is needed.
+
+Verification:
+
+- Local full verification passed after the change:
+  - backend unit suite: `283 tests OK`
+  - regression smoke: `4` cases, failed `0`
+  - frontend helper checks, Vitest, and production build passed
+- <production-host> health/readiness passed:
+  - `api=ok`
+  - `database=ok`
+  - `web=ok`
+  - `ready=true`
+  - tool health summary: total `18`, ready `9`, attention required `8`
+- <production-host> design verification with a local mock SearXNG endpoint passed:
+  - unconfigured official-site search is skipped cleanly;
+  - configured official-site search is planned;
+  - official URL candidate is written as an entity;
+  - third-party directory result is filtered;
+  - search evidence is written;
+  - URL collection followups are queued for `httpx`, `katana`, and `official_site_extractor`.
+
+Issue found during verification:
+
+- An initial standalone mock verification missed `katana` because the temporary script did not load the deployment `.env`; with health-aware followups enabled, the planner could not see `KATANA_COMMAND`.
+- After loading `.env` in the verification environment, `katana` status became `ready` and the URL collection chain queued as designed.
+
+Design-goal conclusion:
+
+- The official-site discovery path now meets the current design requirement for company/sparse-lead route expansion when `OFFICIAL_SITE_SEARCH_BASE_URL` points to a controlled internal SearXNG-compatible endpoint.

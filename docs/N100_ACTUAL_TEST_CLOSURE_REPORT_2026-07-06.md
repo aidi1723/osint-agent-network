@@ -828,3 +828,48 @@ Remaining work now shifts from this domain quick chain to broader coverage:
    - `maigret`
    - `socialscan`
 4. Extracted official-site facts are accepted only from the official-site parser. Broader fact promotion from other tools should stay conservative until source reliability rules are expanded.
+
+## Official-Site Search Follow-up Verification - 2026-07-06
+
+This follow-up verifies the broader company/sparse-lead gap identified above: controlled website discovery before the domain/site chain runs.
+
+Implementation state:
+
+- `official_site_search` is registered as an optional SearXNG-compatible JSON adapter.
+- Company and sparse-lead standard/deep plans include it only when `OFFICIAL_SITE_SEARCH_BASE_URL` is configured.
+- Result URLs feed the existing URL collection path:
+  - `httpx`
+  - `katana`
+  - `official_site_extractor`
+
+Fresh verification:
+
+- Local full verification passed:
+  - backend unit suite: `283 tests OK`
+  - regression smoke: `4` cases, failed `0`
+  - frontend helper checks, Vitest, and production build passed
+- <production-host> health/readiness passed:
+  - `api=ok`
+  - `database=ok`
+  - `web=ok`
+  - `ready=true`
+  - tool health summary after this adapter: total tools `18`, ready `9`, attention required `8`
+- <production-host> mock SearXNG design verification passed with in-memory storage:
+  - unconfigured `official_site_search` skipped cleanly;
+  - configured `official_site_search` planned correctly;
+  - official URL entity written;
+  - directory result filtered;
+  - search evidence written;
+  - followups queued for `httpx`, `katana`, `official_site_extractor`, and `profile_parser`;
+  - worker result: started `1`, completed `1`, failed `0`, blocked `0`.
+
+Issue found and resolved in verification:
+
+- The first standalone mock verification did not load deployment `.env`, so health-aware followup planning could not see `KATANA_COMMAND`; this made the temporary test miss the `katana` followup even though the code-level unit test passed.
+- Rerunning with `.env` loaded made `katana` report `ready` and queued the intended URL collection chain.
+
+Design-goal status:
+
+- The previous domain quick chain already reached the design target.
+- The company/sparse-lead official-site discovery gap is now closed at the route, adapter, parser, health, and followup-planning levels.
+- Real-world company/sparse-lead uplift still depends on configuring `OFFICIAL_SITE_SEARCH_BASE_URL` to a controlled internal SearXNG-compatible endpoint for the task run.
