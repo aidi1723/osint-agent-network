@@ -155,6 +155,166 @@ SPARSE_LEAD_GAP_JOB_TEMPLATES = {
 }
 
 
+GAP_TOOL_MAPPINGS = {
+    "official_website": (
+        {
+            "tool_name": "official_site_search",
+            "agent_role": "tool_agent",
+            "target_type": "seed",
+            "reason": "Find official website candidates before crawling pages.",
+            "expected_evidence": ["official_site_candidate", "website_title", "source_snippet"],
+        },
+        {
+            "tool_name": "httpx",
+            "agent_role": "tool_agent",
+            "target_type": "domain",
+            "reason": "Probe candidate domains or URLs for live official website evidence.",
+            "expected_evidence": ["live_url", "title", "technology"],
+        },
+        {
+            "tool_name": "katana",
+            "agent_role": "tool_agent",
+            "target_type": "url",
+            "reason": "Crawl candidate pages for contact, about, and business evidence.",
+            "expected_evidence": ["business_page_url", "contact_page_url"],
+        },
+        {
+            "tool_name": "official_site_extractor",
+            "agent_role": "tool_agent",
+            "target_type": "url",
+            "reason": "Extract identity, contact, scope, and decision-maker evidence from official pages.",
+            "expected_evidence": ["company_identity", "contact", "business_scope"],
+        },
+    ),
+    "decision_maker": (
+        {
+            "tool_name": "official_site_extractor",
+            "agent_role": "tool_agent",
+            "target_type": "url",
+            "reason": "Extract people, titles, and contact roles from official pages.",
+            "expected_evidence": ["person_name", "job_title", "official_page_url"],
+        },
+        {
+            "tool_name": "social_profile_search",
+            "agent_role": "social_intel_agent",
+            "target_type": "seed",
+            "reason": "Find public profiles that may identify responsible people.",
+            "expected_evidence": ["profile_url", "person_name", "company_link"],
+        },
+        {
+            "tool_name": "company_news",
+            "agent_role": "tool_agent",
+            "target_type": "company",
+            "reason": "Search public news for executives, managers, and buying signals.",
+            "expected_evidence": ["news_url", "person_name", "role_or_quote"],
+        },
+    ),
+    "contact_channel": (
+        {
+            "tool_name": "official_site_extractor",
+            "agent_role": "tool_agent",
+            "target_type": "url",
+            "reason": "Extract email and phone evidence from official pages.",
+            "expected_evidence": ["email", "phone", "source_url"],
+        },
+        {
+            "tool_name": "contact_discovery",
+            "agent_role": "contact_discovery_agent",
+            "target_type": "seed",
+            "reason": "Use role-agent contact discovery to collect public contact pages and ownership boundaries.",
+            "expected_evidence": ["verified_email", "verified_phone", "contact_page"],
+        },
+        {
+            "tool_name": "theharvester",
+            "agent_role": "tool_agent",
+            "target_type": "domain",
+            "reason": "Collect public emails and domain-linked contacts when a domain is known.",
+            "expected_evidence": ["email", "domain_source"],
+        },
+    ),
+    "contact_email": (
+        {
+            "tool_name": "official_site_extractor",
+            "agent_role": "tool_agent",
+            "target_type": "url",
+            "reason": "Extract email evidence from official pages.",
+            "expected_evidence": ["email", "source_url"],
+        },
+        {
+            "tool_name": "theharvester",
+            "agent_role": "tool_agent",
+            "target_type": "domain",
+            "reason": "Collect public emails linked to a known domain.",
+            "expected_evidence": ["email", "domain_source"],
+        },
+    ),
+    "contact_phone": (
+        {
+            "tool_name": "official_site_extractor",
+            "agent_role": "tool_agent",
+            "target_type": "url",
+            "reason": "Extract phone or WhatsApp evidence from official pages.",
+            "expected_evidence": ["phone", "whatsapp", "source_url"],
+        },
+        {
+            "tool_name": "contact_discovery",
+            "agent_role": "contact_discovery_agent",
+            "target_type": "seed",
+            "reason": "Use role-agent contact discovery to collect public phone channels.",
+            "expected_evidence": ["verified_phone", "contact_page"],
+        },
+    ),
+    "business_scope": (
+        {
+            "tool_name": "company_osint",
+            "agent_role": "enterprise_intel_agent",
+            "target_type": "seed",
+            "reason": "Collect company identity, public records, website, and business scope.",
+            "expected_evidence": ["business_scope", "product_scope", "source_url"],
+        },
+        {
+            "tool_name": "official_site_extractor",
+            "agent_role": "tool_agent",
+            "target_type": "url",
+            "reason": "Extract product and service scope from official pages.",
+            "expected_evidence": ["product_scope", "business_scope"],
+        },
+    ),
+    "operation_location": (
+        {
+            "tool_name": "company_osint",
+            "agent_role": "enterprise_intel_agent",
+            "target_type": "seed",
+            "reason": "Collect address and operating-region evidence.",
+            "expected_evidence": ["address", "operating_region", "source_url"],
+        },
+        {
+            "tool_name": "official_site_extractor",
+            "agent_role": "tool_agent",
+            "target_type": "url",
+            "reason": "Extract address or regional footprint from official pages.",
+            "expected_evidence": ["address", "country_region"],
+        },
+    ),
+    "purchase_intent": (
+        {
+            "tool_name": "purchase_intent_assessment",
+            "agent_role": "purchase_intent_agent",
+            "target_type": "seed",
+            "reason": "Assess public buying signals and category fit.",
+            "expected_evidence": ["buying_signal", "category_fit", "source_url"],
+        },
+        {
+            "tool_name": "company_news_monitoring",
+            "agent_role": "news_intel_agent",
+            "target_type": "seed",
+            "reason": "Search recent public events for procurement or expansion signals.",
+            "expected_evidence": ["news_url", "business_event", "buying_signal"],
+        },
+    ),
+}
+
+
 def build_gap_analysis(detail: dict) -> list[dict]:
     assessment = detail.get("quality_assessment") or {}
     missing_keys = list(assessment.get("missing_keys") or [])
@@ -184,6 +344,53 @@ def build_gap_analysis(detail: dict) -> list[dict]:
             continue
         results.append({"gap_key": key, "severity": severity, **template})
     return results
+
+
+def build_gap_tool_plan(detail: dict, tool_health_by_name: dict[str, dict] | None = None) -> list[dict]:
+    tool_health_by_name = tool_health_by_name or {}
+    seed_type = str(detail.get("seed_type") or "company")
+    seed_value = str(detail.get("seed_value") or "")
+    existing = {
+        (
+            str(job.get("tool_name") or ""),
+            str(job.get("target_type") or ""),
+            str(job.get("target_value") or ""),
+            str(job.get("depends_on") or ""),
+        )
+        for job in detail.get("jobs", [])
+    }
+    plan = []
+    for gap in build_gap_analysis(detail):
+        gap_key = gap["gap_key"]
+        for mapping in GAP_TOOL_MAPPINGS.get(gap_key, ()):
+            target_type = _gap_mapping_target_type(str(mapping["target_type"]), seed_type)
+            target_value = seed_value
+            depends_on = f"completed:analysis_judgement;gap:{gap_key}"
+            health = tool_health_by_name.get(str(mapping["tool_name"]), {})
+            status = str(health.get("status") or "ready")
+            if (str(mapping["tool_name"]), target_type, target_value, depends_on) in existing:
+                status = "already_attempted"
+            plan.append(
+                {
+                    "gap_key": gap_key,
+                    "tool_name": mapping["tool_name"],
+                    "agent_role": mapping["agent_role"],
+                    "target_type": target_type,
+                    "target_value": target_value,
+                    "status": status,
+                    "reason": mapping["reason"],
+                    "expected_evidence": list(mapping["expected_evidence"]),
+                    "depends_on": depends_on,
+                    "health_reason": str(health.get("reason") or ""),
+                }
+            )
+    return plan
+
+
+def _gap_mapping_target_type(value: str, seed_type: str) -> str:
+    if value == "seed":
+        return seed_type
+    return value
 
 
 def plan_gap_followup_jobs(detail: dict) -> list[PlannedJob]:

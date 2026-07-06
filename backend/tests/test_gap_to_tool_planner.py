@@ -1,6 +1,6 @@
 import unittest
 
-from app.core.gap_followups import build_gap_analysis
+from app.core.gap_followups import build_gap_analysis, build_gap_tool_plan
 
 
 class GapToToolPlannerTests(unittest.TestCase):
@@ -50,6 +50,57 @@ class GapToToolPlannerTests(unittest.TestCase):
         self.assertEqual(gaps[0]["gap_key"], "custom_unknown_gap")
         self.assertEqual(gaps[0]["severity"], "blocking")
         self.assertIn("manual", gaps[0]["manual_review_hint"].lower())
+
+
+class GapToolPlanTests(unittest.TestCase):
+    def test_tool_plan_marks_ready_and_unavailable_tools(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Example Manufacturing LLC",
+            "quality_assessment": {
+                "missing_keys": ["official_website"],
+                "blocking_keys": ["official_website"],
+            },
+            "intelligence_memory": {"collection_gaps": []},
+            "jobs": [],
+        }
+        health = {
+            "official_site_search": {"status": "ready", "reason": "configured"},
+            "httpx": {"status": "missing_executable", "reason": "executable not found: httpx"},
+        }
+
+        plan = build_gap_tool_plan(detail, tool_health_by_name=health)
+
+        by_tool = {item["tool_name"]: item for item in plan}
+        self.assertEqual(by_tool["official_site_search"]["status"], "ready")
+        self.assertEqual(by_tool["httpx"]["status"], "missing_executable")
+        self.assertIn("official website", by_tool["official_site_search"]["reason"].lower())
+
+    def test_tool_plan_marks_duplicate_jobs_as_already_attempted(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Example Manufacturing LLC",
+            "quality_assessment": {
+                "missing_keys": ["official_website"],
+                "blocking_keys": ["official_website"],
+            },
+            "intelligence_memory": {"collection_gaps": []},
+            "jobs": [
+                {
+                    "tool_name": "official_site_search",
+                    "target_type": "company",
+                    "target_value": "Example Manufacturing LLC",
+                    "status": "COMPLETED",
+                    "depends_on": "completed:analysis_judgement;gap:official_website",
+                }
+            ],
+        }
+        health = {"official_site_search": {"status": "ready", "reason": "configured"}}
+
+        plan = build_gap_tool_plan(detail, tool_health_by_name=health)
+
+        official_search = next(item for item in plan if item["tool_name"] == "official_site_search")
+        self.assertEqual(official_search["status"], "already_attempted")
 
 
 if __name__ == "__main__":
