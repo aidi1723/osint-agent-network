@@ -5,6 +5,8 @@ from app.core.gap_followups import build_gap_analysis, build_gap_followup_summar
 
 SUPPORTED_VERIFICATION_STATUSES = {"CONFIRMED", "LIKELY", "SUPPORTED"}
 BLOCKED_TOOL_STATUSES = {"missing_config", "missing_executable", "credential_blocked", "disabled"}
+PROFILE_IDENTITY_TYPES = {"email", "username", "identity", "profile_url", "platform_account"}
+CONTACT_CHANNEL_TYPES = {"email", "phone", "whatsapp"}
 NON_ACCEPTABLE_BLOCKERS = {
     "company_identity",
     "official_website",
@@ -211,9 +213,10 @@ def _evidence_floor(detail: dict) -> dict:
             "cross_verification": _has_source_backed_verification(detail),
         }
     if seed_type in {"email", "username"}:
+        source_backed_identity = _has_source_backed_profile_identity(detail)
         return {
-            "identity": _has_entity_type(detail, {"email", "username", "identity", "profile_url", "platform_account"}),
-            "source_record": bool(detail.get("evidence") or detail.get("evidence_ledger") or detail.get("relationships")),
+            "identity": source_backed_identity,
+            "source_record": source_backed_identity,
             "evidence_ledger": _has_evidence_ledger(detail),
             "risk_summary": bool(detail.get("risk_report") or detail.get("summary") or detail.get("report_markdown")),
             "cross_verification": _has_source_backed_verification(detail),
@@ -222,7 +225,7 @@ def _evidence_floor(detail: dict) -> dict:
         "identity": _has_entity_type(detail, {"company", "organization"}) or _has_fact_predicate(detail, "company_identity"),
         "official_website": _has_entity_type(detail, {"domain", "url", "website", "official_website"}) or _has_source_url(detail),
         "business_scope": _has_entity_type(detail, {"business_scope", "product_scope"}) or _has_fact_predicate(detail, "business_scope"),
-        "contact_channel": _has_entity_type(detail, {"email", "phone", "whatsapp"}) or _has_contact_page(detail),
+        "contact_channel": _has_source_backed_contact_channel(detail),
         "evidence_ledger": _has_evidence_ledger(detail),
         "fact_pool": _has_linked_fact(detail),
         "cross_verification": _has_source_backed_verification(detail),
@@ -233,9 +236,9 @@ def _acceptable_limitations(detail: dict, remaining_blockers: list[str], evidenc
     if not all(evidence_floor.values()):
         return []
     accepted = set(BASE_ACCEPTABLE_LIMITATIONS)
-    if _has_entity_type(detail, {"email"}) or _has_contact_page(detail):
+    if _has_source_backed_contact_type(detail, {"email"}) or _has_contact_page(detail):
         accepted.add("contact_phone")
-    if _has_entity_type(detail, {"phone", "whatsapp"}) or _has_contact_page(detail):
+    if _has_source_backed_contact_type(detail, {"phone", "whatsapp"}) or _has_contact_page(detail):
         accepted.add("contact_email")
     return sorted(key for key in remaining_blockers if key in accepted)
 
@@ -272,6 +275,72 @@ def _execution_failed_without_evidence(detail: dict) -> bool:
 
 def _has_entity_type(detail: dict, accepted_types: set[str]) -> bool:
     return any(str(item.get("type") or "") in accepted_types and str(item.get("value") or "").strip() for item in detail.get("entities") or [])
+
+
+def _entity_values(detail: dict, accepted_types: set[str]) -> set[str]:
+    return {
+        str(item.get("value") or "").strip().lower()
+        for item in detail.get("entities") or []
+        if str(item.get("type") or "") in accepted_types and str(item.get("value") or "").strip()
+    }
+
+
+def _has_source_backed_profile_identity(detail: dict) -> bool:
+    values = _entity_values(detail, PROFILE_IDENTITY_TYPES)
+    seed_type = str(detail.get("seed_type") or "")
+    seed_value = str(detail.get("seed_value") or "").strip().lower()
+    if seed_type in {"email", "username"} and seed_value:
+        values.add(seed_value)
+    return _has_source_backed_value(detail, values)
+
+
+def _has_source_backed_contact_channel(detail: dict) -> bool:
+    return _has_contact_page(detail) or _has_source_backed_contact_type(detail, CONTACT_CHANNEL_TYPES)
+
+
+def _has_source_backed_contact_type(detail: dict, accepted_types: set[str]) -> bool:
+    return _has_source_backed_value(detail, _entity_values(detail, accepted_types))
+
+
+def _has_source_backed_value(detail: dict, values: set[str]) -> bool:
+    values = {value for value in values if value}
+    if not values:
+        return False
+    source_backed_ledger = [
+        item
+        for item in detail.get("evidence_ledger") or []
+        if item.get("source_url") or item.get("source_type")
+    ]
+    for item in source_backed_ledger:
+        haystack = " ".join(
+            str(item.get(key) or "").lower()
+            for key in ("entity_value", "subject", "object", "source_url", "source_type", "snippet")
+        )
+        if any(value in haystack for value in values):
+            return True
+
+    source_backed_evidence_ids = {
+        str(item.get("id") or "").strip()
+        for item in source_backed_ledger
+        if str(item.get("id") or "").strip()
+    }
+    if not source_backed_evidence_ids:
+        return False
+    for fact in detail.get("facts") or []:
+        linked_evidence_ids = {
+            str(evidence_id).strip()
+            for evidence_id in fact.get("evidence_ids") or []
+            if str(evidence_id).strip()
+        }
+        if not linked_evidence_ids & source_backed_evidence_ids:
+            continue
+        haystack = " ".join(
+            str(fact.get(key) or "").lower()
+            for key in ("statement", "predicate", "subject", "object", "value")
+        )
+        if any(value in haystack for value in values):
+            return True
+    return False
 
 
 def _has_source_url(detail: dict) -> bool:

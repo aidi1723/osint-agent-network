@@ -528,6 +528,52 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertNotEqual(policy["completion_mode"], "strict")
         self.assertNotEqual(policy["recommended_status"], "COMPLETED")
 
+    def test_username_strict_quality_ready_rejects_bare_identity_floor(self):
+        detail = {
+            "seed_type": "username",
+            "seed_value": "sample_user",
+            "entities": [{"type": "username", "value": "sample_user", "confidence": 0.96}],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "relationships": [{"from_value": "sample_user", "to_value": "sample@example-target.test"}],
+            "hypotheses": [],
+            "summary": "sample_user has only a bare identity signal.",
+            "quality_assessment": {
+                "score": 95.0,
+                "completion_ready": True,
+                "missing_keys": [],
+                "blocking_keys": [],
+                "checks": [],
+            },
+            "gap_analysis": [],
+            "gap_tool_plan": [],
+            "gap_followup_summary": {
+                "total_gaps": 0,
+                "blocking_gaps": 0,
+                "ready": 0,
+                "queued": 0,
+                "already_attempted": 0,
+                "blocked_by_config": 0,
+                "exhausted": 0,
+                "manual_review_required": 0,
+            },
+            "cross_verification_matrix": [
+                {
+                    "field_key": "profile_identity",
+                    "status": "SUPPORTED",
+                    "candidate_value": "sample_user",
+                }
+            ],
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["evidence_floor"]["identity"])
+        self.assertFalse(policy["evidence_floor"]["source_record"])
+
     def test_email_limited_completion_requires_source_backed_cross_verification(self):
         detail = {
             "seed_type": "email",
@@ -586,6 +632,71 @@ class CompletionPolicyTests(unittest.TestCase):
 
         policy = build_completion_policy(detail)
 
+        self.assertNotEqual(policy["completion_mode"], "limited")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["limited_completion_ready"])
+
+    def test_company_limited_completion_rejects_bare_email_contact_limitation(self):
+        detail = complete_company_detail()
+        detail["entities"] = [
+            item for item in detail["entities"] if item["type"] not in {"phone", "decision_maker"}
+        ]
+        detail["evidence"] = []
+        detail["evidence_ledger"] = [
+            {
+                "id": "ev-1",
+                "source_url": "https://example-target.test/about",
+                "source_type": "official_site_profile",
+                "source_tool": "official_site_extractor",
+                "admiralty_code": "A-2",
+                "snippet": "Official profile confirms Sample Auto Parts Co. and its business scope.",
+            }
+        ]
+        detail["facts"] = [
+            {
+                "id": "fact-1",
+                "statement": "Sample Auto Parts Co. distributes auto parts.",
+                "predicate": "business_scope",
+                "object": "auto parts distribution",
+                "status": "CONFIRMED",
+                "promotion_stage": "ACCEPTED_FACT",
+                "confidence": 0.82,
+                "evidence_ids": ["ev-1"],
+            }
+        ]
+        detail["relationships"] = []
+        detail["quality_assessment"] = {
+            "score": 78.0,
+            "completion_ready": False,
+            "missing_keys": ["contact_phone"],
+            "blocking_keys": ["contact_phone"],
+            "checks": [],
+        }
+        detail["gap_analysis"] = [{"gap_key": "contact_phone", "severity": "blocking"}]
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 1,
+            "blocking_gaps": 1,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 1,
+            "blocked_by_config": 0,
+            "exhausted": 1,
+            "manual_review_required": 0,
+        }
+        detail["cross_verification_matrix"] = [
+            {
+                "field_key": "company_identity",
+                "status": "SUPPORTED",
+                "candidate_value": "Sample Auto Parts Co.",
+                "linked_evidence_ids": ["ev-1"],
+                "linked_fact_ids": ["fact-1"],
+            }
+        ]
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotIn("contact_phone", policy["acceptable_limitations"])
         self.assertNotEqual(policy["completion_mode"], "limited")
         self.assertNotEqual(policy["recommended_status"], "COMPLETED")
         self.assertFalse(policy["limited_completion_ready"])
