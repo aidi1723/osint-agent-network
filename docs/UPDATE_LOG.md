@@ -32,6 +32,23 @@ Verification:
   manifest valid, regression smoke 4 cases / 0 failed, frontend copy/state
   checks passed, Vitest 9 tests passed, and production build passed.
 
+Deployment verification:
+
+- Deployed to the <production-host> script-managed runtime after creating a
+  pre-deploy backup.
+- Remote `bash scripts/verify.sh`: backend 338 tests passed, regression smoke
+  4 cases / 0 failed, frontend checks passed, Vitest 9 tests passed, and
+  production build passed.
+- Remote `scripts/healthcheck.sh`: `api=ok`, `database=ok`, `web=ok`.
+- Remote `production_readiness.py`: `ready=true`, `severity=ok`.
+- Public-safe API run confirmed `gap_analysis`, `gap_tool_plan`,
+  `gap_followup_summary`, report section `卡点与补采计划`, gap follow-up jobs,
+  and worker event `情报缺口补采计划已更新`.
+- Follow-up fix: worker gap-planning events now build missing
+  `quality_assessment` and `intelligence_memory` when invoked from raw detail,
+  so event `gap_followup_summary.total_gaps` is populated after an
+  `analysis_judgement` job completes.
+
 ## 2026-07-06 - Temporary Closure And Documentation Alignment
 
 Scope:

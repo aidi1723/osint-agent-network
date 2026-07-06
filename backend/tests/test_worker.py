@@ -1180,6 +1180,7 @@ class WorkerTests(unittest.TestCase):
         detail = store.get_investigation(investigation.id)
         job_keys = {(job["tool_name"], job["agent_role"]) for job in detail["jobs"]}
         gap_jobs = [job for job in detail["jobs"] if "gap:" in str(job.get("depends_on") or "")]
+        planner_events = [event for event in detail["events"] if "补采" in str(event.get("message") or "")]
 
         self.assertGreaterEqual(result["queued_followups"], 1)
         self.assertIn(("social_profile_search", "social_intel_agent"), job_keys)
@@ -1189,6 +1190,8 @@ class WorkerTests(unittest.TestCase):
         self.assertIn(("analysis_judgement", "analysis_judgement_agent"), job_keys)
         self.assertTrue(gap_jobs)
         self.assertTrue(any(job["status"] == "QUEUED" for job in gap_jobs))
+        self.assertTrue(planner_events)
+        self.assertGreaterEqual(planner_events[-1]["metadata"]["gap_followup_summary"]["total_gaps"], 1)
 
     def test_worker_records_gap_tool_plan_when_tools_unavailable(self):
         store = MemoryStore()

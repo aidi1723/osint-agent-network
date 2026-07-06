@@ -12,6 +12,7 @@ from app.core.gap_followups import (
     build_gap_tool_plan,
     plan_gap_followup_jobs,
 )
+from app.core.intelligence_memory import build_intelligence_memory
 from app.core.inference import plan_progressive_jobs
 from app.core.planner import StrategyProfile
 from app.core.quality import build_quality_assessment, completion_status_for_detail, render_structured_report
@@ -196,12 +197,17 @@ def _report_score_stale(report_markdown: str, quality_assessment: dict) -> bool:
 def _queue_gap_followups(store, detail: dict, strategy: StrategyProfile) -> dict:
     if not detail:
         return {"created": 0, "gap_followup_summary": _empty_gap_followup_summary()}
+    planner_detail = dict(detail)
+    if not planner_detail.get("intelligence_memory"):
+        planner_detail["intelligence_memory"] = build_intelligence_memory(planner_detail)
+    if not planner_detail.get("quality_assessment"):
+        planner_detail["quality_assessment"] = build_quality_assessment(planner_detail)
     health_report = build_tool_health_report()
     health_by_name = {str(item.get("name") or ""): item for item in health_report.get("tools", [])}
-    gap_analysis = build_gap_analysis(detail)
-    gap_tool_plan = build_gap_tool_plan(detail, tool_health_by_name=health_by_name)
+    gap_analysis = build_gap_analysis(planner_detail)
+    gap_tool_plan = build_gap_tool_plan(planner_detail, tool_health_by_name=health_by_name)
     gap_summary = build_gap_followup_summary(gap_tool_plan, gap_analysis)
-    planned = plan_gap_followup_jobs(detail, tool_health_by_name=health_by_name)
+    planned = plan_gap_followup_jobs(planner_detail, tool_health_by_name=health_by_name)
     remaining_jobs = max(0, detail.get("max_jobs", strategy.max_jobs) - len(detail.get("jobs", [])))
     created = store.add_jobs(detail["id"], planned[:remaining_jobs])
     blocked_tools = _blocked_gap_tools(gap_tool_plan)

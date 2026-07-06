@@ -284,9 +284,24 @@ Local verification for this follow-up pass:
 
 Deployment note:
 
-- This section records the local implementation state. A separate deployment
-  and public-safe actual-task verification pass should be run before claiming
-  the <production-host> deployment has the follow-up planner active.
+- This follow-up planner was deployed to <production-host> and verified with a
+  public-safe API task.
+- Remote `bash scripts/verify.sh` passed: backend 338 tests, regression smoke
+  4 cases / 0 failed, frontend checks, Vitest 9 tests, and production build.
+- Remote health/readiness passed: `api=ok`, `database=ok`, `web=ok`,
+  `ready=true`, `severity=ok`.
+- Public-safe actual-task verification confirmed:
+  - `gap_analysis` present;
+  - `gap_tool_plan` present;
+  - `gap_followup_summary` present;
+  - report section `## 卡点与补采计划` present;
+  - gap follow-up jobs queued;
+  - worker event `情报缺口补采计划已更新` recorded.
+- A deployment-time bug was found and fixed: when worker gap planning ran from
+  raw detail immediately after `analysis_judgement`, event metadata could show
+  `gap_followup_summary.total_gaps=0`. The worker now derives missing
+  `quality_assessment` and `intelligence_memory` before building the event
+  summary.
 
 ## Addendum - PDF Export Deployment Retest
 
