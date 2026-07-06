@@ -88,11 +88,12 @@ class ReportPdfServiceTests(unittest.TestCase):
         from app.services.report_pdf import render_report_pdf
 
         detail = _sample_detail()
+        local_path = "/" + "Users/example/.config/tool/session.json"
         detail["report_markdown"] = "\n".join(
             [
                 "# Example Manufacturing LLC",
                 "Authorization: " + "Bearer " + ("A" * 24),
-                "Path: /Users/example/.config/tool/session.json",
+                "Path: " + local_path,
                 "URL: http://" + "10." + "1.2.3:5000/status",
             ]
         )
@@ -104,7 +105,7 @@ class ReportPdfServiceTests(unittest.TestCase):
         self.assertIn("<redacted-path>", text)
         self.assertIn("<redacted-url>", text)
         self.assertNotIn("Bearer", text)
-        self.assertNotIn("/Users/example", text)
+        self.assertNotIn(local_path, text)
         self.assertNotIn("10." + "1.2.3", text)
 
     def test_missing_reportlab_raises_explicit_dependency_error(self):

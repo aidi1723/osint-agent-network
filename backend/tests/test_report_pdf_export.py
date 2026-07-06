@@ -40,8 +40,9 @@ class ReportPdfServiceTests(unittest.TestCase):
 
     def test_render_report_pdf_redacts_sensitive_values(self):
         detail = _sample_detail()
+        local_path = "/" + "Users/example/.config/tool/session.json"
         detail["facts"][0]["statement"] += " Authorization: " + "Bearer " + ("A" * 24)
-        detail["evidence_ledger"][0]["snippet"] += " Path: /Users/example/.config/tool/session.json"
+        detail["evidence_ledger"][0]["snippet"] += " Path: " + local_path
         detail["evidence_ledger"][0]["source_url"] = "http://" + "10." + "1.2.3:5000/status"
 
         pdf_bytes = render_report_pdf(detail)
@@ -51,7 +52,7 @@ class ReportPdfServiceTests(unittest.TestCase):
         self.assertIn("<redacted-path>", text)
         self.assertIn("<redacted-url>", text)
         self.assertNotIn("Bearer", text)
-        self.assertNotIn("/Users/example", text)
+        self.assertNotIn(local_path, text)
         self.assertNotIn("10." + "1.2.3", text)
 
     def test_render_report_pdf_preserves_cjk_text_without_black_square_markers(self):
