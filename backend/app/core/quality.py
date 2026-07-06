@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.core.gap_followups import build_gap_analysis, build_gap_tool_plan
+
 
 FIELD_RULES = (
     ("company_identity", "企业名称", ("company", "organization"), 8),
@@ -93,6 +95,7 @@ def completion_status_for_detail(detail: dict, requested_status: str) -> str:
 
 def render_structured_report(detail: dict, assessment: dict | None = None) -> str:
     assessment = assessment or build_quality_assessment(detail)
+    planner_detail = {**detail, "quality_assessment": assessment}
     facts = detail.get("facts") or []
     evidence_ledger = detail.get("evidence_ledger") or []
     requirements = detail.get("intelligence_requirements") or {}
@@ -100,6 +103,8 @@ def render_structured_report(detail: dict, assessment: dict | None = None) -> st
     gaps = ((detail.get("intelligence_memory") or {}).get("collection_gaps") or [])
     directed = ((detail.get("intelligence_memory") or {}).get("directed_collection") or [])
     analysis = detail.get("hypothesis_analysis") or {}
+    gap_analysis = detail.get("gap_analysis") or build_gap_analysis(planner_detail)
+    gap_tool_plan = detail.get("gap_tool_plan") or build_gap_tool_plan(planner_detail)
 
     lines = [
         f"# {detail.get('name') or detail.get('seed_value') or '情报评估报告'}",
@@ -131,6 +136,8 @@ def render_structured_report(detail: dict, assessment: dict | None = None) -> st
             if item["key"] in set(assessment["missing_keys"])
         ]
         lines.append(f"- 缺口：{'、'.join(missing_labels)}")
+
+    lines.extend(_gap_followup_lines(gap_analysis, gap_tool_plan))
 
     lines.extend(["", "## EEI 覆盖摘要"])
     eeis = requirements.get("eeis") or []
@@ -296,6 +303,75 @@ def _format_confidence(value) -> str:
         return f"{float(value):.2f}"
     except (TypeError, ValueError):
         return "置信度未标注"
+
+
+def _gap_followup_lines(gap_analysis: list[dict], gap_tool_plan: list[dict]) -> list[str]:
+    lines = ["", "## 卡点与补采计划"]
+    if not gap_analysis:
+        lines.append("- 当前未形成明确补采计划。")
+        return lines
+
+    tools_by_gap: dict[str, list[dict]] = {}
+    for item in gap_tool_plan:
+        tools_by_gap.setdefault(str(item.get("gap_key") or ""), []).append(item)
+
+    for gap in gap_analysis[:8]:
+        gap_key = str(gap.get("gap_key") or "")
+        label = gap.get("label") or gap_key.replace("_", " ").title()
+        severity = gap.get("severity") or "important"
+        lines.append(f"- [{severity}] {label}：{gap.get('current_state', '')}")
+        missing = [str(item) for item in gap.get("missing_evidence") or [] if str(item).strip()]
+        if missing:
+            lines.append(f"  - 缺失证据：{'；'.join(missing[:4])}")
+        tool_lines = _gap_tool_status_lines(tools_by_gap.get(gap_key, []))
+        lines.extend(tool_lines)
+        hint = str(gap.get("manual_review_hint") or "").strip()
+        if hint:
+            lines.append(f"  - 人工复核：{hint}")
+    return lines
+
+
+def _gap_tool_status_lines(tool_plan: list[dict]) -> list[str]:
+    if not tool_plan:
+        return ["  - 自动补采：暂无可映射工具，需人工复核。"]
+
+    ready = _tool_names_by_status(tool_plan, {"ready", "queued"})
+    attempted = _tool_names_by_status(tool_plan, {"already_attempted"})
+    blocked = [
+        _tool_with_reason(item)
+        for item in tool_plan
+        if item.get("status") in {"missing_config", "missing_executable", "credential_blocked", "disabled"}
+    ]
+    exhausted = _tool_names_by_status(tool_plan, {"exhausted"})
+
+    lines = []
+    if ready:
+        lines.append(f"  - 可自动补采：{', '.join(ready)}")
+    if attempted:
+        lines.append(f"  - 已尝试：{', '.join(attempted)}")
+    if blocked:
+        lines.append(f"  - 环境/配置阻塞：{', '.join(blocked)}")
+    if exhausted:
+        lines.append(f"  - 已耗尽：{', '.join(exhausted)}")
+    if not lines:
+        lines.append("  - 自动补采：暂无可立即执行动作。")
+    return lines
+
+
+def _tool_names_by_status(tool_plan: list[dict], statuses: set[str]) -> list[str]:
+    return [
+        str(item.get("tool_name") or "")
+        for item in tool_plan
+        if item.get("status") in statuses and item.get("tool_name")
+    ]
+
+
+def _tool_with_reason(item: dict) -> str:
+    tool_name = str(item.get("tool_name") or "")
+    reason = str(item.get("health_reason") or item.get("reason") or "").strip()
+    if reason:
+        return f"{tool_name}（{reason}）"
+    return tool_name
 
 
 def _indicator_lines(detail: dict, matrix: list[dict]) -> list[str]:

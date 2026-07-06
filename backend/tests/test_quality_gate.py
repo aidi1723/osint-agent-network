@@ -306,6 +306,63 @@ class QualityGateTests(unittest.TestCase):
         self.assertIn("## 情报缺口", report)
         self.assertIn("继续查官网团队页", report)
 
+    def test_structured_report_includes_gap_followup_plan(self):
+        detail = {
+            "name": "Example Manufacturing LLC",
+            "seed_value": "Example Manufacturing LLC",
+            "summary": "Needs review.",
+            "entities": [],
+            "facts": [],
+            "evidence_ledger": [],
+            "relationships": [],
+            "hypotheses": [],
+            "report_markdown": "## BLUF\nNeeds review.",
+            "gap_analysis": [
+                {
+                    "gap_key": "official_website",
+                    "label": "Official website",
+                    "severity": "blocking",
+                    "current_state": "No accepted official website or domain is linked to the target.",
+                    "missing_evidence": [
+                        "Official domain or URL tied to the target",
+                        "Page title or snippet showing target identity",
+                    ],
+                    "why_it_matters": "The task cannot be completed confidently without an official source boundary.",
+                    "manual_review_hint": "Inspect public registry if automated search remains inconclusive.",
+                }
+            ],
+            "gap_tool_plan": [
+                {
+                    "gap_key": "official_website",
+                    "tool_name": "official_site_search",
+                    "status": "ready",
+                    "reason": "Find official website candidates before crawling pages.",
+                },
+                {
+                    "gap_key": "official_website",
+                    "tool_name": "httpx",
+                    "status": "missing_executable",
+                    "health_reason": "executable not found: httpx",
+                },
+                {
+                    "gap_key": "official_website",
+                    "tool_name": "company_osint",
+                    "status": "already_attempted",
+                },
+            ],
+        }
+
+        report = render_structured_report(detail, build_quality_assessment(detail))
+
+        self.assertIn("## 卡点与补采计划", report)
+        self.assertIn("Official website", report)
+        self.assertIn("Official domain or URL tied to the target", report)
+        self.assertIn("可自动补采：official_site_search", report)
+        self.assertIn("已尝试：company_osint", report)
+        self.assertIn("环境/配置阻塞：httpx", report)
+        self.assertIn("executable not found: httpx", report)
+        self.assertIn("Inspect public registry", report)
+
     def test_sqlite_complete_task_applies_quality_gate_and_structured_report(self):
         with TemporaryDirectory() as tmpdir:
             store = SQLiteStore(str(Path(tmpdir) / "osint.sqlite"))
