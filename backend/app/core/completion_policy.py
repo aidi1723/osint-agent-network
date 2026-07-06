@@ -528,8 +528,6 @@ def _has_source_backed_contact_verification(detail: dict) -> bool:
         field_key = str(item.get("field_key") or "").strip().lower()
         if field_key not in contact_fields:
             continue
-        if _contains_contact_value(str(item.get("candidate_value") or "")):
-            return True
         linked_evidence_ids = {
             str(evidence_id).strip()
             for evidence_id in item.get("linked_evidence_ids") or item.get("evidence_ids") or []
@@ -540,6 +538,11 @@ def _has_source_backed_contact_verification(detail: dict) -> bool:
             for fact_id in item.get("linked_fact_ids") or item.get("fact_ids") or []
             if str(fact_id).strip()
         }
+        if _contains_contact_value(str(item.get("candidate_value") or "")) and (
+            linked_evidence_ids & source_backed_evidence_ids
+            or linked_fact_ids & source_backed_fact_ids
+        ):
+            return True
         for evidence_id in linked_evidence_ids & source_backed_evidence_ids:
             evidence = evidence_by_id.get(evidence_id) or {}
             haystack = " ".join(
