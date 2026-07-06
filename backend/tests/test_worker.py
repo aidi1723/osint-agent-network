@@ -1190,6 +1190,70 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(gap_jobs)
         self.assertTrue(any(job["status"] == "QUEUED" for job in gap_jobs))
 
+    def test_worker_records_gap_tool_plan_when_tools_unavailable(self):
+        store = MemoryStore()
+        investigation = store.create_investigation(
+            name="Example Manufacturing LLC",
+            seed_type="company",
+            seed_value="Example Manufacturing LLC",
+            strategy_name="standard",
+        )
+        store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": "job-analysis",
+                    "investigation_id": investigation.id,
+                    "tool_name": "analysis_judgement",
+                    "target_type": "company",
+                    "target_value": "Example Manufacturing LLC",
+                    "depth": 2,
+                    "status": "COMPLETED",
+                    "agent_role": "analysis_judgement_agent",
+                    "output_contract": "claims,graph_slots,report",
+                    "depends_on": "",
+                }
+            ],
+        )
+        store.complete_task(
+            investigation.id,
+            agent_id="analysis",
+            status="NEEDS_REVIEW",
+            summary="Needs more evidence.",
+            report_markdown="",
+            confidence=0.4,
+        )
+
+        with patch(
+            "app.services.worker.build_tool_health_report",
+            return_value={
+                "summary": {},
+                "tools": [
+                    {
+                        "name": "official_site_search",
+                        "status": "missing_config",
+                        "reason": "OFFICIAL_SITE_SEARCH_BASE_URL is not configured",
+                    },
+                    {
+                        "name": "company_osint",
+                        "status": "missing_config",
+                        "reason": "COMPANY_OSINT_BASE_URL is not configured",
+                    },
+                    {
+                        "name": "contact_discovery",
+                        "status": "missing_config",
+                        "reason": "CONTACT_DISCOVERY_BASE_URL is not configured",
+                    },
+                ],
+            },
+        ):
+            result = run_investigation_jobs(store, investigation.id, max_jobs=1, artifact_root=Path("/tmp/unused"))
+
+        self.assertIn("gap_followup_summary", result)
+        self.assertGreaterEqual(result["gap_followup_summary"]["blocked_by_config"], 1)
+        detail = store.get_investigation(investigation.id)
+        self.assertTrue(any("补采" in event["message"] for event in detail["events"]))
+
     def test_historical_review_task_queues_gap_followups_when_rerun(self):
         store = MemoryStore()
         investigation = store.create_investigation(
@@ -1352,7 +1416,7 @@ class WorkerTests(unittest.TestCase):
         self.assertNotIn("完整度评分：1.0 / 100", detail["report_markdown"])
         self.assertIn(f"完整度评分：{result['quality_assessment']['score']} / 100", detail["report_markdown"])
 
-    def test_worker_refreshes_stale_report_when_no_jobs_run(self):
+    def test_worker_refreshes_stale_report_and_records_gap_followups(self):
         store = MemoryStore()
         investigation = store.create_investigation(
             name="无新任务刷新陈旧报告",
@@ -1395,7 +1459,8 @@ class WorkerTests(unittest.TestCase):
 
         detail = store.get_investigation(investigation.id)
 
-        self.assertEqual(result["started"], 0)
+        self.assertGreaterEqual(result["queued_gap_followups"], 1)
+        self.assertGreaterEqual(result["gap_followup_summary"]["total_gaps"], 1)
         self.assertNotIn("完整度评分：1.0 / 100", detail["report_markdown"])
         self.assertIn(f"完整度评分：{result['quality_assessment']['score']} / 100", detail["report_markdown"])
 

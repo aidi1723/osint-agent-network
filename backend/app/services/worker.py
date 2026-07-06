@@ -6,12 +6,18 @@ import time
 from pathlib import Path
 from shutil import which
 
-from app.core.gap_followups import plan_gap_followup_jobs
+from app.core.gap_followups import (
+    build_gap_analysis,
+    build_gap_followup_summary,
+    build_gap_tool_plan,
+    plan_gap_followup_jobs,
+)
 from app.core.inference import plan_progressive_jobs
 from app.core.planner import StrategyProfile
 from app.core.quality import build_quality_assessment, completion_status_for_detail, render_structured_report
 from app.core.registry import default_tool_registry
 from app.core.social_risk import build_social_risk_report
+from app.core.tool_health import build_tool_health_report
 from app.services.role_agents import can_run_locally, run_role_agent
 from app.tools import get_adapter
 from app.tools.base import ParsedToolOutput, run_tool_command
@@ -75,6 +81,7 @@ def run_investigation_jobs(
         "role_completed": 0,
         "busy": False,
         "risk_report": {},
+        "gap_followup_summary": _empty_gap_followup_summary(),
     }
 
     if any(job.get("status") == "RUNNING" for job in detail.get("jobs", [])):
@@ -92,9 +99,11 @@ def run_investigation_jobs(
         return summary
 
     if _has_completed_analysis_judgement(detail):
-        created = _queue_gap_followups(store, detail, strategy)
+        gap_result = _queue_gap_followups(store, detail, strategy)
+        created = gap_result["created"]
         summary["queued_followups"] += created
         summary["queued_gap_followups"] += created
+        summary["gap_followup_summary"] = gap_result["gap_followup_summary"]
         if created:
             detail = store.get_investigation(investigation_id) or detail
 
@@ -124,9 +133,11 @@ def run_investigation_jobs(
         )
         refreshed = store.get_investigation_raw(investigation_id)
         if refreshed and job.get("tool_name") == "analysis_judgement":
-            created = _queue_gap_followups(store, refreshed, strategy)
+            gap_result = _queue_gap_followups(store, refreshed, strategy)
+            created = gap_result["created"]
             summary["queued_followups"] += created
             summary["queued_gap_followups"] += created
+            summary["gap_followup_summary"] = gap_result["gap_followup_summary"]
 
     detail = store.get_investigation(investigation_id)
     risk_report = _risk_report_for_detail(detail)
@@ -182,22 +193,28 @@ def _report_score_stale(report_markdown: str, quality_assessment: dict) -> bool:
     return abs(float(match.group(1)) - expected) > 0.01
 
 
-def _queue_gap_followups(store, detail: dict, strategy: StrategyProfile) -> int:
+def _queue_gap_followups(store, detail: dict, strategy: StrategyProfile) -> dict:
     if not detail:
-        return 0
-    planned = plan_gap_followup_jobs(detail)
-    if not planned:
-        return 0
+        return {"created": 0, "gap_followup_summary": _empty_gap_followup_summary()}
+    health_report = build_tool_health_report()
+    health_by_name = {str(item.get("name") or ""): item for item in health_report.get("tools", [])}
+    gap_analysis = build_gap_analysis(detail)
+    gap_tool_plan = build_gap_tool_plan(detail, tool_health_by_name=health_by_name)
+    gap_summary = build_gap_followup_summary(gap_tool_plan, gap_analysis)
+    planned = plan_gap_followup_jobs(detail, tool_health_by_name=health_by_name)
     remaining_jobs = max(0, detail.get("max_jobs", strategy.max_jobs) - len(detail.get("jobs", [])))
     created = store.add_jobs(detail["id"], planned[:remaining_jobs])
-    if created:
+    blocked_tools = _blocked_gap_tools(gap_tool_plan)
+    if created or blocked_tools or gap_summary["total_gaps"]:
         store.add_event(
             detail["id"],
             "worker",
             "info",
-            "情报缺口已规划下一轮补采任务",
+            "情报缺口补采计划已更新",
             {
                 "queued_gap_followups": len(created),
+                "gap_followup_summary": gap_summary,
+                "blocked_tools": blocked_tools,
                 "jobs": [
                     {
                         "tool_name": job["tool_name"],
@@ -210,7 +227,34 @@ def _queue_gap_followups(store, detail: dict, strategy: StrategyProfile) -> int:
                 ],
             },
         )
-    return len(created)
+    return {"created": len(created), "gap_followup_summary": gap_summary}
+
+
+def _empty_gap_followup_summary() -> dict:
+    return {
+        "total_gaps": 0,
+        "blocking_gaps": 0,
+        "ready": 0,
+        "queued": 0,
+        "already_attempted": 0,
+        "blocked_by_config": 0,
+        "exhausted": 0,
+        "manual_review_required": 0,
+    }
+
+
+def _blocked_gap_tools(gap_tool_plan: list[dict]) -> list[dict]:
+    blocked_statuses = {"missing_config", "missing_executable", "credential_blocked", "disabled"}
+    return [
+        {
+            "gap_key": item["gap_key"],
+            "tool_name": item["tool_name"],
+            "status": item["status"],
+            "reason": item.get("health_reason", ""),
+        }
+        for item in gap_tool_plan
+        if item["status"] in blocked_statuses
+    ]
 
 
 def _has_completed_analysis_judgement(detail: dict) -> bool:
