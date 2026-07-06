@@ -128,6 +128,7 @@ AMASS_COMMAND=amass
 SUBFINDER_COMMAND=<osint-bin>/subfinder
 HTTPX_COMMAND=<osint-bin>/httpx
 KATANA_COMMAND=<osint-bin>/katana
+OFFICIAL_SITE_SEARCH_BASE_URL=
 SPIDERFOOT_BASE_URL=
 PHONEINFOGA_BASE_URL=
 GHUNT_COMMAND=ghunt
@@ -216,6 +217,7 @@ npm run build
 - SQLite 持久化。
 - 多工具适配器框架。
 - ProjectDiscovery 社区工具链：`subfinder`、`httpx`、`katana`，以及内置 `official_site_extractor` 官网解析器。
+- 可选官网搜索层：`official_site_search` 支持 SearXNG 兼容端点，为 `company` 和 `sparse_lead` 任务补官网候选 URL。
 - `company`、`sparse_lead`、`domain`、`email`、`username`、`phone`、`url` 等目标类型与职责型 Agent 队列。
 - 依赖感知队列、并发保护、递进式推演和 IntelCore 预测分析输出合同。
 - Intelligence Core v3：任务需求层、事实晋级、交叉验证矩阵和专业白皮书结构。

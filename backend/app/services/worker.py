@@ -40,6 +40,7 @@ DEPENDENCY_READY_STATUSES = {"COMPLETED", "PARTIAL_FAILED", "FAILED", "BLOCKED"}
 HEAVY_ENRICHMENT_TOOLS = {"amass", "spiderfoot", "reconng", "ghunt"}
 FOLLOWUP_CONFIDENCE_THRESHOLD = 0.7
 HTTP_PROBED_URL_FOLLOWUP_THRESHOLD = 0.6
+OFFICIAL_SITE_SEARCH_URL_FOLLOWUP_THRESHOLD = 0.58
 PRE_ANALYSIS_FOLLOWUP_LIMIT = 1
 EVENT_OUTPUT_LIMIT = 4000
 
@@ -619,6 +620,7 @@ def _is_inferred_job(job: dict) -> bool:
 def _tool_preference(tool_name: str) -> int:
     order = {
         "lead_anchor_extraction": 0,
+        "official_site_search": 3,
         "company_news": 5,
         "theharvester": 10,
         "socialscan": 15,
@@ -675,6 +677,10 @@ def _eligible_followup_entity(entity, parsed: ParsedToolOutput) -> bool:
         entity.type == "url"
         and parsed.tool == "httpx"
         and entity.confidence >= HTTP_PROBED_URL_FOLLOWUP_THRESHOLD
+    ) or (
+        entity.type == "url"
+        and parsed.tool == "official_site_search"
+        and entity.confidence >= OFFICIAL_SITE_SEARCH_URL_FOLLOWUP_THRESHOLD
     )
 
 

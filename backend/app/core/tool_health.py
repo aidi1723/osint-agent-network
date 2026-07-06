@@ -66,6 +66,10 @@ TOOL_CONFIG = {
         "default_command": "python3",
         "optional_env": ("COMPANY_NEWS_SOURCE",),
     },
+    "official_site_search": {
+        "base_url_env": "OFFICIAL_SITE_SEARCH_BASE_URL",
+        "optional_env": ("OFFICIAL_SITE_SEARCH_COMMAND",),
+    },
     "profile_parser": {
         "internal": True,
     },

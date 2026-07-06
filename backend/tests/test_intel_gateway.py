@@ -204,6 +204,34 @@ class IntelGatewayTests(unittest.TestCase):
         self.assertIn("BLUF", analysis_job.output_contract)
         self.assertIn("directed_collection", analysis_job.output_contract)
 
+    def test_company_standard_route_adds_configured_official_site_search(self):
+        plan = build_intel_plan(
+            target_type="company",
+            target_value="Sample Auto Parts Co.",
+            strategy_name="standard",
+            registry=default_tool_registry(),
+            runtime_env={"OFFICIAL_SITE_SEARCH_BASE_URL": "http://search.local/search"},
+            respect_tool_health=True,
+        )
+
+        self.assertIn("official_site_search", [route.tool_name for route in plan.routes])
+        search_route = next(route for route in plan.routes if route.tool_name == "official_site_search")
+        self.assertEqual(search_route.target_type, "company")
+        self.assertEqual(search_route.source_tier, "official_site_discovery")
+
+    def test_sparse_lead_standard_route_skips_unconfigured_official_site_search(self):
+        plan = build_intel_plan(
+            target_type="sparse_lead",
+            target_value="Sample Lead / member-redacted",
+            strategy_name="standard",
+            registry=default_tool_registry(),
+            runtime_env={},
+            respect_tool_health=True,
+        )
+
+        skipped = {route.tool_name: route.skip_reason for route in plan.skipped_routes}
+        self.assertEqual(skipped["official_site_search"], "missing_config:OFFICIAL_SITE_SEARCH_BASE_URL")
+
     def test_initial_email_jobs_stay_on_email_tools(self):
         with available_external_commands():
             jobs = plan_initial_jobs(

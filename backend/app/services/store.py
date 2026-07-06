@@ -145,12 +145,13 @@ class MemoryStore:
         initial_plan = plan_initial_job_set(seed_type, seed_value, strategy, registry, respect_tool_health=respect_tool_health)
         planned_jobs = initial_plan.jobs
         skipped_routes = initial_plan.skipped_routes
+        recorded_skipped_routes = skipped_routes if respect_tool_health else []
         metadata = metadata or {}
         if respect_tool_health:
             metadata = {**metadata, "respect_tool_health": True}
-        if skipped_routes:
-            metadata = {**metadata, "initial_skipped_routes": [asdict(route) for route in skipped_routes]}
-        planning_blocked = bool(skipped_routes and not planned_jobs)
+        if recorded_skipped_routes:
+            metadata = {**metadata, "initial_skipped_routes": [asdict(route) for route in recorded_skipped_routes]}
+        planning_blocked = bool(recorded_skipped_routes and not planned_jobs)
         now = datetime.now(UTC).isoformat()
         investigation = Investigation(
             id=str(uuid4()),
@@ -183,14 +184,14 @@ class MemoryStore:
                     depends_on=planned.depends_on,
                 )
                 self.jobs[job.id] = job
-            if skipped_routes:
+            if recorded_skipped_routes:
                 event = AgentEvent(
                     id=str(uuid4()),
                     investigation_id=investigation.id,
                     agent_id="planner",
                     level="warning",
                     message="规划阶段跳过不可用工具",
-                    metadata={"skipped_routes": [asdict(route) for route in skipped_routes]},
+                    metadata={"skipped_routes": [asdict(route) for route in recorded_skipped_routes]},
                     created_at=now,
                 )
                 self.events[event.id] = event
@@ -918,13 +919,14 @@ class SQLiteStore:
         initial_plan = plan_initial_job_set(seed_type, seed_value, strategy, registry, respect_tool_health=respect_tool_health)
         planned_jobs = initial_plan.jobs
         skipped_routes = initial_plan.skipped_routes
+        recorded_skipped_routes = skipped_routes if respect_tool_health else []
         now = _now()
         metadata = metadata or {}
         if respect_tool_health:
             metadata = {**metadata, "respect_tool_health": True}
-        if skipped_routes:
-            metadata = {**metadata, "initial_skipped_routes": [asdict(route) for route in skipped_routes]}
-        planning_blocked = bool(skipped_routes and not planned_jobs)
+        if recorded_skipped_routes:
+            metadata = {**metadata, "initial_skipped_routes": [asdict(route) for route in recorded_skipped_routes]}
+        planning_blocked = bool(recorded_skipped_routes and not planned_jobs)
         requirements = build_intelligence_requirements(seed_type, seed_value, strategy.name, metadata)
         metadata = {**metadata, "intelligence_requirements": requirements}
         investigation = Investigation(
@@ -985,7 +987,7 @@ class SQLiteStore:
                     for planned in planned_jobs
                 ],
             )
-            if skipped_routes:
+            if recorded_skipped_routes:
                 conn.execute(
                     """
                     INSERT INTO events (
@@ -998,7 +1000,7 @@ class SQLiteStore:
                         "planner",
                         "warning",
                         "规划阶段跳过不可用工具",
-                        json.dumps({"skipped_routes": [asdict(route) for route in skipped_routes]}, ensure_ascii=False),
+                        json.dumps({"skipped_routes": [asdict(route) for route in recorded_skipped_routes]}, ensure_ascii=False),
                         now,
                     ),
                 )

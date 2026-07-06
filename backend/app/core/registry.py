@@ -97,6 +97,16 @@ def default_tool_registry() -> ToolRegistry:
                 base_confidence=0.25,
             ),
             ToolDefinition(
+                name="official_site_search",
+                display_name="Official Site Search",
+                execution_mode="sync_rest",
+                accepts=("company", "sparse_lead"),
+                produces=("url", "website_title"),
+                requires_credentials=False,
+                default_timeout_seconds=90,
+                base_confidence=0.58,
+            ),
+            ToolDefinition(
                 name="official_site_extractor",
                 display_name="Official Site Extractor",
                 execution_mode="artifact_parser",

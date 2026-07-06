@@ -11,6 +11,7 @@ Already wired for on-demand use:
 - `sherlock`: command configured as `python3`. The health check only verifies the command layer; run a live adapter job before treating Sherlock collection as fully proven.
 - `profile_parser`: internal artifact parser.
 - `official_site_extractor`: internal official-site HTML fetcher/parser for organization, contact, address, and business-scope fields. Confirmed on <production-host> after gzip-response handling.
+- `official_site_search`: optional SearXNG-compatible official-site candidate search for `company` and `sparse_lead` tasks. It stays disabled until `OFFICIAL_SITE_SEARCH_BASE_URL` is configured.
 - `lead_anchor_extraction`: internal sparse-lead parser.
 - `company_news`: command configured as `python3`; falls back to public RSS behavior when optional packages are absent.
 - `subfinder`: installed at `<osint-bin>/subfinder` and wired through `SUBFINDER_COMMAND`.
@@ -38,6 +39,7 @@ Default `.env` should keep REST-backed tools disabled:
 ```bash
 SPIDERFOOT_BASE_URL=
 PHONEINFOGA_BASE_URL=
+OFFICIAL_SITE_SEARCH_BASE_URL=
 RECONNG_COMMAND=/opt/osint-tools/recon-ng/recon-ng
 SUBFINDER_COMMAND=<osint-bin>/subfinder
 HTTPX_COMMAND=<osint-bin>/httpx
@@ -49,6 +51,7 @@ When a task explicitly needs one of these tools, set the URL temporarily or in t
 ```bash
 SPIDERFOOT_BASE_URL=http://127.0.0.1:5001
 PHONEINFOGA_BASE_URL=http://127.0.0.1:5000
+OFFICIAL_SITE_SEARCH_BASE_URL=http://127.0.0.1:8080/search
 ```
 
 ## Recommended Install Order

@@ -182,6 +182,52 @@ class HttpxLiveUrlAdapter:
         )
 
 
+class OfficialSiteSearchUrlAdapter:
+    name = "official_site_search"
+
+    def run(self, target_type: str, target_value: str, workdir: Path, timeout_seconds: int):
+        artifact = workdir / "official_site_search.json"
+        write_json_artifact(artifact, {"target": target_value})
+        return ToolRunResult(
+            command=ToolCommand(
+                args=["fake-official-site-search", target_value],
+                cwd=workdir,
+                expected_artifact=artifact,
+                timeout_seconds=timeout_seconds,
+            ),
+            returncode=0,
+            stdout_excerpt="ok",
+            stderr_excerpt="",
+        )
+
+    def parse_artifact(self, artifact_path: Path, target_value: str):
+        return ParsedToolOutput(
+            tool=self.name,
+            target_type="company",
+            target_value=target_value,
+            entities=[
+                NormalizedEntity("company", target_value, self.name, 0.55),
+                NormalizedEntity("url", "https://www.example-target.test/about", self.name, 0.62),
+            ],
+            evidence=[
+                NormalizedEvidence(
+                    "https://www.example-target.test/about",
+                    "official_site_search_result",
+                    self.name,
+                    "Search result suggests an official website candidate.",
+                )
+            ],
+            relationships=[
+                NormalizedRelationship(
+                    target_value,
+                    "https://www.example-target.test/about",
+                    "company_has_official_site_candidate",
+                    0.62,
+                )
+            ],
+        )
+
+
 class LargeOutputAdapter(FakeAdapter):
     name = "large_output"
 
@@ -349,7 +395,6 @@ class WorkerTests(unittest.TestCase):
                 }
             ],
         )
-
         with TemporaryDirectory() as tmpdir:
             result = run_investigation_jobs(
                 store,
@@ -395,7 +440,6 @@ class WorkerTests(unittest.TestCase):
                 }
             ],
         )
-
         with TemporaryDirectory() as tmpdir:
             result = run_investigation_jobs(
                 store,
@@ -555,13 +599,62 @@ class WorkerTests(unittest.TestCase):
                 adapter_factory=lambda name: HttpxLiveUrlAdapter(),
             )
 
-        detail = store.get_investigation(investigation.id)
-        job_keys = {(job["tool_name"], job["target_type"], job["target_value"]) for job in detail["jobs"]}
+        job_keys = {(job["tool_name"], job["target_type"], job["target_value"]) for job in store.list_jobs(investigation.id)}
 
         self.assertEqual(result["completed"], 1)
         self.assertGreaterEqual(result["queued_followups"], 2)
         self.assertIn(("katana", "url", "https://example-target.test"), job_keys)
         self.assertIn(("official_site_extractor", "url", "https://example-target.test"), job_keys)
+
+    def test_official_site_search_url_queues_site_collection_followups(self):
+        store = MemoryStore()
+        investigation = store.create_investigation(
+            name="Sample company official site search",
+            seed_type="company",
+            seed_value="Sample Auto Parts Co.",
+            strategy_name="standard",
+        )
+        first_job = store.list_jobs(investigation.id)[0]
+        store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    **first_job,
+                    "tool_name": "official_site_search",
+                    "target_type": "company",
+                    "target_value": "Sample Auto Parts Co.",
+                    "agent_role": "tool_agent",
+                    "depth": 0,
+                    "status": "QUEUED",
+                }
+            ],
+        )
+        store.investigations[investigation.id].max_jobs = 20
+
+        health_report = {
+            "tools": [
+                {"name": "httpx", "status": "ready", "reason": "command available"},
+                {"name": "katana", "status": "ready", "reason": "command available"},
+                {"name": "official_site_extractor", "status": "ready", "reason": "internal adapter"},
+                {"name": "profile_parser", "status": "ready", "reason": "internal adapter"},
+            ]
+        }
+
+        with TemporaryDirectory() as tmpdir, patch("app.core.intel_gateway.build_tool_health_report", return_value=health_report):
+            result = run_investigation_jobs(
+                store,
+                investigation.id,
+                max_jobs=1,
+                artifact_root=Path(tmpdir),
+                adapter_factory=lambda name: OfficialSiteSearchUrlAdapter(),
+            )
+
+        job_keys = {(job["tool_name"], job["target_type"], job["target_value"]) for job in store.list_jobs(investigation.id)}
+
+        self.assertEqual(result["completed"], 1)
+        self.assertGreaterEqual(result["queued_followups"], 2)
+        self.assertIn(("katana", "url", "https://www.example-target.test/about"), job_keys)
+        self.assertIn(("official_site_extractor", "url", "https://www.example-target.test/about"), job_keys)
 
     def test_progressive_followups_respect_tool_health(self):
         store = MemoryStore()

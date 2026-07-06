@@ -693,3 +693,24 @@ Operational conclusion:
 
 - The domain quick community-tool chain has reached the current design target on <production-host>.
 - Remaining work belongs to broader company/sparse-lead closure, especially official website search and decision-maker discovery.
+
+---
+
+## 2026-07-06 - Company/Sparse Lead Official Website Search
+
+Scope:
+
+- Added an optional official-site search layer for `company` and `sparse_lead` tasks.
+- The goal is to improve non-domain task completion by discovering official website candidates before URL-specific probing.
+
+Changes:
+
+- Added `official_site_search`, a SearXNG-compatible JSON search adapter.
+- Registered it in tool health, CLI adapter lookup, and the tool registry.
+- `company` and `sparse_lead` standard/deep plans include official-site search only when `OFFICIAL_SITE_SEARCH_BASE_URL` is configured.
+- Search result URLs now trigger the existing URL collection chain: `httpx`, `katana`, and `official_site_extractor`.
+
+Operational note:
+
+- Leave `OFFICIAL_SITE_SEARCH_BASE_URL` empty by default for public/package use.
+- Configure it to a controlled internal SearXNG endpoint when company or sparse-lead official website discovery is needed.

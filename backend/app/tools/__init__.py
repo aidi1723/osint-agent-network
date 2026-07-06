@@ -6,6 +6,7 @@ from app.tools.katana import KatanaAdapter
 from app.tools.lead_anchor import LeadAnchorAdapter
 from app.tools.maigret import MaigretAdapter
 from app.tools.official_site_extractor import OfficialSiteExtractorAdapter
+from app.tools.official_site_search import OfficialSiteSearchAdapter
 from app.tools.phoneinfoga import PhoneInfogaAdapter
 from app.tools.profile_parser import ProfileParserAdapter
 from app.tools.reconng import ReconNgAdapter
@@ -26,6 +27,7 @@ def get_adapter(name: str):
         "lead_anchor_extraction": LeadAnchorAdapter,
         "maigret": MaigretAdapter,
         "official_site_extractor": OfficialSiteExtractorAdapter,
+        "official_site_search": OfficialSiteSearchAdapter,
         "phoneinfoga": PhoneInfogaAdapter,
         "profile_parser": ProfileParserAdapter,
         "reconng": ReconNgAdapter,

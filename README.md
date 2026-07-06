@@ -139,9 +139,11 @@ docker compose -f docker-compose.prod.yml up --build
 - `UPKUAJING_BASE_URL`: 跨境魔方后台地址，默认 `https://saas.upkuajing.com`
 - `UPKUAJING_AUTHORIZATION`: 跨境魔方 API 的 `Authorization` 请求头完整值，例如 `Bearer ...`
 - `UPKUAJING_TIMEOUT_SECONDS`: 跨境魔方 API 超时时间，默认 `30`
-- `SHERLOCK_*`、`THEHARVESTER_*`、`AMASS_*`、`SUBFINDER_COMMAND`、`HTTPX_COMMAND`、`KATANA_COMMAND`、`SPIDERFOOT_*`、`PHONEINFOGA_*`、`GHUNT_*`、`RECONNG_*`、`COMPANY_NEWS_*`: 本地工具或服务配置
+- `SHERLOCK_*`、`THEHARVESTER_*`、`AMASS_*`、`SUBFINDER_COMMAND`、`HTTPX_COMMAND`、`KATANA_COMMAND`、`OFFICIAL_SITE_SEARCH_*`、`SPIDERFOOT_*`、`PHONEINFOGA_*`、`GHUNT_*`、`RECONNG_*`、`COMPANY_NEWS_*`: 本地工具或服务配置
 
 `COMPANY_NEWS_SOURCE=gnews` 会优先尝试 GNews Python 包，缺包时回退到 Google News RSS；如果安装了 Newspaper4k，会对新闻 URL 做正文、摘要、发布日期等解析。
+
+`OFFICIAL_SITE_SEARCH_BASE_URL` 可指向 SearXNG 兼容的 JSON 搜索端点。配置后，`company` 和 `sparse_lead` standard/deep 任务会先搜索官网候选 URL，再递进触发 `httpx`、`katana` 和 `official_site_extractor`。
 
 凭证只放在运行环境或 `.env`，不要写入事件、证据、报告或截图。
 

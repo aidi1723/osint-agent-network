@@ -13,6 +13,7 @@ from app.tools.maigret import MaigretAdapter
 from app.tools.phoneinfoga import PhoneInfogaAdapter
 from app.tools.profile_parser import ProfileParserAdapter
 from app.tools.official_site_extractor import OfficialSiteExtractorAdapter
+from app.tools.official_site_search import OfficialSiteSearchAdapter
 from app.tools.spiderfoot import SpiderFootAdapter
 from app.tools.socialscan import SocialScanAdapter
 from app.tools.reconng import ReconNgAdapter
@@ -287,6 +288,54 @@ class HttpxAdapterTests(unittest.TestCase):
 
         self.assertEqual(parsed.tool, "httpx")
         self.assertIn(("domain", "example.com"), {(item.type, item.value) for item in parsed.entities})
+
+
+class OfficialSiteSearchAdapterTests(unittest.TestCase):
+    def test_parser_extracts_likely_official_urls_from_searxng_results(self):
+        adapter = OfficialSiteSearchAdapter(base_url="http://search.local/search")
+        raw = {
+            "results": [
+                {
+                    "title": "Sample Auto Parts Co. - Official Website",
+                    "url": "https://www.example-target.test/about?utm_source=x",
+                    "content": "Manufacturer of auto parts and brake components.",
+                },
+                {
+                    "title": "Directory Listing",
+                    "url": "https://directory.example/listing/sample-auto-parts",
+                    "content": "third-party listing",
+                },
+            ]
+        }
+
+        parsed = adapter.parse_json(raw, target_type="company", target_value="Sample Auto Parts Co.")
+
+        entity_values = {(item.type, item.value) for item in parsed.entities}
+        relationships = {
+            (item.from_value, item.to_value, item.relationship_type)
+            for item in parsed.relationships
+        }
+
+        self.assertIn(("company", "Sample Auto Parts Co."), entity_values)
+        self.assertIn(("url", "https://www.example-target.test/about"), entity_values)
+        self.assertNotIn(("url", "https://directory.example/listing/sample-auto-parts"), entity_values)
+        self.assertIn(
+            ("Sample Auto Parts Co.", "https://www.example-target.test/about", "company_has_official_site_candidate"),
+            relationships,
+        )
+
+    def test_build_command_uses_internal_module_with_query_params(self):
+        adapter = OfficialSiteSearchAdapter(base_url="http://search.local/search", command="python3")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            command = adapter.build_command("company", "Sample Auto Parts Co.", Path(tmpdir), timeout_seconds=20)
+
+        self.assertEqual(command.args[:3], ["python3", "-m", "app.tools.official_site_search"])
+        self.assertIn("--query", command.args)
+        self.assertIn('"Sample Auto Parts Co." official website contact', command.args)
+        self.assertIn("--base-url", command.args)
+        self.assertIn("http://search.local/search", command.args)
+        self.assertEqual(command.timeout_seconds, 20)
+        self.assertTrue(command.expected_artifact.name.endswith(".json"))
 
 
 class KatanaAdapterTests(unittest.TestCase):

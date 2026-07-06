@@ -111,6 +111,12 @@ COMPANY_ROUTE_MATRIX: tuple[_RouteTemplate, ...] = (
     ),
     _RouteTemplate("company_news", "news_discovery"),
     _RouteTemplate(
+        "official_site_search",
+        "official_site_discovery",
+        output_contract="entities,evidence,relationships: official_site_candidates, website_titles, source_snippets",
+        required_config=("OFFICIAL_SITE_SEARCH_BASE_URL",),
+    ),
+    _RouteTemplate(
         "company_news_monitoring",
         "role_agent",
         agent_role="news_intel_agent",
@@ -157,6 +163,13 @@ SPARSE_LEAD_ROUTE_MATRIX: tuple[_RouteTemplate, ...] = (
         agent_role="enterprise_intel_agent",
         output_contract="entities,evidence,relationships: candidate companies, public records, websites, business scope",
         depends_on="constrained_query_planning",
+    ),
+    _RouteTemplate(
+        "official_site_search",
+        "official_site_discovery",
+        output_contract="entities,evidence,relationships: official_site_candidates, website_titles, source_snippets",
+        depends_on="candidate_business_discovery",
+        required_config=("OFFICIAL_SITE_SEARCH_BASE_URL",),
     ),
     _RouteTemplate(
         "rfq_category_analysis",
@@ -242,7 +255,7 @@ def _templates_for(target_type: str, strategy_name: str) -> tuple[_RouteTemplate
         if strategy_name == "quick":
             return (COMPANY_ROUTE_MATRIX[0], COMPANY_ROUTE_MATRIX[2], COMPANY_ROUTE_MATRIX[-1])
         if strategy_name == "standard":
-            return (*COMPANY_ROUTE_MATRIX[:5], COMPANY_ROUTE_MATRIX[-1])
+            return (*COMPANY_ROUTE_MATRIX[:5], COMPANY_ROUTE_MATRIX[6], COMPANY_ROUTE_MATRIX[-1])
         return COMPANY_ROUTE_MATRIX
     if target_type == "sparse_lead":
         if strategy_name == "quick":
@@ -256,7 +269,8 @@ def _templates_for(target_type: str, strategy_name: str) -> tuple[_RouteTemplate
                 SPARSE_LEAD_ROUTE_MATRIX[0],
                 SPARSE_LEAD_ROUTE_MATRIX[1],
                 SPARSE_LEAD_ROUTE_MATRIX[2],
-                SPARSE_LEAD_ROUTE_MATRIX[4],
+                SPARSE_LEAD_ROUTE_MATRIX[3],
+                SPARSE_LEAD_ROUTE_MATRIX[5],
                 SPARSE_LEAD_ROUTE_MATRIX[-1],
             )
         return SPARSE_LEAD_ROUTE_MATRIX
