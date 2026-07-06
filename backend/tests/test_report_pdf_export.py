@@ -54,6 +54,18 @@ class ReportPdfServiceTests(unittest.TestCase):
         self.assertNotIn("/Users/example", text)
         self.assertNotIn("10." + "1.2.3", text)
 
+    def test_render_report_pdf_preserves_cjk_text_without_black_square_markers(self):
+        detail = _sample_detail()
+        detail["facts"][0]["statement"] = "公开证据显示该企业使用公开邮箱。"
+        detail["evidence_ledger"][0]["snippet"] = "官网页面列出公开邮箱和产品范围。"
+
+        pdf_bytes = render_report_pdf(detail)
+        text = _extract_pdf_text(pdf_bytes)
+
+        self.assertIn("公开证据", text)
+        self.assertIn("官网页面", text)
+        self.assertNotIn("■", text)
+
     def test_missing_reportlab_raises_explicit_dependency_error(self):
         real_import_module = importlib.import_module
 

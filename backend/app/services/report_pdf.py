@@ -29,6 +29,7 @@ def render_report_pdf(detail: dict) -> bytes:
     table_style = reportlab["table_style"]
     list_flowable = reportlab["list_flowable"]
     list_item = reportlab["list_item"]
+    base_font = reportlab["base_font"]
 
     payload = build_report_payload(detail)
     title = str(payload.get("name") or "Investigation report")
@@ -48,10 +49,12 @@ def render_report_pdf(detail: dict) -> bytes:
     )
 
     styles = get_sample_style_sheet()
+    _apply_base_font(styles, base_font)
     styles.add(
         paragraph_style(
             name="ReportMeta",
             parent=styles["BodyText"],
+            fontName=base_font,
             fontSize=8.5,
             leading=11,
             textColor=colors.HexColor("#52616f"),
@@ -61,6 +64,7 @@ def render_report_pdf(detail: dict) -> bytes:
         paragraph_style(
             name="ReportSectionTitle",
             parent=styles["Heading2"],
+            fontName=base_font,
             fontSize=13,
             leading=16,
             spaceBefore=12,
@@ -72,6 +76,7 @@ def render_report_pdf(detail: dict) -> bytes:
         paragraph_style(
             name="ReportBullet",
             parent=styles["BodyText"],
+            fontName=base_font,
             fontSize=9,
             leading=12,
             leftIndent=4,
@@ -115,6 +120,8 @@ def _load_reportlab() -> dict[str, Any]:
         pagesizes = importlib.import_module("reportlab.lib.pagesizes")
         units = importlib.import_module("reportlab.lib.units")
         styles = importlib.import_module("reportlab.lib.styles")
+        pdfmetrics = importlib.import_module("reportlab.pdfbase.pdfmetrics")
+        cidfonts = importlib.import_module("reportlab.pdfbase.cidfonts")
         platypus = importlib.import_module("reportlab.platypus")
         return {
             "colors": colors,
@@ -129,6 +136,7 @@ def _load_reportlab() -> dict[str, Any]:
             "table_style": platypus.TableStyle,
             "list_flowable": platypus.ListFlowable,
             "list_item": platypus.ListItem,
+            "base_font": _register_unicode_font(pdfmetrics, cidfonts),
         }
     except ModuleNotFoundError as exc:
         if _is_reportlab_import_error(exc):
@@ -175,7 +183,7 @@ def _summary_table(
 
 def _footer(canvas: Any, doc: Any) -> None:
     canvas.saveState()
-    canvas.setFont("Helvetica", 8)
+    canvas.setFont("STSong-Light", 8)
     canvas.setFillColorRGB(0.42, 0.47, 0.53)
     canvas.drawString(doc.leftMargin, 0.38 * 72, "Generated from structured OSINT records")
     canvas.drawRightString(doc.pagesize[0] - doc.rightMargin, 0.38 * 72, f"Page {doc.page}")
@@ -189,3 +197,18 @@ def _xml(value: str) -> str:
 def _is_reportlab_import_error(exc: ModuleNotFoundError) -> bool:
     missing_name = getattr(exc, "name", "") or ""
     return missing_name.startswith("reportlab") or "reportlab" in str(exc)
+
+
+def _register_unicode_font(pdfmetrics: Any, cidfonts: Any) -> str:
+    font_name = "STSong-Light"
+    try:
+        pdfmetrics.getFont(font_name)
+    except KeyError:
+        pdfmetrics.registerFont(cidfonts.UnicodeCIDFont(font_name))
+    return font_name
+
+
+def _apply_base_font(styles: Any, font_name: str) -> None:
+    for style_name in ("Title", "Heading1", "Heading2", "Heading3", "BodyText"):
+        if style_name in styles:
+            styles[style_name].fontName = font_name

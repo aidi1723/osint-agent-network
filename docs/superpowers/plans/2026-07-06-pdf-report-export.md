@@ -716,7 +716,7 @@ PYTHONPATH=backend uv run --project backend python3 -m unittest discover -s back
 Expected:
 
 ```text
-Ran 6 tests
+Ran 7 tests
 OK
 ```
 
@@ -725,7 +725,10 @@ Evidence (2026-07-06):
 ```text
 Actual command: cd backend && uv run python3 -m unittest discover -s tests -p 'test_report_pdf_export.py' -v
 Initial sandboxed run could not access the uv cache; reran with approval for uv cache access.
-Ran 6 tests in 1.591s
+Initial pass: Ran 6 tests in 1.591s; OK.
+Visual PDF review then found CJK glyphs rendering as black square markers.
+Added a CJK regression test and registered ReportLab STSong-Light CID font for PDF text styles.
+Final pass: Ran 7 tests in 1.609s; OK.
 OK
 ```
 
@@ -772,8 +775,10 @@ Evidence (2026-07-06):
 
 ```text
 Actual command: bash scripts/verify.sh
-Result: PASS after scripts/verify.sh was updated to run backend unittest discovery through uv when uv and backend/uv.lock are available.
-Backend summary: Ran 328 tests in 16.873s; OK.
+Initial result: FAIL because scripts/verify.sh used system Python without reportlab.
+Fix: scripts/verify.sh now runs backend unittest discovery through uv when uv and backend/uv.lock are available, with system Python fallback.
+Final result: PASS.
+Backend summary: Ran 329 tests in 16.841s; OK.
 Frontend summary: vitest 2 files / 9 tests passed; npm run build completed.
 ```
 
@@ -835,7 +840,9 @@ Actual command: pdftoppm -png tmp/pdfs/sample-investigation-report.pdf tmp/pdfs/
 Generated:
 - tmp/pdfs/sample-investigation-report-1.png
 - tmp/pdfs/sample-investigation-report-2.png
-Visual inspection: title visible, metadata aligned, headings readable, long text wraps, footers visible, no obvious overlapping text.
+Initial visual inspection found CJK text rendered as black square markers on page 2.
+After STSong-Light CID font fix, regenerated PDF and PNG files.
+Final visual inspection: title visible, metadata aligned, headings readable, long text wraps, Chinese text readable, footers visible, no black square glyphs, no obvious overlapping text.
 ```
 
 - [x] **Step 6: Run added-line privacy scan**
