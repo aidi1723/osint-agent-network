@@ -258,7 +258,6 @@ def _has_useful_evidence(detail: dict) -> bool:
     return bool(
         _has_evidence_ledger(detail)
         or _has_linked_fact(detail)
-        or detail.get("evidence")
         or _has_supported_verification(detail)
     )
 
@@ -292,7 +291,22 @@ def _has_evidence_ledger(detail: dict) -> bool:
 
 
 def _has_linked_fact(detail: dict) -> bool:
-    return any(item.get("evidence_ids") for item in detail.get("facts") or [])
+    ledger_ids = {
+        str(item.get("id") or "").strip()
+        for item in detail.get("evidence_ledger") or []
+        if str(item.get("id") or "").strip() and (item.get("source_url") or item.get("source_type"))
+    }
+    if not ledger_ids:
+        return False
+    return any(
+        ledger_ids
+        & {
+            str(evidence_id).strip()
+            for evidence_id in item.get("evidence_ids") or []
+            if str(evidence_id).strip()
+        }
+        for item in detail.get("facts") or []
+    )
 
 
 def _has_fact_predicate(detail: dict, key: str) -> bool:
@@ -300,7 +314,26 @@ def _has_fact_predicate(detail: dict, key: str) -> bool:
 
 
 def _has_supported_verification(detail: dict) -> bool:
-    return any(str(item.get("status") or "").upper() in SUPPORTED_VERIFICATION_STATUSES for item in detail.get("cross_verification_matrix") or [])
+    return any(
+        str(item.get("status") or "").upper() in SUPPORTED_VERIFICATION_STATUSES
+        and (
+            str(item.get("candidate_value") or "").strip()
+            or _has_any_id(item, ("evidence_ids", "linked_evidence_ids", "fact_ids", "linked_fact_ids"))
+        )
+        for item in detail.get("cross_verification_matrix") or []
+    )
+
+
+def _has_any_id(item: dict, keys: tuple[str, ...]) -> bool:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, (list, tuple, set)):
+            if any(str(entry).strip() for entry in value):
+                return True
+            continue
+        if str(value or "").strip():
+            return True
+    return False
 
 
 def _limited_reason(remaining_blockers: list[str]) -> str:
