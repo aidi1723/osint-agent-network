@@ -354,7 +354,7 @@ git commit -m "chore: add pdf report dependencies"
 - Create: `backend/app/services/report_pdf.py`
 - Test: `backend/tests/test_report_pdf_export.py`
 
-- [ ] **Step 1: Create the PDF renderer**
+- [x] **Step 1: Create the PDF renderer**
 
 Create `backend/app/services/report_pdf.py`:
 
@@ -498,7 +498,7 @@ def _xml(value: str) -> str:
     return html.escape(redact_report_text(value), quote=True)
 ```
 
-- [ ] **Step 2: Run the service tests and confirm only API wiring still fails**
+- [x] **Step 2: Run the service tests and confirm only API wiring still fails**
 
 Run:
 
@@ -512,7 +512,7 @@ Expected:
 OK
 ```
 
-- [ ] **Step 3: Commit the PDF renderer**
+- [x] **Step 3: Commit the PDF renderer**
 
 Run:
 
