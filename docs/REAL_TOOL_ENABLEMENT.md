@@ -193,10 +193,11 @@ Hardening added after real testing:
 - Third-party result filtering for forums, wiki/content sites, social platforms, blogs, directories, and domain-registration pages.
 - Generic company-name stopwords are not used as strong hostname evidence.
 - Root URLs normalize to a trailing slash for followup deduplication.
-- `SUBFINDER_RESULT_LIMIT` caps passive subdomain output, default `300`, to keep reports and synchronous API responses bounded.
+- `SUBFINDER_RESULT_LIMIT` caps passive subdomain output, default `300`, to keep reports and background worker batches bounded.
 
 Runbook note:
 
-- For larger real tasks, run `/api/investigations/<id>/run-jobs` in bounded batches.
-- A future background worker remains recommended for long collector chains, because the current endpoint is synchronous.
-- After official-site search queues multiple URL candidates, bounded runs prioritize one URL evidence chain first: `httpx(url)`, `katana(url)`, then `official_site_extractor(url)`. Domain expansion remains queued behind the active URL group.
+- `/api/investigations/<id>/run-jobs` now enqueues an in-process background worker run and returns immediately with `mode: "background"`.
+- Poll `/api/investigations/<id>` for job-by-job progress and `/api/system/status` for queue depth, running investigation id, recent runs, and recent errors.
+- For larger real tasks, enqueue bounded batches with `max_jobs` and let the background queue process one investigation at a time.
+- After official-site search queues multiple URL candidates, worker priority completes one URL evidence chain first: `httpx(url)`, `katana(url)`, then `official_site_extractor(url)`. Domain expansion remains queued behind the active URL group.

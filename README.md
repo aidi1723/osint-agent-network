@@ -318,4 +318,4 @@ UI 人工验收：
 
 ## 当前成熟度
 
-项目已经具备部署闭环：任务创建、Agent 队列、工具适配器协议、SQLite 持久化、情报循环调度、交叉验证、图谱展示、白皮书报告、质量闸门、Token 保护、验证脚本和 <production-host> systemd Runbook。当前公开发布协议已经固定为 GNU GPL v3 (`GPL-3.0-only`)。下一步最值得继续增强的是更多真实工具产物样本、PDF/HTML 导出模板、权限分层和审计日志。
+项目已经具备部署闭环：任务创建、Agent 队列、后台 worker 入队、工具适配器协议、SQLite 持久化、情报循环调度、交叉验证、图谱展示、白皮书报告、质量闸门、Token 保护、验证脚本和 <production-host> systemd Runbook。当前公开发布协议已经固定为 GNU GPL v3 (`GPL-3.0-only`)。下一步最值得继续增强的是更多真实工具产物样本、PDF/HTML 导出模板、权限分层、审计日志和可恢复的持久化队列。

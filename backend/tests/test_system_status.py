@@ -41,6 +41,30 @@ class SystemStatusTests(unittest.TestCase):
         self.assertIn("health", payload["tools"])
         self.assertGreaterEqual(payload["tools"]["health"]["total"], 1)
 
+    def test_system_status_payload_reports_worker_queue_state(self):
+        class FakeQueue:
+            def snapshot(self):
+                return {
+                    "mode": "in_process",
+                    "queue_depth": 1,
+                    "running": "task-running",
+                    "pending": [{"investigation_id": "task-pending", "max_jobs": 4}],
+                    "recent_runs": [{"investigation_id": "task-done", "completed": 2}],
+                    "recent_errors": [],
+                }
+
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            store = SQLiteStore(str(root / "data" / "osint.sqlite"))
+
+            payload = system_status_payload(store_obj=store, root_dir=str(root), worker_queue=FakeQueue())
+
+        self.assertEqual(payload["worker"]["mode"], "in_process")
+        self.assertEqual(payload["worker"]["queue_depth"], 1)
+        self.assertEqual(payload["worker"]["running"], "task-running")
+        self.assertEqual(payload["worker"]["pending"][0]["investigation_id"], "task-pending")
+        self.assertEqual(payload["worker"]["recent_runs"][0]["investigation_id"], "task-done")
+
     def test_system_status_payload_reports_investigation_outcome_metrics(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

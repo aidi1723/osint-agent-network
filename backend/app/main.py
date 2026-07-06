@@ -12,6 +12,7 @@ from app.core.registry import default_tool_registry
 from app.core.tool_health import build_tool_health_report
 from app.core.upkuajing_customs import UpkuajingCustomsClient, UpkuajingCustomsError
 from app.services.llm import LLMClient
+from app.services.job_queue import job_queue
 from app.services.store import store
 from app.services.worker import run_investigation_jobs
 
@@ -250,7 +251,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             investigation_id = parsed.path.split("/")[-2]
             try:
                 payload = self._read_json()
-                result = run_investigation_jobs(
+                if store.get_investigation(investigation_id) is None:
+                    raise ValueError(f"investigation not found: {investigation_id}")
+                result = job_queue.enqueue(
                     store,
                     investigation_id,
                     max_jobs=payload.get("max_jobs"),
@@ -640,7 +643,7 @@ def llm_status_payload() -> dict:
     return LLMClient().status()
 
 
-def system_status_payload(store_obj=store, root_dir: str | None = None) -> dict:
+def system_status_payload(store_obj=store, root_dir: str | None = None, worker_queue=None) -> dict:
     root = Path(root_dir or Path(__file__).resolve().parents[2])
     db_path = Path(getattr(store_obj, "db_path", os.getenv("OSINT_DB_PATH", "data/osint.sqlite")))
     if not db_path.is_absolute():
@@ -702,6 +705,7 @@ def system_status_payload(store_obj=store, root_dir: str | None = None) -> dict:
             "enabled_by_default": len([tool for tool in registry.all() if tool.enabled_by_default]),
             "health": tool_health["summary"],
         },
+        "worker": (worker_queue or job_queue).snapshot(),
         "scripts": scripts,
     }
 

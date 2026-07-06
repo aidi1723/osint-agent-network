@@ -349,6 +349,61 @@ class AgentProtocolTests(unittest.TestCase):
         self.assertEqual(detail["hypothesis_analysis"]["most_likely_hypothesis"], "h1")
         self.assertEqual(analysis["most_likely_hypothesis"], "h1")
 
+    def test_run_jobs_route_enqueues_background_worker(self):
+        class FakeQueue:
+            def __init__(self):
+                self.calls = []
+
+            def enqueue(self, store, investigation_id, max_jobs=None):
+                self.calls.append((store, investigation_id, max_jobs))
+                return {
+                    "accepted": True,
+                    "mode": "background",
+                    "status": "QUEUED",
+                    "investigation_id": investigation_id,
+                    "max_jobs": max_jobs,
+                    "queue_depth": 1,
+                    "running": None,
+                }
+
+        memory_store = MemoryStore()
+        investigation = memory_store.create_investigation(
+            name="Background Queue API",
+            seed_type="company",
+            seed_value="Example LLC",
+            strategy_name="quick",
+        )
+        fake_queue = FakeQueue()
+        original_store = app_main.store
+        original_queue = getattr(app_main, "job_queue", None)
+        app_main.store = memory_store
+        app_main.job_queue = fake_queue
+        server = ThreadingHTTPServer(("127.0.0.1", 0), ApiHandler)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        try:
+            with patch("app.main.run_investigation_jobs", side_effect=AssertionError("synchronous worker should not run")):
+                response = _post_json(
+                    f"{base_url}/api/investigations/{investigation.id}/run-jobs",
+                    {"max_jobs": 4},
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            app_main.store = original_store
+            if original_queue is None:
+                delattr(app_main, "job_queue")
+            else:
+                app_main.job_queue = original_queue
+
+        self.assertTrue(response["accepted"])
+        self.assertEqual(response["mode"], "background")
+        self.assertEqual(response["status"], "QUEUED")
+        self.assertEqual(response["investigation_id"], investigation.id)
+        self.assertEqual(response["max_jobs"], 4)
+        self.assertEqual(len(fake_queue.calls), 1)
+
     def test_agent_http_rejects_invalid_entity_payload(self):
         status, payload = _post_json_expect_error(
             "/api/agent/entities",
