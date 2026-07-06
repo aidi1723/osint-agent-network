@@ -843,6 +843,110 @@ class CompletionPolicyTests(unittest.TestCase):
                 self.assertNotEqual(policy["completion_mode"], "limited")
                 self.assertNotEqual(policy["recommended_status"], "COMPLETED")
 
+    def test_rejected_or_disproven_facts_do_not_satisfy_source_backed_field_floors(self):
+        for status in ("REJECTED", "DISPROVEN"):
+            with self.subTest(status=status):
+                detail = complete_company_detail()
+                detail["evidence_ledger"] = [
+                    {
+                        "id": "ev-1",
+                        "source_url": "https://source-record.test/profile",
+                        "source_type": "directory_record",
+                        "source_tool": "directory_lookup",
+                        "admiralty_code": "A-2",
+                        "snippet": "Directory record captured source-backed observations.",
+                    },
+                    {
+                        "id": "ev-2",
+                        "source_url": "https://source-record.test/contact",
+                        "source_type": "contact_record",
+                        "source_tool": "directory_lookup",
+                        "admiralty_code": "A-2",
+                        "snippet": "Contact record captured source-backed observations.",
+                    },
+                ]
+                detail["facts"] = [
+                    {
+                        **fact,
+                        "status": status,
+                        "promotion_stage": "REJECTED_CANDIDATE",
+                    }
+                    if fact["id"] in {"fact-1", "fact-2", "fact-3"}
+                    else fact
+                    for fact in detail["facts"]
+                ]
+                detail["facts"] = [
+                    {
+                        **fact,
+                        "statement": "Source-backed contact channel is available.",
+                        "subject": "Contact channel",
+                        "object": "Contact mailbox",
+                    }
+                    if fact["id"] == "fact-4"
+                    else fact
+                    for fact in detail["facts"]
+                ]
+                detail["quality_assessment"] = {
+                    "score": 95.0,
+                    "completion_ready": True,
+                    "missing_keys": [],
+                    "blocking_keys": [],
+                    "checks": [],
+                }
+                detail["gap_analysis"] = []
+                detail["gap_tool_plan"] = []
+
+                policy = build_completion_policy(detail)
+
+                self.assertFalse(policy["evidence_floor"]["identity"])
+                self.assertFalse(policy["evidence_floor"]["official_website"])
+                self.assertFalse(policy["evidence_floor"]["business_scope"])
+                self.assertNotEqual(policy["completion_mode"], "strict")
+                self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+
+    def test_rejected_or_disproven_fact_does_not_satisfy_cross_verification_floor(self):
+        for status in ("REJECTED", "DISPROVEN"):
+            with self.subTest(status=status):
+                detail = complete_company_detail()
+                detail["facts"] = [
+                    *detail["facts"],
+                    {
+                        "id": "fact-rejected-verification",
+                        "statement": "Rejected candidate was linked to a verification row.",
+                        "predicate": "company_identity",
+                        "subject": "Sample Auto Parts Co.",
+                        "object": "Sample Auto Parts Co.",
+                        "status": status,
+                        "promotion_stage": "REJECTED_CANDIDATE",
+                        "confidence": 0.12,
+                        "evidence_ids": ["ev-1"],
+                    },
+                ]
+                detail["cross_verification_matrix"] = [
+                    {
+                        "field_key": "company_identity",
+                        "status": "SUPPORTED",
+                        "candidate_value": "Sample Auto Parts Co.",
+                        "linked_fact_ids": ["fact-rejected-verification"],
+                    }
+                ]
+                detail["quality_assessment"] = {
+                    "score": 95.0,
+                    "completion_ready": True,
+                    "missing_keys": [],
+                    "blocking_keys": [],
+                    "checks": [],
+                }
+                detail["gap_analysis"] = []
+                detail["gap_tool_plan"] = []
+
+                policy = build_completion_policy(detail)
+
+                self.assertTrue(policy["evidence_floor"]["fact_pool"])
+                self.assertFalse(policy["evidence_floor"]["cross_verification"])
+                self.assertNotEqual(policy["completion_mode"], "strict")
+                self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+
     def test_limited_completion_requires_source_backed_cross_verification(self):
         detail = complete_company_detail()
         detail["entities"] = [

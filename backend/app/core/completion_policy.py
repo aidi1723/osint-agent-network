@@ -369,6 +369,8 @@ def _has_source_backed_value(detail: dict, values: set[str]) -> bool:
     if not source_backed_evidence_ids:
         return False
     for fact in detail.get("facts") or []:
+        if not _fact_is_accepted(fact):
+            continue
         linked_evidence_ids = {
             str(evidence_id).strip()
             for evidence_id in fact.get("evidence_ids") or []
@@ -401,6 +403,8 @@ def _has_source_backed_field(detail: dict, values_or_terms: set[str]) -> bool:
     if not source_backed_evidence_ids:
         return False
     for fact in detail.get("facts") or []:
+        if not _fact_is_accepted(fact):
+            continue
         linked_evidence_ids = {
             str(evidence_id).strip()
             for evidence_id in fact.get("evidence_ids") or []
@@ -540,6 +544,7 @@ def _has_source_backed_verification(detail: dict) -> bool:
         str(item.get("id") or "").strip()
         for item in detail.get("facts") or []
         if str(item.get("id") or "").strip()
+        and _fact_is_accepted(item)
         and source_backed_evidence_ids
         & {
             str(evidence_id).strip()
