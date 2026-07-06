@@ -733,7 +733,7 @@ git commit -m "feat: add report export endpoints"
 
 Expected: commit succeeds.
 
-- [ ] **Step 5: Push if verification and privacy scan passed**
+- [x] **Step 5: Push if verification and privacy scan passed**
 
 Run:
 
