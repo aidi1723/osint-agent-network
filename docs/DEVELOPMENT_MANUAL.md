@@ -899,6 +899,7 @@ Create payload:
 - `GET /api/investigations/{id}/report`: redacted structured report JSON.
 - `GET /api/investigations/{id}/report.md`: redacted Markdown report.
 - `GET /api/investigations/{id}/report.html`: redacted self-contained HTML report for external handoff.
+- `GET /api/investigations/{id}/report.pdf`: redacted printable PDF report. Returns `503` with JSON detail when PDF support is unavailable because `reportlab` is not installed.
 
 ## 12. Web Management Interface
 

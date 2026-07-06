@@ -252,3 +252,26 @@ Verification:
 Deferred:
 
 - PDF export remains a follow-up after the HTML contract is stable.
+
+## P2b Progress - PDF Report Export
+
+Implemented PDF report export for completed investigations:
+
+- `GET /api/investigations/{id}/report.pdf`;
+- PDF rendering from the same redacted structured report payload as JSON, Markdown, and HTML;
+- explicit `503` response when the PDF dependency is unavailable;
+- PDF text verification for required report sections.
+
+Protected behavior:
+
+- PDF export does not parse HTML or read the database directly;
+- existing JSON, Markdown, and HTML report endpoints remain unchanged;
+- generated report content keeps redaction safeguards for tokens, local paths, private hosts, and private service URLs.
+
+Verification:
+
+- `PYTHONPATH=backend uv run --project backend python3 -m unittest discover -s backend/tests -p 'test_report_pdf_export.py' -v`
+- `PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_report_export.py' -v`
+- `bash scripts/verify.sh`
+- PDF render check with `pdftoppm` when available
+- added-line privacy scan from `docs/PUBLIC_REPOSITORY_MAINTENANCE.md`

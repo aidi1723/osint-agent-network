@@ -617,7 +617,7 @@ git commit -m "feat: add pdf report endpoint"
 - Modify: `docs/NEXT_PHASE_ROADMAP_2026-07-06.md`
 - Modify: `docs/superpowers/plans/2026-07-06-pdf-report-export.md`
 
-- [ ] **Step 1: Update API manual report section**
+- [x] **Step 1: Update API manual report section**
 
 Change section `11.5 Reports` in `docs/DEVELOPMENT_MANUAL.md` to:
 
@@ -630,7 +630,7 @@ Change section `11.5 Reports` in `docs/DEVELOPMENT_MANUAL.md` to:
 - `GET /api/investigations/{id}/report.pdf`: redacted printable PDF report. Returns `503` with JSON detail when PDF support is unavailable because `reportlab` is not installed.
 ```
 
-- [ ] **Step 2: Update roadmap P2 progress**
+- [x] **Step 2: Update roadmap P2 progress**
 
 Append this subsection after the existing `P2 Progress - Report Export Package` section in `docs/NEXT_PHASE_ROADMAP_2026-07-06.md`:
 
@@ -659,7 +659,7 @@ Verification:
 - added-line privacy scan from `docs/PUBLIC_REPOSITORY_MAINTENANCE.md`
 ```
 
-- [ ] **Step 3: Run documentation checks by inspection**
+- [x] **Step 3: Run documentation checks by inspection**
 
 Run:
 
@@ -676,7 +676,7 @@ docs/superpowers/specs/2026-07-06-pdf-report-export-design.md:...:/report.pdf
 docs/superpowers/plans/2026-07-06-pdf-report-export.md:...:/report.pdf
 ```
 
-- [ ] **Step 4: Commit documentation updates**
+- [x] **Step 4: Commit documentation updates**
 
 Run:
 
