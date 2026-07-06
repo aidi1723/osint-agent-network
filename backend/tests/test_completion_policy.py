@@ -843,6 +843,32 @@ class CompletionPolicyTests(unittest.TestCase):
                 self.assertNotEqual(policy["completion_mode"], "limited")
                 self.assertNotEqual(policy["recommended_status"], "COMPLETED")
 
+    def test_negative_status_overrides_accepted_promotion_stage(self):
+        for status in ("REJECTED", "DISPROVEN"):
+            with self.subTest(status=status):
+                detail = complete_company_detail()
+                detail["facts"] = [
+                    {**fact, "status": status, "promotion_stage": "ACCEPTED_FACT"}
+                    for fact in detail["facts"]
+                ]
+                detail["quality_assessment"] = {
+                    "score": 95.0,
+                    "completion_ready": True,
+                    "missing_keys": [],
+                    "blocking_keys": [],
+                    "checks": [],
+                }
+                detail["gap_analysis"] = []
+                detail["gap_tool_plan"] = []
+
+                policy = build_completion_policy(detail)
+
+                self.assertFalse(policy["evidence_floor"]["fact_pool"])
+                self.assertFalse(all(policy["evidence_floor"].values()))
+                self.assertNotEqual(policy["completion_mode"], "strict")
+                self.assertNotEqual(policy["completion_mode"], "limited")
+                self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+
     def test_rejected_or_disproven_facts_do_not_satisfy_source_backed_field_floors(self):
         for status in ("REJECTED", "DISPROVEN"):
             with self.subTest(status=status):
@@ -1372,6 +1398,37 @@ class CompletionPolicyTests(unittest.TestCase):
 
         self.assertIn("official_website", policy["remaining_blockers"])
         self.assertNotIn(" Official Website ", policy["remaining_blockers"])
+
+    def test_explicit_blocking_gap_severity_is_normalized(self):
+        for severity in (" BLOCKING ", "BLOCKING"):
+            with self.subTest(severity=severity):
+                detail = complete_company_detail()
+                detail["quality_assessment"] = {
+                    "score": 95.0,
+                    "completion_ready": True,
+                    "missing_keys": [],
+                    "blocking_keys": [],
+                    "checks": [],
+                }
+                detail["gap_analysis"] = [{"gap_key": "official_website", "severity": severity}]
+                detail["gap_tool_plan"] = []
+                detail["gap_followup_summary"] = {
+                    "total_gaps": 1,
+                    "blocking_gaps": 1,
+                    "ready": 0,
+                    "queued": 0,
+                    "already_attempted": 0,
+                    "blocked_by_config": 0,
+                    "exhausted": 1,
+                    "manual_review_required": 0,
+                }
+
+                policy = build_completion_policy(detail)
+
+                self.assertIn("official_website", policy["remaining_blockers"])
+                self.assertFalse(policy["strict_completion_ready"])
+                self.assertNotEqual(policy["completion_mode"], "strict")
+                self.assertNotEqual(policy["recommended_status"], "COMPLETED")
 
     def test_representative_policies_return_required_key_set(self):
         details = [

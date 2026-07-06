@@ -4,6 +4,7 @@ from app.core.gap_followups import build_gap_analysis, build_gap_followup_summar
 
 
 SUPPORTED_VERIFICATION_STATUSES = {"CONFIRMED", "LIKELY", "SUPPORTED"}
+NEGATIVE_FACT_STATUSES = {"REJECTED", "DISPROVEN", "CONTRADICTED", "FALSE", "INVALID"}
 BLOCKED_TOOL_STATUSES = {"missing_config", "missing_executable", "credential_blocked", "disabled"}
 PROFILE_IDENTITY_TYPES = {"email", "username", "identity", "profile_url", "platform_account"}
 CONTACT_CHANNEL_TYPES = {"email", "phone", "whatsapp"}
@@ -203,7 +204,7 @@ def _remaining_blockers(assessment: dict, gap_analysis: list[dict]) -> list[str]
         if normalized
     }
     for gap in gap_analysis:
-        if gap.get("severity") == "blocking":
+        if str(gap.get("severity") or "").strip().lower() == "blocking":
             gap_key = _normalize_blocker_key(gap.get("gap_key"))
             if gap_key:
                 blockers.add(gap_key)
@@ -450,6 +451,8 @@ def _fact_has_source_backed_evidence(fact: dict, source_backed_evidence_ids: set
 
 def _fact_is_accepted(fact: dict) -> bool:
     status = str(fact.get("status") or "").upper()
+    if status in NEGATIVE_FACT_STATUSES:
+        return False
     promotion_stage = str(fact.get("promotion_stage") or "").upper()
     return status in SUPPORTED_VERIFICATION_STATUSES or promotion_stage == "ACCEPTED_FACT"
 
