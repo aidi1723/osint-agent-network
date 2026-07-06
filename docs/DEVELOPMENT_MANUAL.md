@@ -896,8 +896,9 @@ Create payload:
 
 ### 11.5 Reports
 
-- `GET /api/investigations/{id}/report`: structured report JSON.
-- `GET /api/investigations/{id}/report.md`: Markdown report.
+- `GET /api/investigations/{id}/report`: redacted structured report JSON.
+- `GET /api/investigations/{id}/report.md`: redacted Markdown report.
+- `GET /api/investigations/{id}/report.html`: redacted self-contained HTML report for external handoff.
 
 ## 12. Web Management Interface
 

@@ -30,7 +30,7 @@
 **Files:**
 - Create: `backend/tests/test_report_export.py`
 
-- [ ] **Step 1: Write the failing service and API tests**
+- [x] **Step 1: Write the failing service and API tests**
 
 Create `backend/tests/test_report_export.py`:
 
@@ -265,7 +265,7 @@ def _get_with_store(path: str, api_store: MemoryStore) -> tuple[int, dict, str]:
             server.server_close()
 ```
 
-- [ ] **Step 2: Run the new tests and verify they fail for missing module/routes**
+- [x] **Step 2: Run the new tests and verify they fail for missing module/routes**
 
 Run:
 
@@ -281,7 +281,7 @@ Expected: ERROR with `ModuleNotFoundError: No module named 'app.services.report_
 - Create: `backend/app/services/report_export.py`
 - Test: `backend/tests/test_report_export.py`
 
-- [ ] **Step 1: Add the report export service implementation**
+- [x] **Step 1: Add the report export service implementation**
 
 Create `backend/app/services/report_export.py`:
 
@@ -509,7 +509,7 @@ def _action_item(item: dict) -> str:
     return f"{item.get('agent_focus', 'Continue collection')}: {item.get('prompt', '')}"
 ```
 
-- [ ] **Step 2: Run the report export tests**
+- [x] **Step 2: Run the report export tests**
 
 Run:
 
@@ -525,7 +525,7 @@ Expected: service tests pass, API tests still fail because routes are not wired 
 - Modify: `backend/app/main.py`
 - Test: `backend/tests/test_report_export.py`
 
-- [ ] **Step 1: Import report export functions**
+- [x] **Step 1: Import report export functions**
 
 In `backend/app/main.py`, add this import near the other service imports:
 
@@ -533,7 +533,7 @@ In `backend/app/main.py`, add this import near the other service imports:
 from app.services.report_export import build_report_payload, render_report_html, render_report_markdown
 ```
 
-- [ ] **Step 2: Add report routes before the generic investigation detail route**
+- [x] **Step 2: Add report routes before the generic investigation detail route**
 
 In `ApiHandler.do_GET()`, insert this block before:
 
@@ -572,7 +572,7 @@ Add:
             return
 ```
 
-- [ ] **Step 3: Add a non-JSON response helper**
+- [x] **Step 3: Add a non-JSON response helper**
 
 In `ApiHandler`, add this method directly after `_json()`:
 
@@ -592,7 +592,7 @@ In `ApiHandler`, add this method directly after `_json()`:
         self.wfile.write(encoded)
 ```
 
-- [ ] **Step 4: Run the report export tests**
+- [x] **Step 4: Run the report export tests**
 
 Run:
 
@@ -609,7 +609,7 @@ Expected: all report export tests pass.
 - Test: `backend/tests/test_mcp_descriptor.py`
 - Test: `backend/tests/test_agent_protocol.py`
 
-- [ ] **Step 1: Run the new tests and adjacent API tests**
+- [x] **Step 1: Run the new tests and adjacent API tests**
 
 Run:
 
@@ -621,7 +621,7 @@ PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_agent_
 
 Expected: all targeted tests pass. The adjacent tests confirm the new `_text()` helper did not break existing JSON routes or agent protocol routes.
 
-- [ ] **Step 2: Run all backend tests**
+- [x] **Step 2: Run all backend tests**
 
 Run:
 
@@ -637,7 +637,7 @@ Expected: all backend tests pass.
 - Modify: `docs/NEXT_PHASE_ROADMAP_2026-07-06.md`
 - Modify: `docs/DEVELOPMENT_MANUAL.md`
 
-- [ ] **Step 1: Update the development manual report endpoint section**
+- [x] **Step 1: Update the development manual report endpoint section**
 
 In `docs/DEVELOPMENT_MANUAL.md`, replace the report endpoint notes around the API list with:
 
@@ -647,7 +647,7 @@ In `docs/DEVELOPMENT_MANUAL.md`, replace the report endpoint notes around the AP
 - `GET /api/investigations/{id}/report.html`: redacted self-contained HTML report for external handoff.
 ```
 
-- [ ] **Step 2: Add a P2 progress note to the roadmap**
+- [x] **Step 2: Add a P2 progress note to the roadmap**
 
 Append this section near the end of `docs/NEXT_PHASE_ROADMAP_2026-07-06.md`:
 
@@ -680,7 +680,7 @@ Deferred:
 - PDF export remains a follow-up after the HTML contract is stable.
 ```
 
-- [ ] **Step 3: Review documentation diffs**
+- [x] **Step 3: Review documentation diffs**
 
 Run:
 
@@ -695,7 +695,7 @@ Expected: docs describe implemented endpoints without private targets, hostnames
 **Files:**
 - All files changed in this plan.
 
-- [ ] **Step 1: Run full verification**
+- [x] **Step 1: Run full verification**
 
 Run:
 
@@ -705,13 +705,13 @@ bash scripts/verify.sh
 
 Expected: backend tests pass, frontend helper checks pass, Vitest passes, and frontend production build passes.
 
-- [ ] **Step 2: Run added-line privacy scan**
+- [x] **Step 2: Run added-line privacy scan**
 
 Run the added-line privacy scan documented in `docs/PUBLIC_REPOSITORY_MAINTENANCE.md`.
 
 Expected: no matches. If `rg` exits with code `1`, that means no matches were found.
 
-- [ ] **Step 3: Review final status**
+- [x] **Step 3: Review final status**
 
 Run:
 
@@ -722,7 +722,7 @@ git diff --stat
 
 Expected: only intended report export service, API route, tests, and documentation files are modified or untracked.
 
-- [ ] **Step 4: Commit implementation**
+- [x] **Step 4: Commit implementation**
 
 Run:
 

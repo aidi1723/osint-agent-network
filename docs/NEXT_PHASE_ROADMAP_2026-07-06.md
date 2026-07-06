@@ -225,3 +225,30 @@ Verification:
 - `PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_tool_fixture_regressions.py' -v`
 - `bash scripts/verify.sh`
 - added-line privacy scan
+
+## P2 Progress - Report Export Package
+
+Implemented first-stage report export for completed investigations:
+
+- structured report JSON;
+- Markdown report;
+- self-contained HTML report.
+
+Protected behavior:
+
+- export reuses the existing structured report and quality assessment;
+- HTML output includes BLUF, PIR answers, EEI coverage, quality gate,
+  source-backed facts, evidence appendix, ACH/I&W, gaps, and next actions;
+- export responses apply redaction before returning content;
+- missing investigations return `404`.
+
+Verification:
+
+- `PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_report_export.py' -v`
+- `PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_*.py' -v`
+- `bash scripts/verify.sh`
+- added-line privacy scan from `docs/PUBLIC_REPOSITORY_MAINTENANCE.md`
+
+Deferred:
+
+- PDF export remains a follow-up after the HTML contract is stable.

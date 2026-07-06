@@ -12,6 +12,7 @@ from app.core.registry import default_tool_registry
 from app.core.tool_health import build_tool_health_report
 from app.core.upkuajing_customs import UpkuajingCustomsClient, UpkuajingCustomsError
 from app.services.llm import LLMClient
+from app.services.report_export import build_report_payload, render_report_html, render_report_markdown
 from app.services.job_queue import job_queue
 from app.services.store import store
 from app.services.worker import run_investigation_jobs
@@ -140,6 +141,33 @@ class ApiHandler(BaseHTTPRequestHandler):
                 "social": social,
                 "products": products
             })
+            return
+
+        if parsed.path.startswith("/api/investigations/") and parsed.path.endswith("/report"):
+            investigation_id = parsed.path.split("/")[3]
+            item = store.get_investigation(investigation_id)
+            if item is None:
+                self._json({"detail": "investigation not found"}, status=404)
+                return
+            self._json(build_report_payload(item))
+            return
+
+        if parsed.path.startswith("/api/investigations/") and parsed.path.endswith("/report.md"):
+            investigation_id = parsed.path.split("/")[3]
+            item = store.get_investigation(investigation_id)
+            if item is None:
+                self._json({"detail": "investigation not found"}, status=404)
+                return
+            self._text(render_report_markdown(item), "text/markdown; charset=utf-8")
+            return
+
+        if parsed.path.startswith("/api/investigations/") and parsed.path.endswith("/report.html"):
+            investigation_id = parsed.path.split("/")[3]
+            item = store.get_investigation(investigation_id)
+            if item is None:
+                self._json({"detail": "investigation not found"}, status=404)
+                return
+            self._text(render_report_html(item), "text/html; charset=utf-8")
             return
 
         if parsed.path.startswith("/api/investigations/"):
@@ -548,6 +576,20 @@ class ApiHandler(BaseHTTPRequestHandler):
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(encoded)))
+        origin = self.headers.get("Origin", "")
+        allowed_origins = _get_allowed_origins()
+        if origin in allowed_origins or "*" in allowed_origins:
+            self.send_header("Access-Control-Allow-Origin", origin or allowed_origins[0])
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def _text(self, body: str, content_type: str, status: int = 200):
+        encoded = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(encoded)))
         origin = self.headers.get("Origin", "")
         allowed_origins = _get_allowed_origins()
