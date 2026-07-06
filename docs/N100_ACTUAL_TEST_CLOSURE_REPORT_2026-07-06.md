@@ -991,7 +991,7 @@ Root causes found during actual testing:
 4. Duplicate root URL forms consumed extra job budget.
    - Cause: `https://example.com` and `https://example.com/` normalized differently.
    - Fix: normalize empty URL paths to `/`.
-5. A broad passive subdomain followup could overload synchronous report handling.
+5. A broad passive subdomain followup could overload report handling.
    - Cause: one public-safe run wrote thousands of subdomain entities from `subfinder`.
    - Fix: add `SUBFINDER_RESULT_LIMIT`, default `300`.
 
@@ -1020,7 +1020,7 @@ Fresh verification:
 Updated design-goal status:
 
 - The project execution success rate is higher than before this follow-up: the official-site search component moved from unconfigured to ready, and real company/sparse-lead tasks now produce website candidate evidence and followup jobs.
-- The largest remaining execution risk is not missing search coverage, but orchestration: `/run-jobs` is synchronous, so large collector batches can block API responses. Use bounded batches until a background worker is introduced.
+- Orchestration risk was addressed after this retest: `/run-jobs` now enqueues an in-process background worker run and returns immediately. Large collector batches should still use bounded `max_jobs` and be monitored through investigation detail plus `/api/system/status`.
 
 ## URL Site-Collection Priority Follow-up - 2026-07-06
 
@@ -1054,4 +1054,4 @@ Fresh verification:
 Updated design-goal status:
 
 - Short company/sparse-lead runs now produce deeper website evidence earlier.
-- The next major optimization remains background/asynchronous job execution for larger batches.
+- Background/asynchronous job execution for larger batches has been implemented as an in-process queue. A future upgrade can make the queue persistent across process restarts.

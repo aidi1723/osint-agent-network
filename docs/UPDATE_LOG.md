@@ -876,13 +876,13 @@ Issues found and resolved:
 - Search results were initially too noisy and admitted Reddit/blog/domain-registration pages as official candidates.
 - Accepted root-domain candidates could score below the worker followup threshold, preventing site collection.
 - URL root normalization mismatch caused duplicate followup jobs.
-- A broad `subfinder` followup produced thousands of subdomain entities in one sample task and made synchronous API/report handling slow; parser output is now capped.
+- A broad `subfinder` followup produced thousands of subdomain entities in one sample task and made API/report handling slow; parser output is now capped.
 
 Design-goal conclusion:
 
 - Company and sparse-lead tasks now have a real, controlled official-website discovery path on <production-host>.
 - The task success rate should be higher than the previous stage because one more core blocker moved from `attention_required` to `ready`, and real tasks now produce official-site URL evidence plus site-collection followups.
-- Remaining improvements are orchestration-level: long-running `/run-jobs` remains synchronous, so larger batches should be run in bounded chunks or moved to a background worker.
+- Orchestration follow-up completed: `/run-jobs` now enqueues an in-process background worker run and returns immediately. Larger tasks should use bounded `max_jobs` batches while polling investigation detail and `/api/system/status`.
 
 ---
 
