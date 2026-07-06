@@ -162,3 +162,125 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertEqual(policy["recommended_status"], "BLOCKED")
         self.assertTrue(policy["environment_blocked"])
         self.assertTrue(policy["manual_decision_required"])
+
+    def test_environment_blocked_with_only_raw_seed_entity_recommends_blocked(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Example Manufacturing LLC",
+            "entities": [{"type": "company", "value": "Example Manufacturing LLC", "confidence": 0.72}],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "relationships": [],
+            "hypotheses": [],
+            "jobs": [{"tool_name": "official_site_search", "status": "BLOCKED"}],
+            "report_markdown": "",
+            "quality_assessment": {
+                "score": 0.0,
+                "completion_ready": False,
+                "missing_keys": ["official_website", "evidence_ledger"],
+                "blocking_keys": ["official_website", "evidence_ledger"],
+                "checks": [],
+            },
+            "gap_analysis": [{"gap_key": "official_website", "severity": "blocking"}],
+            "gap_tool_plan": [
+                {
+                    "gap_key": "official_website",
+                    "tool_name": "official_site_search",
+                    "status": "missing_config",
+                    "health_reason": "search provider API key is not configured",
+                }
+            ],
+            "gap_followup_summary": {
+                "total_gaps": 1,
+                "blocking_gaps": 1,
+                "ready": 0,
+                "queued": 0,
+                "already_attempted": 0,
+                "blocked_by_config": 1,
+                "exhausted": 0,
+                "manual_review_required": 0,
+            },
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "blocked_by_environment")
+        self.assertEqual(policy["recommended_status"], "BLOCKED")
+        self.assertTrue(policy["environment_blocked"])
+        self.assertTrue(policy["manual_decision_required"])
+
+    def test_failed_without_evidence_recommends_failed(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Example Manufacturing LLC",
+            "entities": [],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "relationships": [],
+            "hypotheses": [],
+            "jobs": [
+                {"tool_name": "official_site_search", "status": "FAILED"},
+                {"tool_name": "company_osint", "status": "PARTIAL_FAILED"},
+            ],
+            "report_markdown": "",
+            "quality_assessment": {
+                "score": 0.0,
+                "completion_ready": False,
+                "missing_keys": [],
+                "blocking_keys": [],
+                "checks": [],
+            },
+            "gap_analysis": [],
+            "gap_tool_plan": [],
+            "gap_followup_summary": {
+                "total_gaps": 0,
+                "blocking_gaps": 0,
+                "ready": 0,
+                "queued": 0,
+                "already_attempted": 0,
+                "blocked_by_config": 0,
+                "exhausted": 0,
+                "manual_review_required": 0,
+            },
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "failed")
+        self.assertEqual(policy["recommended_status"], "FAILED")
+        self.assertTrue(policy["manual_decision_required"])
+        self.assertTrue(policy["auto_exhausted"])
+
+    def test_ready_for_human_decision_respects_explicit_empty_gap_fields(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Example Manufacturing LLC",
+            "entities": [],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "relationships": [],
+            "hypotheses": [],
+            "jobs": [],
+            "report_markdown": "",
+            "quality_assessment": {
+                "score": 10.0,
+                "completion_ready": False,
+                "missing_keys": ["official_website"],
+                "blocking_keys": ["official_website"],
+                "checks": [],
+            },
+            "gap_analysis": [],
+            "gap_tool_plan": [],
+            "gap_followup_summary": {},
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "ready_for_human_decision")
+        self.assertEqual(policy["recommended_status"], "NEEDS_REVIEW")
+        self.assertTrue(policy["manual_decision_required"])
+        self.assertTrue(policy["auto_exhausted"])
+        self.assertIn("official_website", policy["remaining_blockers"])

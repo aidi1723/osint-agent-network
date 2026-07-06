@@ -21,9 +21,21 @@ BASE_ACCEPTABLE_LIMITATIONS = {"decision_maker", "purchase_intent", "contact_pho
 def build_completion_policy(detail: dict) -> dict:
     assessment = _quality_assessment(detail)
     planner_detail = {**detail, "quality_assessment": assessment}
-    gap_analysis = list(detail.get("gap_analysis") or build_gap_analysis(planner_detail))
-    gap_tool_plan = list(detail.get("gap_tool_plan") or build_gap_tool_plan({**planner_detail, "gap_analysis": gap_analysis}))
-    gap_summary = dict(detail.get("gap_followup_summary") or build_gap_followup_summary(gap_tool_plan, gap_analysis))
+    gap_analysis = (
+        list(detail["gap_analysis"])
+        if "gap_analysis" in detail and detail["gap_analysis"] is not None
+        else build_gap_analysis(planner_detail)
+    )
+    gap_tool_plan = (
+        list(detail["gap_tool_plan"])
+        if "gap_tool_plan" in detail and detail["gap_tool_plan"] is not None
+        else build_gap_tool_plan({**planner_detail, "gap_analysis": gap_analysis})
+    )
+    gap_summary = (
+        dict(detail["gap_followup_summary"])
+        if "gap_followup_summary" in detail and detail["gap_followup_summary"] is not None
+        else build_gap_followup_summary(gap_tool_plan, gap_analysis)
+    )
     evidence_floor = _evidence_floor(detail)
     remaining_blockers = _remaining_blockers(assessment, gap_analysis)
     strict_ready = bool(assessment.get("completion_ready"))
@@ -243,7 +255,12 @@ def _environment_blocked(gap_tool_plan: list[dict], gap_summary: dict) -> bool:
 
 
 def _has_useful_evidence(detail: dict) -> bool:
-    return bool(detail.get("evidence_ledger") or detail.get("facts") or detail.get("entities") or detail.get("evidence"))
+    return bool(
+        _has_evidence_ledger(detail)
+        or _has_linked_fact(detail)
+        or detail.get("evidence")
+        or _has_supported_verification(detail)
+    )
 
 
 def _execution_failed_without_evidence(detail: dict) -> bool:
