@@ -667,7 +667,7 @@ Run:
 rg -n "report.pdf|PDF report|reportlab|P2b Progress" docs/DEVELOPMENT_MANUAL.md docs/NEXT_PHASE_ROADMAP_2026-07-06.md docs/superpowers/specs/2026-07-06-pdf-report-export-design.md docs/superpowers/plans/2026-07-06-pdf-report-export.md
 ```
 
-Actual output:
+Selected relevant output:
 
 ```text
 docs/NEXT_PHASE_ROADMAP_2026-07-06.md:256:## P2b Progress - PDF Report Export
