@@ -40,7 +40,7 @@
 - Create: `backend/tests/test_report_pdf_export.py`
 - Test: `backend/tests/test_report_pdf_export.py`
 
-- [ ] **Step 1: Create the failing test file**
+- [x] **Step 1: Create the failing test file**
 
 Create `backend/tests/test_report_pdf_export.py` with this content:
 
@@ -253,7 +253,7 @@ def _get_bytes_with_store(path: str, api_store: MemoryStore) -> tuple[int, dict,
             server.server_close()
 ```
 
-- [ ] **Step 2: Run the new test file and confirm it fails**
+- [x] **Step 2: Run the new test file and confirm it fails**
 
 Run:
 
@@ -267,7 +267,7 @@ Expected:
 ModuleNotFoundError: No module named 'app.services.report_pdf'
 ```
 
-- [ ] **Step 3: Commit the failing tests**
+- [x] **Step 3: Commit the failing tests**
 
 Run:
 
