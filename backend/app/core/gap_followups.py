@@ -359,31 +359,35 @@ def build_gap_tool_plan(detail: dict, tool_health_by_name: dict[str, dict] | Non
         )
         for job in detail.get("jobs", [])
     }
+    existing_simple = {(tool_name, target_type, target_value) for tool_name, target_type, target_value, _depends_on in existing}
     plan = []
     for gap in build_gap_analysis(detail):
         gap_key = gap["gap_key"]
         for mapping in GAP_TOOL_MAPPINGS.get(gap_key, ()):
             target_type = _gap_mapping_target_type(str(mapping["target_type"]), seed_type)
-            target_value = seed_value
-            depends_on = f"completed:analysis_judgement;gap:{gap_key}"
-            health = tool_health_by_name.get(str(mapping["tool_name"]), {})
-            status = str(health.get("status") or "ready")
-            if (str(mapping["tool_name"]), target_type, target_value, depends_on) in existing:
-                status = "already_attempted"
-            plan.append(
-                {
-                    "gap_key": gap_key,
-                    "tool_name": mapping["tool_name"],
-                    "agent_role": mapping["agent_role"],
-                    "target_type": target_type,
-                    "target_value": target_value,
-                    "status": status,
-                    "reason": mapping["reason"],
-                    "expected_evidence": list(mapping["expected_evidence"]),
-                    "depends_on": depends_on,
-                    "health_reason": str(health.get("reason") or ""),
-                }
-            )
+            for target_value in _gap_mapping_target_values(target_type, seed_type, seed_value, detail):
+                depends_on = f"completed:analysis_judgement;gap:{gap_key}"
+                health = tool_health_by_name.get(str(mapping["tool_name"]), {})
+                status = str(health.get("status") or "ready")
+                if (
+                    (str(mapping["tool_name"]), target_type, target_value, depends_on) in existing
+                    or (str(mapping["tool_name"]), target_type, target_value) in existing_simple
+                ):
+                    status = "already_attempted"
+                plan.append(
+                    {
+                        "gap_key": gap_key,
+                        "tool_name": mapping["tool_name"],
+                        "agent_role": mapping["agent_role"],
+                        "target_type": target_type,
+                        "target_value": target_value,
+                        "status": status,
+                        "reason": mapping["reason"],
+                        "expected_evidence": list(mapping["expected_evidence"]),
+                        "depends_on": depends_on,
+                        "health_reason": str(health.get("reason") or ""),
+                    }
+                )
     return plan
 
 
@@ -393,7 +397,69 @@ def _gap_mapping_target_type(value: str, seed_type: str) -> str:
     return value
 
 
-def plan_gap_followup_jobs(detail: dict) -> list[PlannedJob]:
+def _gap_mapping_target_values(target_type: str, seed_type: str, seed_value: str, detail: dict) -> list[str]:
+    if target_type in {seed_type, "company", "sparse_lead"}:
+        return [seed_value] if seed_value else []
+    accepted_types = {
+        "domain": {"domain"},
+        "url": {"url", "website", "official_website"},
+        "profile_url": {"profile_url"},
+    }.get(target_type, {target_type})
+    values = []
+    seen = set()
+    for entity in detail.get("entities") or []:
+        entity_type = str(entity.get("type") or "")
+        value = str(entity.get("value") or "").strip()
+        if not value or entity_type not in accepted_types or value in seen:
+            continue
+        seen.add(value)
+        values.append(value)
+    return values
+
+
+def plan_gap_followup_jobs(detail: dict, tool_health_by_name: dict[str, dict] | None = None) -> list[PlannedJob]:
+    if tool_health_by_name is not None:
+        tool_plan = build_gap_tool_plan(detail, tool_health_by_name=tool_health_by_name)
+        ready_items = [item for item in tool_plan if item["status"] == "ready"]
+        if ready_items:
+            planned = [
+                PlannedJob(
+                    tool_name=item["tool_name"],
+                    target_type=item["target_type"],
+                    target_value=item["target_value"],
+                    depth=3,
+                    agent_role=item["agent_role"],
+                    output_contract="entities,evidence,relationships",
+                    depends_on=item["depends_on"],
+                )
+                for item in ready_items
+            ]
+            seed_type = str(detail.get("seed_type") or "company")
+            seed_value = str(detail.get("seed_value") or "")
+            planned.append(
+                PlannedJob(
+                    tool_name="identity_match_review" if seed_type == "sparse_lead" else "cross_verification",
+                    target_type=seed_type,
+                    target_value=seed_value,
+                    depth=4,
+                    agent_role="cross_verification_agent",
+                    output_contract="claims,evidence,relationships: gap_followup_verification, confidence_adjustments",
+                    depends_on="completed:analysis_judgement;gap:verification",
+                )
+            )
+            planned.append(
+                PlannedJob(
+                    tool_name="analysis_judgement",
+                    target_type=seed_type,
+                    target_value=seed_value,
+                    depth=5,
+                    agent_role="analysis_judgement_agent",
+                    output_contract="claims,graph_slots,report: updated PIR, ACH, BLUF, risk_summary, directed_collection",
+                    depends_on="cross_verification;identity_match_review;gap:reanalyze",
+                )
+            )
+            return planned
+
     memory = detail.get("intelligence_memory") or build_intelligence_memory(detail)
     gaps = memory.get("collection_gaps") or []
     if not gaps:
