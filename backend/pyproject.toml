@@ -3,7 +3,10 @@ name = "osint-agent-network-backend"
 version = "0.1.0"
 requires-python = ">=3.11"
 license = "Proprietary"
-dependencies = []
+dependencies = [
+    "pypdf>=5.0.0",
+    "reportlab>=4.2.0",
+]
 
 [tool.pytest.ini_options]
 pythonpath = [".", ".."]

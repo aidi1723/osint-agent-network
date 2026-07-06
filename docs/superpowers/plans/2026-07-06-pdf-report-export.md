@@ -283,7 +283,7 @@ git commit -m "test: add pdf report export coverage"
 - Modify: `backend/uv.lock`
 - Test: `backend/tests/test_report_pdf_export.py`
 
-- [ ] **Step 1: Add dependency declarations**
+- [x] **Step 1: Add dependency declarations**
 
 Modify `backend/pyproject.toml`:
 
@@ -303,7 +303,7 @@ pythonpath = [".", ".."]
 testpaths = ["tests"]
 ```
 
-- [ ] **Step 2: Update the backend lockfile**
+- [x] **Step 2: Update the backend lockfile**
 
 Run from the backend directory:
 
@@ -325,7 +325,7 @@ python3 -m pip install reportlab pypdf
 
 and record in the task notes that `backend/uv.lock` was not updated in this environment.
 
-- [ ] **Step 3: Confirm dependency imports work**
+- [x] **Step 3: Confirm dependency imports work**
 
 Run:
 
@@ -339,7 +339,7 @@ Expected:
 pdf deps ok
 ```
 
-- [ ] **Step 4: Commit dependency updates**
+- [x] **Step 4: Commit dependency updates**
 
 Run:
 
