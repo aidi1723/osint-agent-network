@@ -391,6 +391,37 @@ def build_gap_tool_plan(detail: dict, tool_health_by_name: dict[str, dict] | Non
     return plan
 
 
+def build_gap_followup_summary(tool_plan: list[dict], gap_analysis: list[dict]) -> dict:
+    summary = {
+        "total_gaps": len(gap_analysis),
+        "blocking_gaps": len([gap for gap in gap_analysis if gap.get("severity") == "blocking"]),
+        "ready": 0,
+        "queued": 0,
+        "already_attempted": 0,
+        "blocked_by_config": 0,
+        "exhausted": 0,
+        "manual_review_required": 0,
+    }
+    config_blocking_statuses = {
+        "missing_config",
+        "missing_executable",
+        "credential_blocked",
+        "disabled",
+    }
+    for item in tool_plan:
+        status = str(item.get("status") or "")
+        if status in summary:
+            summary[status] += 1
+        if status in config_blocking_statuses:
+            summary["blocked_by_config"] += 1
+
+    mapped_gap_keys = {item.get("gap_key") for item in tool_plan}
+    for gap in gap_analysis:
+        if gap.get("gap_key") not in mapped_gap_keys:
+            summary["manual_review_required"] += 1
+    return summary
+
+
 def _gap_mapping_target_type(value: str, seed_type: str) -> str:
     if value == "seed":
         return seed_type

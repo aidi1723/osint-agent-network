@@ -11,6 +11,7 @@ from app.core.ach_engine import EvidenceItem, Hypothesis, run_ach_analysis
 from app.core.cross_verification import build_cross_verification_matrix
 from app.core.evidence_ledger import build_evidence_record
 from app.core.fact_pool import FactRecord, default_promotion_stage_for_status, validate_fact_record
+from app.core.gap_followups import build_gap_analysis, build_gap_followup_summary, build_gap_tool_plan
 from app.core.graph import build_investigation_graph
 from app.core.intelligence_memory import build_intelligence_memory
 from app.core.intelligence_requirements import apply_requirement_updates, build_intelligence_requirements
@@ -762,6 +763,7 @@ class MemoryStore:
         _apply_core_v3(raw)
         raw["intelligence_memory"] = build_intelligence_memory(raw)
         raw["quality_assessment"] = build_quality_assessment(raw)
+        _apply_gap_plans(raw)
         raw["graph"] = build_investigation_graph(raw)
         return raw
 
@@ -802,6 +804,7 @@ class MemoryStore:
         _apply_core_v3(data)
         data["intelligence_memory"] = build_intelligence_memory(data)
         data["quality_assessment"] = build_quality_assessment(data)
+        _apply_gap_plans(data)
         data["graph"] = build_investigation_graph(data)
         return data
 
@@ -2037,6 +2040,7 @@ class SQLiteStore:
         _apply_core_v3(data)
         data["intelligence_memory"] = build_intelligence_memory(data)
         data["quality_assessment"] = build_quality_assessment(data)
+        _apply_gap_plans(data)
         data["graph"] = build_investigation_graph(data)
         return data
 
@@ -2689,6 +2693,14 @@ def _strategy_from_name(name: str) -> StrategyProfile:
         return strategies[name]()
     except KeyError as exc:
         raise ValueError(f"unsupported strategy: {name}") from exc
+
+
+def _apply_gap_plans(data: dict) -> None:
+    gap_analysis = build_gap_analysis(data)
+    gap_tool_plan = build_gap_tool_plan(data)
+    data["gap_analysis"] = gap_analysis
+    data["gap_tool_plan"] = gap_tool_plan
+    data["gap_followup_summary"] = build_gap_followup_summary(gap_tool_plan, gap_analysis)
 
 
 def _dedupe_existing_rows(conn: sqlite3.Connection) -> None:

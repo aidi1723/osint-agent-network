@@ -1,6 +1,7 @@
 import unittest
 
 from app.core.gap_followups import build_gap_analysis, build_gap_tool_plan, plan_gap_followup_jobs
+from app.services.store import MemoryStore
 
 
 class GapToToolPlannerTests(unittest.TestCase):
@@ -159,6 +160,34 @@ class GapPlannedJobTests(unittest.TestCase):
         self.assertEqual(len(extractor_jobs), 1)
         self.assertEqual(extractor_jobs[0].target_type, "url")
         self.assertEqual(extractor_jobs[0].target_value, "https://www.example.com/about")
+
+
+class GapDetailOutputTests(unittest.TestCase):
+    def test_investigation_detail_includes_gap_plan(self):
+        store = MemoryStore()
+        investigation = store.create_investigation(
+            name="Example Manufacturing LLC",
+            seed_type="company",
+            seed_value="Example Manufacturing LLC",
+            strategy_name="standard",
+        )
+        store.complete_task(
+            investigation.id,
+            agent_id="local-analysis-agent",
+            status="NEEDS_REVIEW",
+            summary="Needs review.",
+            report_markdown="",
+            confidence=0.4,
+        )
+
+        detail = store.get_investigation(investigation.id)
+
+        self.assertIn("gap_analysis", detail)
+        self.assertIn("gap_tool_plan", detail)
+        self.assertIn("gap_followup_summary", detail)
+        self.assertIsInstance(detail["gap_analysis"], list)
+        self.assertIsInstance(detail["gap_tool_plan"], list)
+        self.assertGreaterEqual(detail["gap_followup_summary"]["total_gaps"], 1)
 
 
 if __name__ == "__main__":
