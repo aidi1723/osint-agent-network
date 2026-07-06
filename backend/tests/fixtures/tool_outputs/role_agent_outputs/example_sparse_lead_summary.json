@@ -1,0 +1,22 @@
+{
+  "fixture_version": 1,
+  "privacy": "public_safe_synthetic",
+  "target_type": "sparse_lead",
+  "target_value": "Example Manufacturing LLC",
+  "role": "company_enrichment",
+  "official_site_candidates": [
+    {
+      "url": "https://www.example-target.test/about",
+      "source_tool": "official_site_search",
+      "reason": "Search title and snippet indicate an official company site."
+    }
+  ],
+  "collection_gaps": [
+    {
+      "field": "decision_maker",
+      "status": "needs_review",
+      "reason": "No named executive was confirmed by the public-safe fixture."
+    }
+  ],
+  "notes": "Synthetic sample for regression tests only."
+}

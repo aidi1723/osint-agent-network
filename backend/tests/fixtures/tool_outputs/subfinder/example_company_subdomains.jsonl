@@ -1,0 +1,3 @@
+{"host":"www.example.com","source":"crtsh"}
+{"host":"support.example.com","sources":["alienvault","certspotter"]}
+{"host":"example.com","source":"root-domain"}

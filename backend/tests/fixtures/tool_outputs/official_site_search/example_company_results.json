@@ -1,0 +1,17 @@
+{
+  "target_type": "company",
+  "target_value": "Example Manufacturing LLC",
+  "query": "\"Example Manufacturing LLC\" official website contact",
+  "results": [
+    {
+      "title": "Example Manufacturing LLC - Official Website",
+      "url": "https://www.example-target.test/about?utm_source=fixture",
+      "content": "Official site for Example Manufacturing LLC. Contact our sales team for uPVC windows and curtain wall systems."
+    },
+    {
+      "title": "Example Manufacturing LLC directory profile",
+      "url": "https://directory.example/listing/example-manufacturing",
+      "content": "Third-party listing compiled from public business directories."
+    }
+  ]
+}

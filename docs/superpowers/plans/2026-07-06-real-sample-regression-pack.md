@@ -34,7 +34,7 @@
 **Files:**
 - Create: `backend/tests/test_tool_fixture_regressions.py`
 
-- [ ] **Step 1: Write the failing test module**
+- [x] **Step 1: Write the failing test module**
 
 Create `backend/tests/test_tool_fixture_regressions.py` with this content:
 
@@ -217,7 +217,7 @@ class ToolFixtureRegressionTests(unittest.TestCase):
         )
 ```
 
-- [ ] **Step 2: Run test to verify it fails because fixtures are missing**
+- [x] **Step 2: Run test to verify it fails because fixtures are missing**
 
 Run:
 
@@ -237,7 +237,7 @@ Expected: FAIL or ERROR with missing fixture file paths under `backend/tests/fix
 - Create: `backend/tests/fixtures/tool_outputs/subfinder/example_company_subdomains.jsonl`
 - Create: `backend/tests/fixtures/tool_outputs/role_agent_outputs/example_sparse_lead_summary.json`
 
-- [ ] **Step 1: Add official-site search JSON fixture**
+- [x] **Step 1: Add official-site search JSON fixture**
 
 Create `backend/tests/fixtures/tool_outputs/official_site_search/example_company_results.json`:
 
@@ -261,7 +261,7 @@ Create `backend/tests/fixtures/tool_outputs/official_site_search/example_company
 }
 ```
 
-- [ ] **Step 2: Add httpx JSONL fixture**
+- [x] **Step 2: Add httpx JSONL fixture**
 
 Create `backend/tests/fixtures/tool_outputs/httpx/example_company_live.jsonl`:
 
@@ -269,7 +269,7 @@ Create `backend/tests/fixtures/tool_outputs/httpx/example_company_live.jsonl`:
 {"url":"https://www.example.com","input":"www.example.com","title":"Example Manufacturing - Contact","tech":["nginx","WordPress"],"status_code":200}
 ```
 
-- [ ] **Step 3: Add katana JSONL fixture**
+- [x] **Step 3: Add katana JSONL fixture**
 
 Create `backend/tests/fixtures/tool_outputs/katana/example_company_pages.jsonl`:
 
@@ -280,7 +280,7 @@ Create `backend/tests/fixtures/tool_outputs/katana/example_company_pages.jsonl`:
 {"url":"https://www.example.com/privacy","source":"href"}
 ```
 
-- [ ] **Step 4: Add official-site extractor HTML fixture**
+- [x] **Step 4: Add official-site extractor HTML fixture**
 
 Create `backend/tests/fixtures/tool_outputs/official_site_extractor/example_company_official.html`:
 
@@ -303,7 +303,7 @@ Create `backend/tests/fixtures/tool_outputs/official_site_extractor/example_comp
 </html>
 ```
 
-- [ ] **Step 5: Add subfinder JSONL fixture**
+- [x] **Step 5: Add subfinder JSONL fixture**
 
 Create `backend/tests/fixtures/tool_outputs/subfinder/example_company_subdomains.jsonl`:
 
@@ -313,7 +313,7 @@ Create `backend/tests/fixtures/tool_outputs/subfinder/example_company_subdomains
 {"host":"example.com","source":"root-domain"}
 ```
 
-- [ ] **Step 6: Add role-agent summary fixture**
+- [x] **Step 6: Add role-agent summary fixture**
 
 Create `backend/tests/fixtures/tool_outputs/role_agent_outputs/example_sparse_lead_summary.json`:
 
@@ -342,7 +342,7 @@ Create `backend/tests/fixtures/tool_outputs/role_agent_outputs/example_sparse_le
 }
 ```
 
-- [ ] **Step 7: Run fixture regression tests**
+- [x] **Step 7: Run fixture regression tests**
 
 Run:
 
@@ -358,7 +358,7 @@ Expected: PASS. If a parser mismatch appears, inspect the adapter and change onl
 - Test: `backend/tests/test_tool_fixture_regressions.py`
 - Test: `backend/tests/test_tool_adapters.py`
 
-- [ ] **Step 1: Run adapter and fixture tests together**
+- [x] **Step 1: Run adapter and fixture tests together**
 
 Run:
 
@@ -369,7 +369,7 @@ PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_tool_f
 
 Expected: PASS. This confirms the new fixture regression pack did not weaken existing adapter behavior.
 
-- [ ] **Step 2: Review diff for parser changes**
+- [x] **Step 2: Review diff for parser changes**
 
 Run:
 
@@ -384,7 +384,7 @@ Expected: Only the new test and fixtures should normally appear. If adapter code
 **Files:**
 - Modify: `docs/NEXT_PHASE_ROADMAP_2026-07-06.md`
 
-- [ ] **Step 1: Add a P1 progress note**
+- [x] **Step 1: Add a P1 progress note**
 
 Append this section near the end of `docs/NEXT_PHASE_ROADMAP_2026-07-06.md`:
 
@@ -417,7 +417,7 @@ Verification:
 - added-line privacy scan
 ```
 
-- [ ] **Step 2: Run documentation diff review**
+- [x] **Step 2: Run documentation diff review**
 
 Run:
 
@@ -432,7 +432,7 @@ Expected: The roadmap records P1 completion evidence without exposing private ta
 **Files:**
 - All files changed in this plan.
 
-- [ ] **Step 1: Run full verification**
+- [x] **Step 1: Run full verification**
 
 Run:
 
@@ -442,7 +442,7 @@ bash scripts/verify.sh
 
 Expected: backend tests pass, frontend helper checks pass, Vitest passes, and frontend production build passes.
 
-- [ ] **Step 2: Run added-line privacy scan**
+- [x] **Step 2: Run added-line privacy scan**
 
 Run:
 
@@ -452,7 +452,7 @@ git diff --unified=0 -- . | rg '^\+' | rg -n 'SRR|srrautopartsonline|ZAWIJA|Fami
 
 Expected: no matches. If `rg` exits with code `1`, that means no matches were found.
 
-- [ ] **Step 3: Review final status**
+- [x] **Step 3: Review final status**
 
 Run:
 
@@ -462,7 +462,7 @@ git status --short
 
 Expected: only intended test, fixture, and documentation files are modified or untracked.
 
-- [ ] **Step 4: Commit implementation**
+- [x] **Step 4: Commit implementation**
 
 Run:
 

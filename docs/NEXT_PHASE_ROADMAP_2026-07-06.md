@@ -197,3 +197,31 @@ Do not start these unless a separate decision is made:
 - paid API integrations;
 - destructive data-retention changes;
 - UI redesign beyond small review/export controls.
+
+## P1 Progress - Real Sample Regression Pack
+
+Implemented public-safe file-level parser fixtures for:
+
+- `official_site_search`
+- `httpx`
+- `katana`
+- `official_site_extractor`
+- `subfinder`
+- role-agent sparse-lead summary output
+
+Protected behavior:
+
+- official-site candidates remain linked to company targets;
+- live URLs keep title, technology, and probe evidence;
+- crawler output keeps relevant business/contact pages and filters noise;
+- official-site HTML yields identity, contact, scope, address, evidence, and
+  relationships;
+- passive subdomains keep source evidence and root-domain relationships;
+- role-agent output has a public-safe documented fixture shape.
+
+Verification:
+
+- `PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_tool_adapters.py' -v`
+- `PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test_tool_fixture_regressions.py' -v`
+- `bash scripts/verify.sh`
+- added-line privacy scan
