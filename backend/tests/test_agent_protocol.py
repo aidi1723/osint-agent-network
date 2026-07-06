@@ -642,7 +642,7 @@ class AgentProtocolTests(unittest.TestCase):
     def test_default_sqlite_store_uses_project_data_directory(self):
         store = create_default_store()
 
-        self.assertTrue(store.db_path.endswith("osint-agent-network/data/osint.sqlite"))
+        self.assertEqual(store.db_path, str(Path.cwd() / "data" / "osint.sqlite"))
 
     def test_investigation_detail_includes_job_counts_and_risk_report(self):
         with patch.dict(

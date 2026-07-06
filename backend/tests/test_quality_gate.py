@@ -150,6 +150,48 @@ class QualityGateTests(unittest.TestCase):
         self.assertIn("contact_channel", assessment["blocking_keys"])
         self.assertIn("decision_maker", assessment["blocking_keys"])
 
+    def test_official_site_person_candidate_satisfies_decision_maker_signal_only(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Sample Auto Parts Co.",
+            "entities": [
+                {"type": "company", "value": "Sample Auto Parts Co.", "confidence": 0.82},
+                {"type": "url", "value": "https://example.com/team", "confidence": 0.72},
+                {"type": "person", "value": "Jane Smith", "confidence": 0.66, "source_tool": "official_site_extractor"},
+                {"type": "job_title", "value": "Export Manager", "confidence": 0.66, "source_tool": "official_site_extractor"},
+                {
+                    "type": "decision_maker",
+                    "value": "Jane Smith - Export Manager",
+                    "confidence": 0.66,
+                    "source_tool": "official_site_extractor",
+                },
+            ],
+            "evidence": [
+                {
+                    "entity_value": "Jane Smith",
+                    "evidence_kind": "official_site_decision_maker_candidate",
+                    "source_tool": "official_site_extractor",
+                }
+            ],
+            "evidence_ledger": [],
+            "facts": [],
+            "hypotheses": [],
+            "relationships": [
+                {
+                    "from_value": "https://example.com/team",
+                    "to_value": "Jane Smith",
+                    "relationship_type": "official_site_mentions_decision_maker",
+                }
+            ],
+            "report_markdown": "",
+        }
+
+        assessment = build_quality_assessment(detail)
+
+        self.assertNotIn("decision_maker", assessment["missing_keys"])
+        self.assertIn("evidence_ledger", assessment["blocking_keys"])
+        self.assertFalse(assessment["completion_ready"])
+
     def test_domain_recon_quality_gate_does_not_require_decision_maker(self):
         detail = {
             "seed_type": "domain",

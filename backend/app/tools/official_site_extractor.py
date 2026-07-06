@@ -37,6 +37,28 @@ BUSINESS_SCOPE_PATTERNS = (
     "doors",
     "windows",
 )
+ROLE_MARKERS = (
+    "owner",
+    "founder",
+    "co-founder",
+    "ceo",
+    "president",
+    "managing director",
+    "director",
+    "general manager",
+    "sales manager",
+    "export manager",
+    "procurement manager",
+    "purchasing manager",
+    "contact person",
+)
+GENERIC_PERSON_LABELS = {
+    "Contact Us",
+    "Sales Team",
+    "Customer Service",
+    "About Us",
+}
+PERSON_HEADING_PREFIXES = {"leadership", "team", "management", "about", "contact"}
 MAX_HTML_BYTES = 2 * 1024 * 1024
 
 
@@ -204,6 +226,18 @@ class OfficialSiteExtractorAdapter:
                 confidence=0.70,
             )
 
+        for candidate in _decision_maker_candidates(text, structured):
+            _add_decision_maker_candidate(
+                candidate,
+                normalized_url,
+                entities,
+                evidence,
+                relationships,
+                seen_entities,
+                seen_evidence,
+                seen_relationships,
+            )
+
         return ParsedToolOutput(self.name, self.target_type, normalized_url, entities, evidence, relationships)
 
 
@@ -248,6 +282,49 @@ def _add_entity(
         seen_relationships,
         NormalizedRelationship(url, normalized_value, relationship_type, confidence),
     )
+
+
+def _add_decision_maker_candidate(
+    candidate: dict,
+    url: str,
+    entities: list[NormalizedEntity],
+    evidence: list[NormalizedEvidence],
+    relationships: list[NormalizedRelationship],
+    seen_entities: set[tuple[str, str]],
+    seen_evidence: set[tuple[str, str, str]],
+    seen_relationships: set[tuple[str, str, str]],
+) -> None:
+    name = str(candidate.get("name") or "")
+    title = str(candidate.get("title") or "")
+    confidence = float(candidate.get("confidence") or 0.66)
+    if not name or not title:
+        return
+    decision_value = f"{name} - {title}"
+    snippet = f"Official site {url} lists {decision_value}"
+    append_unique_entity(entities, seen_entities, NormalizedEntity("person", name, "official_site_extractor", confidence))
+    append_unique_entity(entities, seen_entities, NormalizedEntity("job_title", title, "official_site_extractor", confidence))
+    append_unique_entity(entities, seen_entities, NormalizedEntity("decision_maker", decision_value, "official_site_extractor", confidence))
+    append_unique_evidence(
+        evidence,
+        seen_evidence,
+        NormalizedEvidence(name, "official_site_decision_maker_candidate", "official_site_extractor", snippet),
+    )
+    append_unique_relationship(
+        relationships,
+        seen_relationships,
+        NormalizedRelationship(url, name, "official_site_mentions_decision_maker", confidence),
+    )
+    append_unique_relationship(
+        relationships,
+        seen_relationships,
+        NormalizedRelationship(name, title, "person_has_public_role", confidence),
+    )
+    for contact in _nearby_contacts(str(candidate.get("context") or "")):
+        append_unique_relationship(
+            relationships,
+            seen_relationships,
+            NormalizedRelationship(name, contact, "person_has_contact", min(confidence, 0.64)),
+        )
 
 
 def _normalize_entity_value(entity_type: str, value: str) -> str:
@@ -351,6 +428,93 @@ def _addresses(text: str, items: list[dict]) -> list[str]:
     if match:
         values.append(match.group(1))
     return values[:3]
+
+
+def _decision_maker_candidates(text: str, items: list[dict]) -> list[dict]:
+    candidates = []
+    candidates.extend(_json_ld_people(items))
+    candidates.extend(_visible_text_people(text))
+    seen: set[tuple[str, str]] = set()
+    result = []
+    for candidate in candidates:
+        key = (candidate["name"].lower(), candidate["title"].lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(candidate)
+    return result[:5]
+
+
+def _json_ld_people(items: list[dict]) -> list[dict]:
+    candidates = []
+    for item in items:
+        item_type = item.get("@type")
+        types = item_type if isinstance(item_type, list) else [item_type]
+        if not any(str(t).lower() == "person" for t in types):
+            continue
+        name = _normalize_person_name(str(item.get("name") or ""))
+        title = _normalize_job_title(str(item.get("jobTitle") or item.get("title") or ""))
+        if not name or not title:
+            continue
+        context = " ".join(
+            str(item.get(key) or "")
+            for key in ("name", "jobTitle", "title", "email", "telephone", "phone")
+            if str(item.get(key) or "")
+        )
+        candidates.append({"name": name, "title": title, "confidence": 0.70, "context": context})
+    return candidates
+
+
+def _visible_text_people(text: str) -> list[dict]:
+    candidates = []
+    sentence_parts = re.split(r"(?<=[.!?])\s+|\s{2,}", text)
+    for part in sentence_parts:
+        window = _normalize_space(part)
+        if not window:
+            continue
+        for marker in ROLE_MARKERS:
+            match = re.search(
+                rf"\b([A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){{1,3}})\s*[,|-]\s*((?i:{re.escape(marker)}))\b",
+                window,
+            )
+            if not match:
+                continue
+            name = _normalize_person_name(match.group(1))
+            title = _normalize_job_title(match.group(2))
+            if name and title:
+                context = window[match.start() : match.end() + 120]
+                candidates.append({"name": name, "title": title, "confidence": 0.66, "context": context})
+    return candidates
+
+
+def _normalize_person_name(value: str) -> str:
+    name = _normalize_space(value).strip(" .,:;-")
+    if name in GENERIC_PERSON_LABELS:
+        return ""
+    tokens = name.split()
+    if len(tokens) > 2 and tokens[0].lower() in PERSON_HEADING_PREFIXES:
+        tokens = tokens[1:]
+        name = " ".join(tokens)
+    if len(tokens) < 2 or len(tokens) > 4:
+        return ""
+    if any(token.lower() in {"contact", "sales", "team", "service", "about"} for token in tokens):
+        return ""
+    return name
+
+
+def _normalize_job_title(value: str) -> str:
+    title = _normalize_space(value).strip(" .,:;-")
+    for marker in ROLE_MARKERS:
+        if title.lower() == marker:
+            return " ".join(part.capitalize() if part.lower() != "ceo" else "CEO" for part in marker.split())
+    return ""
+
+
+def _nearby_contacts(context: str) -> list[str]:
+    contacts = []
+    contacts.extend(_emails(context, []))
+    contacts.extend(_phones(context, []))
+    return contacts[:2]
 
 
 def _normalize_space(value: str) -> str:

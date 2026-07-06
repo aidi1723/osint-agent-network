@@ -394,6 +394,94 @@ class KatanaAdapterTests(unittest.TestCase):
 
 
 class OfficialSiteExtractorAdapterTests(unittest.TestCase):
+    def test_parser_extracts_visible_text_decision_maker_candidate(self):
+        adapter = OfficialSiteExtractorAdapter()
+        html = """
+        <html>
+          <body>
+            <section>
+              <h2>Leadership</h2>
+              <p>Jane Smith, Export Manager</p>
+              <p>Email: jane.smith@example.com</p>
+            </section>
+          </body>
+        </html>
+        """
+
+        parsed = adapter.parse_html(html, url="https://example.com/team")
+
+        entity_values = {(item.type, item.value) for item in parsed.entities}
+        evidence = {(item.entity_value, item.evidence_kind) for item in parsed.evidence}
+        relationships = {
+            (item.from_value, item.to_value, item.relationship_type)
+            for item in parsed.relationships
+        }
+
+        self.assertIn(("person", "Jane Smith"), entity_values)
+        self.assertIn(("job_title", "Export Manager"), entity_values)
+        self.assertIn(("decision_maker", "Jane Smith - Export Manager"), entity_values)
+        self.assertIn(("Jane Smith", "official_site_decision_maker_candidate"), evidence)
+        self.assertIn(
+            ("https://example.com/team", "Jane Smith", "official_site_mentions_decision_maker"),
+            relationships,
+        )
+        self.assertIn(("Jane Smith", "Export Manager", "person_has_public_role"), relationships)
+        self.assertIn(("Jane Smith", "jane.smith@example.com", "person_has_contact"), relationships)
+
+    def test_parser_extracts_json_ld_person_decision_maker_candidate(self):
+        adapter = OfficialSiteExtractorAdapter()
+        html = """
+        <html>
+          <head>
+            <script type="application/ld+json">
+              {"@type":"Person","name":"Michael Chen","jobTitle":"Managing Director","email":"michael.chen@example.com"}
+            </script>
+          </head>
+          <body><p>Company leadership page.</p></body>
+        </html>
+        """
+
+        parsed = adapter.parse_html(html, url="https://example.com/about")
+
+        entity_values = {(item.type, item.value) for item in parsed.entities}
+        relationships = {
+            (item.from_value, item.to_value, item.relationship_type)
+            for item in parsed.relationships
+        }
+
+        self.assertIn(("person", "Michael Chen"), entity_values)
+        self.assertIn(("job_title", "Managing Director"), entity_values)
+        self.assertIn(("decision_maker", "Michael Chen - Managing Director"), entity_values)
+        self.assertIn(("Michael Chen", "michael.chen@example.com", "person_has_contact"), relationships)
+
+    def test_parser_rejects_generic_decision_labels_and_distant_contacts(self):
+        adapter = OfficialSiteExtractorAdapter()
+        html = """
+        <html>
+          <body>
+            <h1>Contact Us</h1>
+            <p>Sales Team - Customer Service</p>
+            <p>Generic inbox: info@example.com</p>
+            <section>
+              <p>Alice Brown, Sales Manager</p>
+            </section>
+          </body>
+        </html>
+        """
+
+        parsed = adapter.parse_html(html, url="https://example.com/contact")
+
+        entity_values = {(item.type, item.value) for item in parsed.entities}
+        relationships = {
+            (item.from_value, item.to_value, item.relationship_type)
+            for item in parsed.relationships
+        }
+
+        self.assertNotIn(("person", "Contact Us"), entity_values)
+        self.assertNotIn(("person", "Sales Team"), entity_values)
+        self.assertIn(("person", "Alice Brown"), entity_values)
+        self.assertNotIn(("Alice Brown", "info@example.com", "person_has_contact"), relationships)
+
     def test_parser_extracts_contact_and_business_fields_from_html(self):
         adapter = OfficialSiteExtractorAdapter()
         html = """
