@@ -667,13 +667,25 @@ Run:
 rg -n "report.pdf|PDF report|reportlab|P2b Progress" docs/DEVELOPMENT_MANUAL.md docs/NEXT_PHASE_ROADMAP_2026-07-06.md docs/superpowers/specs/2026-07-06-pdf-report-export-design.md docs/superpowers/plans/2026-07-06-pdf-report-export.md
 ```
 
-Expected:
+Actual output:
 
 ```text
-docs/DEVELOPMENT_MANUAL.md:...:/report.pdf
-docs/NEXT_PHASE_ROADMAP_2026-07-06.md:...:P2b Progress - PDF Report Export
-docs/superpowers/specs/2026-07-06-pdf-report-export-design.md:...:/report.pdf
-docs/superpowers/plans/2026-07-06-pdf-report-export.md:...:/report.pdf
+docs/NEXT_PHASE_ROADMAP_2026-07-06.md:256:## P2b Progress - PDF Report Export
+docs/NEXT_PHASE_ROADMAP_2026-07-06.md:258:Implemented PDF report export for completed investigations:
+docs/NEXT_PHASE_ROADMAP_2026-07-06.md:260:- `GET /api/investigations/{id}/report.pdf`;
+docs/NEXT_PHASE_ROADMAP_2026-07-06.md:273:- `PYTHONPATH=backend uv run --project backend python3 -m unittest discover -s backend/tests -p 'test_report_pdf_export.py' -v`
+docs/DEVELOPMENT_MANUAL.md:902:- `GET /api/investigations/{id}/report.pdf`: redacted printable PDF report. Returns `503` with JSON detail when PDF support is unavailable because `reportlab` is not installed.
+docs/superpowers/specs/2026-07-06-pdf-report-export-design.md:27:GET /api/investigations/{id}/report.pdf
+docs/superpowers/specs/2026-07-06-pdf-report-export-design.md:33:reportlab
+docs/superpowers/specs/2026-07-06-pdf-report-export-design.md:96:  "detail": "PDF export is unavailable because reportlab is not installed."
+docs/superpowers/specs/2026-07-06-pdf-report-export-design.md:151:/api/investigations/{id}/report.pdf
+docs/superpowers/specs/2026-07-06-pdf-report-export-design.md:255:  `/api/investigations/{id}/report.pdf`.
+docs/superpowers/plans/2026-07-06-pdf-report-export.md:630:- `GET /api/investigations/{id}/report.pdf`: redacted printable PDF report. Returns `503` with JSON detail when PDF support is unavailable because `reportlab` is not installed.
+docs/superpowers/plans/2026-07-06-pdf-report-export.md:638:## P2b Progress - PDF Report Export
+docs/superpowers/plans/2026-07-06-pdf-report-export.md:640:Implemented PDF report export for completed investigations:
+docs/superpowers/plans/2026-07-06-pdf-report-export.md:642:- `GET /api/investigations/{id}/report.pdf`;
+docs/superpowers/plans/2026-07-06-pdf-report-export.md:655:- `PYTHONPATH=backend uv run --project backend python3 -m unittest discover -s backend/tests -p 'test_report_pdf_export.py' -v`
+docs/superpowers/plans/2026-07-06-pdf-report-export.md:667:rg -n "report.pdf|PDF report|reportlab|P2b Progress" docs/DEVELOPMENT_MANUAL.md docs/NEXT_PHASE_ROADMAP_2026-07-06.md docs/superpowers/specs/2026-07-06-pdf-report-export-design.md docs/superpowers/plans/2026-07-06-pdf-report-export.md
 ```
 
 - [x] **Step 4: Commit documentation updates**
