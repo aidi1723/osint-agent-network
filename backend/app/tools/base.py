@@ -101,7 +101,7 @@ def run_tool_command(command: ToolCommand) -> ToolRunResult:
                 cwd=str(command.cwd),
                 stdout=stdout_file,
                 stderr=stderr_file,
-                preexec_fn=os.setsid,
+                start_new_session=True,
             )
         except FileNotFoundError as exc:
             raise FileNotFoundError(f"Command not found: {command.args[0]}") from exc

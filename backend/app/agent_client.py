@@ -21,6 +21,9 @@ DEFAULT_CAPABILITIES = [
     "sherlock",
     "theharvester",
     "amass",
+    "subfinder",
+    "httpx",
+    "katana",
     "ghunt",
     "phoneinfoga",
     "spiderfoot",
@@ -29,6 +32,7 @@ DEFAULT_CAPABILITIES = [
     "maigret",
     "socialscan",
     "profile_parser",
+    "official_site_extractor",
     "lead_anchor_extraction",
     "constrained_query_planning",
     "candidate_business_discovery",
@@ -150,6 +154,9 @@ def build_parser() -> argparse.ArgumentParser:
             "sherlock",
             "theharvester",
             "amass",
+            "subfinder",
+            "httpx",
+            "katana",
             "ghunt",
             "phoneinfoga",
             "spiderfoot",
@@ -158,6 +165,7 @@ def build_parser() -> argparse.ArgumentParser:
             "maigret",
             "socialscan",
             "profile_parser",
+            "official_site_extractor",
         ],
     )
     run_tool.add_argument("--target-type", required=True)
@@ -549,6 +557,9 @@ def _default_timeout(tool_name: str) -> int:
         "sherlock": 120,
         "theharvester": 600,
         "amass": 1200,
+        "subfinder": 600,
+        "httpx": 300,
+        "katana": 600,
         "ghunt": 180,
         "phoneinfoga": 120,
         "spiderfoot": 1800,
@@ -557,6 +568,7 @@ def _default_timeout(tool_name: str) -> int:
         "maigret": 300,
         "socialscan": 120,
         "profile_parser": 60,
+        "official_site_extractor": 60,
     }[tool_name]
 
 

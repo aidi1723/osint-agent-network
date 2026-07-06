@@ -1,7 +1,9 @@
 import json
+import gzip
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.tools.sherlock import SherlockAdapter
 from app.tools.theharvester import TheHarvesterAdapter
@@ -10,10 +12,14 @@ from app.tools.ghunt import GHuntAdapter
 from app.tools.maigret import MaigretAdapter
 from app.tools.phoneinfoga import PhoneInfogaAdapter
 from app.tools.profile_parser import ProfileParserAdapter
+from app.tools.official_site_extractor import OfficialSiteExtractorAdapter
 from app.tools.spiderfoot import SpiderFootAdapter
 from app.tools.socialscan import SocialScanAdapter
 from app.tools.reconng import ReconNgAdapter
 from app.tools.company_news import CompanyNewsAdapter
+from app.tools.subfinder import SubfinderAdapter
+from app.tools.httpx import HttpxAdapter
+from app.tools.katana import KatanaAdapter
 
 
 class SherlockAdapterTests(unittest.TestCase):
@@ -176,6 +182,281 @@ class AmassAdapterTests(unittest.TestCase):
             ("subdomain", "vpn.example.com"),
             {(item.type, item.value) for item in parsed.entities},
         )
+
+
+class SubfinderAdapterTests(unittest.TestCase):
+    def test_parser_reads_jsonl_subdomains(self):
+        adapter = SubfinderAdapter()
+        records = [
+            {"host": "www.example.com", "source": "crtsh"},
+            {"host": "mail.example.com", "sources": ["alienvault", "certspotter"]},
+        ]
+
+        parsed = adapter.parse_jsonl(records, domain="example.com")
+
+        entity_values = {(item.type, item.value) for item in parsed.entities}
+        evidence = {(item.entity_value, item.evidence_kind) for item in parsed.evidence}
+        relationships = {
+            (item.from_value, item.to_value, item.relationship_type)
+            for item in parsed.relationships
+        }
+
+        self.assertIn(("domain", "example.com"), entity_values)
+        self.assertIn(("subdomain", "www.example.com"), entity_values)
+        self.assertIn(("subdomain", "mail.example.com"), entity_values)
+        self.assertIn(("www.example.com", "subfinder_passive_discovery"), evidence)
+        self.assertIn(
+            ("example.com", "www.example.com", "domain_has_subdomain"),
+            relationships,
+        )
+
+    def test_build_command_outputs_jsonl_artifact(self):
+        adapter = SubfinderAdapter(command="subfinder")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            command = adapter.build_command("domain", "example.com", Path(tmpdir), timeout_seconds=10)
+
+        self.assertEqual(command.args[:4], ["subfinder", "-d", "example.com", "-json"])
+        self.assertIn("-o", command.args)
+        self.assertIn("-max-time", command.args)
+        self.assertIn("1", command.args)
+        self.assertIn("-timeout", command.args)
+        self.assertEqual(command.timeout_seconds, 10)
+        self.assertTrue(command.expected_artifact.name.endswith(".jsonl"))
+        self.assertEqual(command.args[command.args.index("-o") + 1], command.expected_artifact.name)
+
+    def test_parse_artifact_handles_missing_output_as_empty_result(self):
+        adapter = SubfinderAdapter()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            parsed = adapter.parse_artifact(Path(tmpdir) / "missing.jsonl", target_value="example.com")
+
+        self.assertEqual(parsed.tool, "subfinder")
+        self.assertIn(("domain", "example.com"), {(item.type, item.value) for item in parsed.entities})
+
+
+class HttpxAdapterTests(unittest.TestCase):
+    def test_parser_reads_jsonl_live_urls_and_metadata(self):
+        adapter = HttpxAdapter()
+        records = [
+            {
+                "url": "https://www.example.com",
+                "input": "www.example.com",
+                "title": "Example Manufacturing",
+                "tech": ["nginx", "WordPress"],
+                "status_code": 200,
+            }
+        ]
+
+        parsed = adapter.parse_jsonl(records, target_type="subdomain", target_value="www.example.com")
+
+        entity_values = {(item.type, item.value) for item in parsed.entities}
+        evidence = {(item.entity_value, item.evidence_kind) for item in parsed.evidence}
+        relationships = {
+            (item.from_value, item.to_value, item.relationship_type)
+            for item in parsed.relationships
+        }
+
+        self.assertIn(("subdomain", "www.example.com"), entity_values)
+        self.assertIn(("url", "https://www.example.com"), entity_values)
+        self.assertIn(("website_title", "Example Manufacturing"), entity_values)
+        self.assertIn(("technology", "nginx"), entity_values)
+        self.assertIn(("https://www.example.com", "http_probe"), evidence)
+        self.assertIn(
+            ("www.example.com", "https://www.example.com", "host_serves_url"),
+            relationships,
+        )
+
+    def test_build_command_accepts_domain_target(self):
+        adapter = HttpxAdapter(command="httpx")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            command = adapter.build_command("domain", "example.com", Path(tmpdir), timeout_seconds=15)
+
+        self.assertEqual(command.args[:2], ["httpx", "-json"])
+        self.assertIn("-u", command.args)
+        self.assertIn("https://example.com", command.args)
+        self.assertIn("-timeout", command.args)
+        self.assertIn("-retries", command.args)
+        self.assertIn("0", command.args)
+        self.assertIn("-rl", command.args)
+        self.assertEqual(command.timeout_seconds, 15)
+        self.assertEqual(command.args[command.args.index("-o") + 1], command.expected_artifact.name)
+
+    def test_parse_artifact_handles_missing_output_as_empty_result(self):
+        adapter = HttpxAdapter()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            parsed = adapter.parse_artifact(Path(tmpdir) / "missing.jsonl", target_value="example.com")
+
+        self.assertEqual(parsed.tool, "httpx")
+        self.assertIn(("domain", "example.com"), {(item.type, item.value) for item in parsed.entities})
+
+
+class KatanaAdapterTests(unittest.TestCase):
+    def test_parser_keeps_relevant_business_pages(self):
+        adapter = KatanaAdapter()
+        records = [
+            {"url": "https://example.com/contact", "source": "href"},
+            {"url": "https://example.com/products/upvc-window", "source": "href"},
+            {"url": "https://cdn.example.com/assets/module_productDetail.css", "source": "href"},
+            {"url": "https://example.com/privacy", "source": "href"},
+        ]
+
+        parsed = adapter.parse_jsonl(records, url="https://example.com")
+
+        entity_values = {(item.type, item.value) for item in parsed.entities}
+        evidence = {(item.entity_value, item.evidence_kind) for item in parsed.evidence}
+        relationships = {
+            (item.from_value, item.to_value, item.relationship_type)
+            for item in parsed.relationships
+        }
+
+        self.assertIn(("url", "https://example.com/contact"), entity_values)
+        self.assertIn(("url", "https://example.com/products/upvc-window"), entity_values)
+        self.assertNotIn(("url", "https://cdn.example.com/assets/module_productDetail.css"), entity_values)
+        self.assertIn(("contact_page", "https://example.com/contact"), entity_values)
+        self.assertIn(("business_scope_page", "https://example.com/products/upvc-window"), entity_values)
+        self.assertNotIn(("url", "https://example.com/privacy"), entity_values)
+        self.assertIn(("https://example.com/contact", "katana_business_page"), evidence)
+        self.assertIn(
+            ("https://example.com", "https://example.com/contact", "site_has_relevant_page"),
+            relationships,
+        )
+
+    def test_build_command_crawls_url_with_jsonl_output(self):
+        adapter = KatanaAdapter(command="katana")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            command = adapter.build_command("url", "https://example.com", Path(tmpdir), timeout_seconds=20)
+
+        self.assertEqual(command.args[:2], ["katana", "-u"])
+        self.assertIn("https://example.com", command.args)
+        self.assertIn("-jsonl", command.args)
+        self.assertIn("-ct", command.args)
+        self.assertIn("30s", command.args)
+        self.assertIn("-timeout", command.args)
+        self.assertIn("-retry", command.args)
+        self.assertEqual(command.timeout_seconds, 20)
+        self.assertEqual(command.args[command.args.index("-o") + 1], command.expected_artifact.name)
+
+    def test_parse_artifact_handles_missing_output_as_empty_result(self):
+        adapter = KatanaAdapter()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            parsed = adapter.parse_artifact(Path(tmpdir) / "missing.jsonl", target_value="https://example.com")
+
+        self.assertEqual(parsed.tool, "katana")
+        self.assertIn(("url", "https://example.com"), {(item.type, item.value) for item in parsed.entities})
+
+
+class OfficialSiteExtractorAdapterTests(unittest.TestCase):
+    def test_parser_extracts_contact_and_business_fields_from_html(self):
+        adapter = OfficialSiteExtractorAdapter()
+        html = """
+        <html>
+          <head>
+            <title>Example Manufacturing - uPVC Windows and Curtain Wall</title>
+            <script type="application/ld+json">
+              {"@type":"Organization","name":"Example Manufacturing LLC","url":"https://example.com","email":"sales@example.com","telephone":"+1 212 555 0123"}
+            </script>
+          </head>
+          <body>
+            <h1>Example Manufacturing LLC</h1>
+            <p>We manufacture uPVC windows, aluminum curtain wall systems, and sliding doors for commercial projects.</p>
+            <p>Contact sales@example.com or call +1 212 555 0123.</p>
+            <p>Address: 88 Industrial Road, Newark, NJ.</p>
+          </body>
+        </html>
+        """
+
+        parsed = adapter.parse_html(html, url="https://example.com/about")
+
+        entity_values = {(item.type, item.value) for item in parsed.entities}
+        evidence = {(item.entity_value, item.evidence_kind) for item in parsed.evidence}
+        relationships = {
+            (item.from_value, item.to_value, item.relationship_type)
+            for item in parsed.relationships
+        }
+
+        self.assertIn(("url", "https://example.com/about"), entity_values)
+        self.assertIn(("organization", "Example Manufacturing LLC"), entity_values)
+        self.assertIn(("email", "sales@example.com"), entity_values)
+        self.assertIn(("phone", "+12125550123"), entity_values)
+        self.assertIn(("business_scope", "uPVC windows"), entity_values)
+        self.assertIn(("business_scope", "aluminum curtain wall systems"), entity_values)
+        self.assertIn(("address", "88 Industrial Road, Newark, NJ"), entity_values)
+        self.assertIn(("sales@example.com", "official_site_contact"), evidence)
+        self.assertIn(("uPVC windows", "official_site_business_scope"), evidence)
+        self.assertIn(
+            ("https://example.com/about", "sales@example.com", "official_site_has_contact_email"),
+            relationships,
+        )
+
+    def test_build_command_is_artifact_parser(self):
+        adapter = OfficialSiteExtractorAdapter()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            command = adapter.build_command("url", "https://example.com/contact", Path(tmpdir), timeout_seconds=5)
+
+        self.assertEqual(command.args, ["PARSE_ARTIFACT", "https://example.com/contact"])
+        self.assertEqual(command.expected_artifact.name, "official_site_input.html")
+        self.assertEqual(command.timeout_seconds, 5)
+
+    def test_run_fetches_html_to_expected_artifact(self):
+        html = b"""
+        <html><body>
+          <h1>Example Manufacturing LLC</h1>
+          <p>Contact sales@example.com for uPVC windows.</p>
+        </body></html>
+        """
+
+        class Response:
+            status = 200
+            headers = {"Content-Encoding": "gzip"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self, limit):
+                return gzip.compress(html)[:limit]
+
+        url = "https://example.com/contact"
+        adapter = OfficialSiteExtractorAdapter()
+        with patch("app.tools.official_site_extractor.request.urlopen", return_value=Response()):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                result = adapter.run("url", url, Path(tmpdir), timeout_seconds=5)
+                artifact_exists = result.command.expected_artifact.exists()
+                parsed = adapter.parse_artifact(result.command.expected_artifact, target_value=url)
+
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue(artifact_exists)
+        self.assertIn(("email", "sales@example.com"), {(item.type, item.value) for item in parsed.entities})
+
+    def test_parser_extracts_srr_style_identity_scope_and_filters_script_phone_noise(self):
+        adapter = OfficialSiteExtractorAdapter()
+        html = """
+        <html>
+          <head>
+            <title>SAMPLE AUTO PARTS COMPANY LIMITED</title>
+            <meta name="description" content="SampleCo auto parts, automotive spare parts and brake components supplier">
+          </head>
+          <body>
+            <h1>SAMPLE AUTO PARTS COMPANY LIMITED</h1>
+            <p>We supply auto parts, brake components, suspension parts and engine parts.</p>
+            <p>Tel: +852 8206 1801</p>
+            <p>Tel: 020-3880-6857</p>
+            <p>Noise: +86 991 3966766 3966788</p>
+          </body>
+        </html>
+        """
+
+        parsed = adapter.parse_html(html, url="https://example-target.test")
+
+        entity_values = {(item.type, item.value) for item in parsed.entities}
+
+        self.assertIn(("organization", "SAMPLE AUTO PARTS COMPANY LIMITED"), entity_values)
+        self.assertIn(("business_scope", "auto parts"), entity_values)
+        self.assertIn(("business_scope", "brake components"), entity_values)
+        self.assertIn(("phone", "+85282061801"), entity_values)
+        self.assertIn(("phone", "02038806857"), entity_values)
+        self.assertNotIn(("phone", "+8699139667663966788"), entity_values)
 
 
 class GHuntAdapterTests(unittest.TestCase):

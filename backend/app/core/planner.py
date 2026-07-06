@@ -44,21 +44,43 @@ class PlannedJob:
         return (self.tool_name, self.target_type, self.target_value)
 
 
+@dataclass(frozen=True)
+class InitialJobPlan:
+    jobs: list[PlannedJob]
+    skipped_routes: list[IntelRoute]
+
+
 def plan_initial_jobs(
     seed_type: str,
     seed_value: str,
     strategy: StrategyProfile,
     registry: ToolRegistry,
     runtime_env: dict[str, str] | None = None,
+    respect_tool_health: bool = False,
 ) -> list[PlannedJob]:
+    return plan_initial_job_set(seed_type, seed_value, strategy, registry, runtime_env, respect_tool_health).jobs
+
+
+def plan_initial_job_set(
+    seed_type: str,
+    seed_value: str,
+    strategy: StrategyProfile,
+    registry: ToolRegistry,
+    runtime_env: dict[str, str] | None = None,
+    respect_tool_health: bool = False,
+) -> InitialJobPlan:
     plan = build_intel_plan(
         target_type=seed_type,
         target_value=seed_value,
         strategy_name=strategy.name,
         registry=registry,
         runtime_env=runtime_env,
+        respect_tool_health=respect_tool_health,
     )
-    return [_route_to_planned_job(route, depth=_route_depth(route)) for route in plan.routes]
+    return InitialJobPlan(
+        jobs=[_route_to_planned_job(route, depth=_route_depth(route)) for route in plan.routes],
+        skipped_routes=plan.skipped_routes,
+    )
 
 
 def plan_followup_jobs(
@@ -69,6 +91,7 @@ def plan_followup_jobs(
     registry: ToolRegistry,
     already_planned: set[tuple[str, str, str]],
     runtime_env: dict[str, str] | None = None,
+    respect_tool_health: bool = False,
 ) -> list[PlannedJob]:
     if depth >= strategy.max_depth:
         return []
@@ -85,6 +108,8 @@ def plan_followup_jobs(
         candidates.append(("username", normalized))
     elif entity_type == "profile_url":
         candidates.append(("profile_url", normalized))
+    elif entity_type == "url":
+        candidates.append(("url", normalized))
     elif entity_type in {"domain", "subdomain"}:
         candidates.append(("domain", normalized))
     elif entity_type in {"company", "organization"}:
@@ -92,7 +117,14 @@ def plan_followup_jobs(
 
     planned: list[PlannedJob] = []
     for target_type, target_value in candidates:
-        plan = build_intel_plan(target_type, target_value, strategy.name, registry, runtime_env=runtime_env)
+        plan = build_intel_plan(
+            target_type,
+            target_value,
+            strategy.name,
+            registry,
+            runtime_env=runtime_env,
+            respect_tool_health=respect_tool_health,
+        )
         for route in plan.routes:
             job = _route_to_planned_job(route, depth=depth + 1)
             if job.key not in already_planned:

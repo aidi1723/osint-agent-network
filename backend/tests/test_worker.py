@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from app.core.planner import PlannedJob
 from app.tools.base import (
@@ -135,13 +136,160 @@ class HeavyToolAdapter:
         )
 
 
+class HttpxLiveUrlAdapter:
+    name = "httpx"
+
+    def run(self, target_type: str, target_value: str, workdir: Path, timeout_seconds: int):
+        artifact = workdir / "httpx.jsonl"
+        write_json_artifact(artifact, [{"url": "https://example-target.test", "input": target_value}])
+        return ToolRunResult(
+            command=ToolCommand(
+                args=["fake-httpx", target_value],
+                cwd=workdir,
+                expected_artifact=artifact,
+                timeout_seconds=timeout_seconds,
+            ),
+            returncode=0,
+            stdout_excerpt="ok",
+            stderr_excerpt="",
+        )
+
+    def parse_artifact(self, artifact_path: Path, target_value: str):
+        return ParsedToolOutput(
+            tool=self.name,
+            target_type="domain",
+            target_value=target_value,
+            entities=[
+                NormalizedEntity("domain", target_value, self.name, 0.55),
+                NormalizedEntity("url", "https://example-target.test", self.name, 0.62),
+            ],
+            evidence=[
+                NormalizedEvidence(
+                    "https://example-target.test",
+                    "http_probe",
+                    self.name,
+                    "httpx confirmed live URL https://example-target.test",
+                )
+            ],
+            relationships=[
+                NormalizedRelationship(
+                    target_value,
+                    "https://example-target.test",
+                    "host_serves_url",
+                    0.62,
+                )
+            ],
+        )
+
+
+class LargeOutputAdapter(FakeAdapter):
+    name = "large_output"
+
+    def run(self, target_type: str, target_value: str, workdir: Path, timeout_seconds: int):
+        artifact = workdir / "large.json"
+        write_json_artifact(artifact, {"target": target_value})
+        return ToolRunResult(
+            command=ToolCommand(
+                args=["large-output", target_value],
+                cwd=workdir,
+                expected_artifact=artifact,
+                timeout_seconds=timeout_seconds,
+            ),
+            returncode=0,
+            stdout_excerpt="x" * 20000,
+            stderr_excerpt="y" * 20000,
+        )
+
+    def parse_artifact(self, artifact_path: Path, target_value: str):
+        return ParsedToolOutput(
+            tool=self.name,
+            target_type="domain",
+            target_value=target_value,
+            entities=[NormalizedEntity("domain", target_value, self.name, 0.55)],
+            evidence=[],
+            relationships=[],
+        )
+
+
+class OfficialSiteOutputAdapter:
+    name = "official_site_extractor"
+
+    def run(self, target_type: str, target_value: str, workdir: Path, timeout_seconds: int):
+        artifact = workdir / "official.html"
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text("<html></html>", encoding="utf-8")
+        return ToolRunResult(
+            command=ToolCommand(
+                args=["official-site-extractor", target_value],
+                cwd=workdir,
+                expected_artifact=artifact,
+                timeout_seconds=timeout_seconds,
+            ),
+            returncode=0,
+            stdout_excerpt="ok",
+            stderr_excerpt="",
+        )
+
+    def parse_artifact(self, artifact_path: Path, target_value: str):
+        return ParsedToolOutput(
+            tool=self.name,
+            target_type="url",
+            target_value=target_value,
+            entities=[
+                NormalizedEntity("url", target_value, self.name, 0.72),
+                NormalizedEntity("organization", "SAMPLE AUTO PARTS COMPANY LIMITED", self.name, 0.76),
+                NormalizedEntity("phone", "+85282061801", self.name, 0.78),
+                NormalizedEntity("business_scope", "auto parts", self.name, 0.74),
+            ],
+            evidence=[
+                NormalizedEvidence(
+                    "SAMPLE AUTO PARTS COMPANY LIMITED",
+                    "official_site_identity",
+                    self.name,
+                    "Official site names organization.",
+                ),
+                NormalizedEvidence(
+                    "+85282061801",
+                    "official_site_contact",
+                    self.name,
+                    "Official site lists phone.",
+                ),
+                NormalizedEvidence(
+                    "auto parts",
+                    "official_site_business_scope",
+                    self.name,
+                    "Official site describes auto parts.",
+                ),
+            ],
+            relationships=[
+                NormalizedRelationship(target_value, "SAMPLE AUTO PARTS COMPANY LIMITED", "official_site_names_organization", 0.76),
+                NormalizedRelationship(target_value, "auto parts", "official_site_describes_business_scope", 0.74),
+            ],
+        )
+
+
+class MissingCommandAdapter:
+    name = "missing_tool"
+
+    def build_command(self, target_type: str, target_value: str, workdir: Path, timeout_seconds: int):
+        return ToolCommand(
+            args=["definitely-missing-osint-command", target_value],
+            cwd=workdir,
+            expected_artifact=workdir / "missing.json",
+            timeout_seconds=timeout_seconds,
+        )
+
+    def parse_artifact(self, artifact_path: Path, target_value: str):
+        raise AssertionError("blocked commands should not be parsed")
+
+
 class WorkerTests(unittest.TestCase):
     def test_worker_runs_agent_orchestration_jobs_locally(self):
         store = MemoryStore()
         investigation = store.create_investigation(
             name="企业背调",
             seed_type="company",
-            seed_value="Family Hospitality LLC",
+            seed_value="Sample Hospitality LLC",
             strategy_name="deep",
         )
 
@@ -162,7 +310,7 @@ class WorkerTests(unittest.TestCase):
         investigation = store.create_investigation(
             name="企业背调",
             seed_type="company",
-            seed_value="Family Hospitality LLC",
+            seed_value="Sample Hospitality LLC",
             strategy_name="deep",
         )
         run_investigation_jobs(store, investigation.id, max_jobs=10)
@@ -224,6 +372,78 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(any("递进推演" in event["message"] for event in detail["events"]))
         self.assertTrue(detail["risk_report"]["review_required"])
         self.assertEqual(detail["status"], "NEEDS_REVIEW")
+
+    def test_missing_external_tool_marks_investigation_blocked(self):
+        store = MemoryStore()
+        investigation = store.create_investigation(
+            name="domain environment blocker",
+            seed_type="domain",
+            seed_value="example.com",
+            strategy_name="quick",
+        )
+        first_job = store.list_jobs(investigation.id)[0]
+        store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    **first_job,
+                    "tool_name": "missing_tool",
+                    "target_type": "domain",
+                    "target_value": "example.com",
+                    "depth": 0,
+                    "status": "QUEUED",
+                }
+            ],
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            result = run_investigation_jobs(
+                store,
+                investigation.id,
+                max_jobs=1,
+                artifact_root=Path(tmpdir),
+                adapter_factory=lambda name: MissingCommandAdapter(),
+            )
+
+        detail = store.get_investigation(investigation.id)
+
+        self.assertEqual(result["blocked"], 1)
+        self.assertEqual(result["failed"], 0)
+        self.assertEqual(detail["jobs"][0]["status"], "BLOCKED")
+        self.assertEqual(detail["status"], "BLOCKED")
+        self.assertEqual(detail["summary"], "工具任务被环境依赖阻断")
+        self.assertTrue(any("缺少工具命令" in event["message"] for event in detail["events"]))
+
+    def test_planning_blocked_investigation_stays_blocked_when_run_jobs_is_invoked(self):
+        store = MemoryStore()
+        with (
+            patch("app.core.tool_health.shutil.which", side_effect=lambda command: "/usr/bin/python3" if command == "python3" else None),
+            patch("app.core.tool_health.Path.exists", return_value=False),
+        ):
+            investigation = store.create_investigation(
+                name="planning blocked domain",
+                seed_type="domain",
+                seed_value="example.com",
+                strategy_name="standard",
+                respect_tool_health=True,
+            )
+
+        self.assertEqual(store.list_jobs(investigation.id), [])
+
+        with TemporaryDirectory() as tmpdir:
+            result = run_investigation_jobs(
+                store,
+                investigation.id,
+                max_jobs=1,
+                artifact_root=Path(tmpdir),
+            )
+
+        detail = store.get_investigation(investigation.id)
+
+        self.assertEqual(result["started"], 0)
+        self.assertEqual(detail["status"], "BLOCKED")
+        self.assertEqual(detail["summary"], "工具任务被环境依赖阻断")
+        self.assertTrue(detail["metadata"]["initial_skipped_routes"])
 
     def test_tool_evidence_is_written_to_evidence_ledger(self):
         store = MemoryStore()
@@ -303,6 +523,174 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(result["queued_followups"], 0)
         self.assertNotIn("profile_parser", {job["tool_name"] for job in detail["jobs"]})
 
+    def test_http_probe_url_queues_site_collection_followups_despite_medium_confidence(self):
+        store = MemoryStore()
+        investigation = store.create_investigation(
+            name="SampleCo domain quick probe",
+            seed_type="domain",
+            seed_value="example-target.test",
+            strategy_name="quick",
+        )
+        first_job = store.list_jobs(investigation.id)[0]
+        store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    **first_job,
+                    "tool_name": "httpx",
+                    "target_type": "domain",
+                    "target_value": "example-target.test",
+                    "depth": 0,
+                    "status": "QUEUED",
+                }
+            ],
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            result = run_investigation_jobs(
+                store,
+                investigation.id,
+                max_jobs=1,
+                artifact_root=Path(tmpdir),
+                adapter_factory=lambda name: HttpxLiveUrlAdapter(),
+            )
+
+        detail = store.get_investigation(investigation.id)
+        job_keys = {(job["tool_name"], job["target_type"], job["target_value"]) for job in detail["jobs"]}
+
+        self.assertEqual(result["completed"], 1)
+        self.assertGreaterEqual(result["queued_followups"], 2)
+        self.assertIn(("katana", "url", "https://example-target.test"), job_keys)
+        self.assertIn(("official_site_extractor", "url", "https://example-target.test"), job_keys)
+
+    def test_progressive_followups_respect_tool_health(self):
+        store = MemoryStore()
+        investigation = store.create_investigation(
+            name="SampleCo domain quick probe with health",
+            seed_type="domain",
+            seed_value="example-target.test",
+            strategy_name="quick",
+            metadata={"respect_tool_health": True},
+        )
+        first_job = store.list_jobs(investigation.id)[0]
+        store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    **first_job,
+                    "tool_name": "httpx",
+                    "target_type": "domain",
+                    "target_value": "example-target.test",
+                    "depth": 0,
+                    "status": "QUEUED",
+                }
+            ],
+        )
+        health_report = {
+            "tools": [
+                {"name": "httpx", "status": "ready", "reason": "command available"},
+                {"name": "katana", "status": "ready", "reason": "command available"},
+                {"name": "official_site_extractor", "status": "ready", "reason": "internal adapter"},
+                {"name": "subfinder", "status": "ready", "reason": "command available"},
+                {"name": "theharvester", "status": "missing_config", "reason": "THEHARVESTER_PATH does not exist"},
+            ]
+        }
+
+        with TemporaryDirectory() as tmpdir, patch("app.core.intel_gateway.build_tool_health_report", return_value=health_report):
+            result = run_investigation_jobs(
+                store,
+                investigation.id,
+                max_jobs=1,
+                artifact_root=Path(tmpdir),
+                adapter_factory=lambda name: HttpxLiveUrlAdapter(),
+            )
+
+        detail = store.get_investigation(investigation.id)
+        job_keys = {(job["tool_name"], job["target_type"], job["target_value"]) for job in detail["jobs"]}
+
+        self.assertGreaterEqual(result["queued_followups"], 2)
+        self.assertNotIn(("theharvester", "domain", "example-target.test"), job_keys)
+        self.assertIn(("katana", "url", "https://example-target.test"), job_keys)
+
+    def test_worker_truncates_large_tool_output_before_writing_events(self):
+        store = MemoryStore()
+        investigation = store.create_investigation(
+            name="large output event",
+            seed_type="domain",
+            seed_value="example.com",
+            strategy_name="quick",
+        )
+        first_job = store.list_jobs(investigation.id)[0]
+        store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    **first_job,
+                    "tool_name": "large_output",
+                    "target_type": "domain",
+                    "target_value": "example.com",
+                    "depth": 0,
+                    "status": "QUEUED",
+                }
+            ],
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            run_investigation_jobs(
+                store,
+                investigation.id,
+                max_jobs=1,
+                artifact_root=Path(tmpdir),
+                adapter_factory=lambda name: LargeOutputAdapter(),
+            )
+
+        detail = store.get_investigation(investigation.id)
+        event = next(item for item in detail["events"] if item["message"] == "完成工具任务：large_output")
+
+        self.assertLessEqual(len(event["metadata"]["stdout_excerpt"]), 4096)
+        self.assertLessEqual(len(event["metadata"]["stderr_excerpt"]), 4096)
+        self.assertIn("truncated", event["metadata"]["stdout_excerpt"])
+
+    def test_official_site_output_creates_source_backed_facts(self):
+        store = MemoryStore()
+        investigation = store.create_investigation(
+            name="official site fact promotion",
+            seed_type="domain",
+            seed_value="example-target.test",
+            strategy_name="quick",
+        )
+        first_job = store.list_jobs(investigation.id)[0]
+        store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    **first_job,
+                    "tool_name": "official_site_extractor",
+                    "target_type": "url",
+                    "target_value": "https://example-target.test",
+                    "depth": 0,
+                    "status": "QUEUED",
+                }
+            ],
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            run_investigation_jobs(
+                store,
+                investigation.id,
+                max_jobs=1,
+                artifact_root=Path(tmpdir),
+                adapter_factory=lambda name: OfficialSiteOutputAdapter(),
+            )
+
+        detail = store.get_investigation(investigation.id)
+        fact_keys = {(fact["predicate"], fact["object"]) for fact in detail["facts"]}
+
+        self.assertIn(("has_company_identity", "SAMPLE AUTO PARTS COMPANY LIMITED"), fact_keys)
+        self.assertIn(("uses_contact_phone", "+85282061801"), fact_keys)
+        self.assertIn(("has_business_scope", "auto parts"), fact_keys)
+        self.assertTrue(all(fact["promotion_stage"] == "ACCEPTED_FACT" for fact in detail["facts"]))
+
     def test_worker_skips_when_investigation_already_has_running_job(self):
         store = MemoryStore()
         investigation = store.create_investigation(
@@ -331,7 +719,7 @@ class WorkerTests(unittest.TestCase):
         investigation = store.create_investigation(
             name="staged company workflow",
             seed_type="company",
-            seed_value="SRR Genuine Parts",
+            seed_value="Sample Auto Parts Co.",
             strategy_name="deep",
         )
         store.replace_jobs(
@@ -342,7 +730,7 @@ class WorkerTests(unittest.TestCase):
                     "investigation_id": investigation.id,
                     "tool_name": "company_osint",
                     "target_type": "company",
-                    "target_value": "SRR Genuine Parts",
+                    "target_value": "Sample Auto Parts Co.",
                     "depth": 0,
                     "status": "QUEUED",
                     "agent_role": "enterprise_intel_agent",
@@ -354,7 +742,7 @@ class WorkerTests(unittest.TestCase):
                     "investigation_id": investigation.id,
                     "tool_name": "cross_verification",
                     "target_type": "company",
-                    "target_value": "SRR Genuine Parts",
+                    "target_value": "Sample Auto Parts Co.",
                     "depth": 1,
                     "status": "QUEUED",
                     "agent_role": "cross_verification_agent",
@@ -378,7 +766,7 @@ class WorkerTests(unittest.TestCase):
                     "investigation_id": investigation.id,
                     "tool_name": "analysis_judgement",
                     "target_type": "company",
-                    "target_value": "SRR Genuine Parts",
+                    "target_value": "Sample Auto Parts Co.",
                     "depth": 2,
                     "status": "QUEUED",
                     "agent_role": "analysis_judgement_agent",
@@ -453,9 +841,9 @@ class WorkerTests(unittest.TestCase):
             db_path = Path(tmpdir) / "osint.sqlite"
             store = SQLiteStore(str(db_path))
             investigation = store.create_investigation(
-                name="弱线索买家：Long Way",
+                name="弱线索买家：Sample Lead",
                 seed_type="company",
-                seed_value="Long Way",
+                seed_value="Sample Lead",
                 strategy_name="deep",
             )
 
@@ -465,7 +853,7 @@ class WorkerTests(unittest.TestCase):
                     PlannedJob(
                         tool_name="identity_match_review",
                         target_type="sparse_lead",
-                        target_value="Long Way / in19034126503jgqn",
+                        target_value="Sample Lead / member-redacted",
                         depth=1,
                         agent_role="cross_verification_agent",
                         output_contract="claims,evidence: identity_match_confidence",
@@ -484,17 +872,17 @@ class WorkerTests(unittest.TestCase):
     def test_worker_extracts_sparse_lead_anchors_from_metadata(self):
         store = MemoryStore()
         investigation = store.create_investigation(
-            name="Alibaba 买家弱线索：Long Way",
+            name="Alibaba 买家弱线索：Sample Lead",
             seed_type="sparse_lead",
-            seed_value="Long Way / in19034126503jgqn",
+            seed_value="Sample Lead / member-redacted",
             strategy_name="quick",
             metadata={
                 "platform": "Alibaba",
-                "lead_display_name": "Long Way",
-                "member_id": "in19034126503jgqn",
+                "lead_display_name": "Sample Lead",
+                "member_id": "member-redacted",
                 "country_region": "IN",
                 "registration_year": "2023",
-                "company_name_raw": "Long Way",
+                "company_name_raw": "Sample Lead",
                 "privacy_state": "email_phone_hidden",
                 "categories": ["Induction Cookers", "Gas Cooktops"],
                 "recent_rfqs": ["2200W Best Quality And Low Price Durable Electric Cook Top"],
@@ -515,8 +903,8 @@ class WorkerTests(unittest.TestCase):
         relationship_types = {item["relationship_type"] for item in detail["relationships"]}
 
         self.assertEqual(result["completed"], 1)
-        self.assertIn(("platform_account", "Long Way"), entity_pairs)
-        self.assertIn(("platform_member_id", "in19034126503jgqn"), entity_pairs)
+        self.assertIn(("platform_account", "Sample Lead"), entity_pairs)
+        self.assertIn(("platform_member_id", "member-redacted"), entity_pairs)
         self.assertIn(("country_region", "IN"), entity_pairs)
         self.assertIn(("purchase_category", "Induction Cookers"), entity_pairs)
         self.assertIn(("rfq_text", "2200W Best Quality And Low Price Durable Electric Cook Top"), entity_pairs)
@@ -773,6 +1161,82 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(result["started"], 0)
         self.assertNotIn("完整度评分：1.0 / 100", detail["report_markdown"])
         self.assertIn(f"完整度评分：{result['quality_assessment']['score']} / 100", detail["report_markdown"])
+
+    def test_completed_quality_gate_summary_is_stable_when_rerun_has_no_jobs(self):
+        store = MemoryStore()
+        investigation = store.create_investigation(
+            name="已完成官网侦察",
+            seed_type="domain",
+            seed_value="example-target.test",
+            strategy_name="quick",
+        )
+        store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": "job-official-site",
+                    "investigation_id": investigation.id,
+                    "tool_name": "official_site_extractor",
+                    "target_type": "url",
+                    "target_value": "https://example-target.test",
+                    "depth": 1,
+                    "status": "COMPLETED",
+                    "agent_role": "tool_agent",
+                    "output_contract": "entities,evidence,relationships",
+                    "depends_on": "",
+                }
+            ],
+        )
+        store.add_entity(investigation.id, "organization", "SAMPLE AUTO PARTS COMPANY LIMITED", "official_site_extractor", 0.76)
+        store.add_entity(investigation.id, "url", "https://example-target.test", "official_site_extractor", 0.72)
+        store.add_entity(investigation.id, "phone", "+85282061801", "official_site_extractor", 0.78)
+        store.add_entity(investigation.id, "business_scope", "auto parts", "official_site_extractor", 0.74)
+        store.add_relationship(investigation.id, "https://example-target.test", "auto parts", "official_site_describes_business_scope", 0.74)
+        evidence = store.add_evidence_record(
+            investigation.id,
+            "https://example-target.test",
+            "official_site_identity",
+            "official_site_extractor",
+            "Official site names organization.",
+            0.82,
+        )
+        store.add_fact(
+            investigation.id,
+            "Official site supports company identity.",
+            "https://example-target.test",
+            "has_company_identity",
+            "SAMPLE AUTO PARTS COMPANY LIMITED",
+            "CONFIRMED",
+            0.76,
+            evidence["admiralty_code"],
+            [evidence["id"]],
+        )
+        store.add_fact(
+            investigation.id,
+            "Official site supports business scope.",
+            "https://example-target.test",
+            "has_business_scope",
+            "auto parts",
+            "CONFIRMED",
+            0.74,
+            evidence["admiralty_code"],
+            [evidence["id"]],
+        )
+        store.complete_task(
+            investigation.id,
+            "local-worker",
+            "COMPLETED",
+            "旧摘要",
+            "## BLUF\nOfficial site source-backed domain reconnaissance is complete.",
+            0.8,
+        )
+
+        result = run_investigation_jobs(store, investigation.id, max_jobs=1, artifact_root=Path("/tmp/unused"))
+        detail = store.get_investigation(investigation.id)
+
+        self.assertEqual(result["started"], 0)
+        self.assertEqual(detail["status"], "COMPLETED")
+        self.assertIn("质量闸门已通过", detail["summary"])
 
     def test_sparse_lead_review_workflow_plans_second_round_collection(self):
         store = MemoryStore()

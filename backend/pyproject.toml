@@ -6,5 +6,5 @@ license = "Proprietary"
 dependencies = []
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
+pythonpath = [".", ".."]
 testpaths = ["tests"]

@@ -38,8 +38,8 @@ class NormalizationTests(unittest.TestCase):
 
     def test_normalizes_sparse_lead_human_readable_seed(self):
         self.assertEqual(
-            normalize_target("sparse_lead", "  Long Way / in19034126503jgqn  "),
-            "Long Way / in19034126503jgqn",
+            normalize_target("sparse_lead", "  Sample Lead / member-redacted  "),
+            "Sample Lead / member-redacted",
         )
 
         with self.assertRaises(NormalizationError):
@@ -268,7 +268,7 @@ class PlannerTests(unittest.TestCase):
         job_keys = {(job.tool_name, job.target_type, job.target_value) for job in jobs}
         self.assertIn(("socialscan", "email", "admin@example.com"), job_keys)
         self.assertIn(("spiderfoot", "email", "admin@example.com"), job_keys)
-        self.assertIn(("reconng", "email", "admin@example.com"), job_keys)
+        self.assertNotIn(("reconng", "email", "admin@example.com"), job_keys)
         self.assertNotIn(("sherlock", "username", "admin"), job_keys)
         self.assertNotIn(("maigret", "username", "admin"), job_keys)
 
@@ -276,7 +276,7 @@ class PlannerTests(unittest.TestCase):
         registry = default_tool_registry()
         jobs = plan_initial_jobs(
             seed_type="company",
-            seed_value="Family Hospitality LLC / Faiz Chaudhry",
+            seed_value="Sample Hospitality LLC / Sample Contact",
             strategy=StrategyProfile.deep(),
             registry=registry,
         )
@@ -305,7 +305,7 @@ class PlannerTests(unittest.TestCase):
         registry = default_tool_registry()
         jobs = plan_initial_jobs(
             seed_type="sparse_lead",
-            seed_value="Long Way / in19034126503jgqn",
+            seed_value="Sample Lead / member-redacted",
             strategy=StrategyProfile.deep(),
             registry=registry,
         )
@@ -337,7 +337,7 @@ class PlannerTests(unittest.TestCase):
         registry = default_tool_registry()
         jobs = plan_initial_jobs(
             seed_type="sparse_lead",
-            seed_value="Long Way / in19034126503jgqn",
+            seed_value="Sample Lead / member-redacted",
             strategy=StrategyProfile.quick(),
             registry=registry,
         )
@@ -362,6 +362,36 @@ class PlannerTests(unittest.TestCase):
             {(job.tool_name, job.target_type, job.target_value) for job in jobs},
             {("profile_parser", "profile_url", "https://github.com/admin")},
         )
+
+    def test_url_followup_queues_site_crawl_and_official_site_extraction(self):
+        registry = default_tool_registry()
+        jobs = plan_progressive_jobs(
+            entities=[{"type": "url", "value": "https://example-target.test"}],
+            relationships=[],
+            depth=0,
+            strategy=StrategyProfile.standard(),
+            registry=registry,
+            already_planned=set(),
+        )
+
+        job_keys = {(job.tool_name, job.target_type, job.target_value) for job in jobs}
+        self.assertIn(("katana", "url", "https://example-target.test"), job_keys)
+        self.assertIn(("official_site_extractor", "url", "https://example-target.test"), job_keys)
+
+    def test_quick_url_followup_keeps_site_crawl_and_official_site_extraction(self):
+        registry = default_tool_registry()
+        jobs = plan_progressive_jobs(
+            entities=[{"type": "url", "value": "https://example-target.test"}],
+            relationships=[],
+            depth=0,
+            strategy=StrategyProfile.quick(),
+            registry=registry,
+            already_planned=set(),
+        )
+
+        job_keys = {(job.tool_name, job.target_type, job.target_value) for job in jobs}
+        self.assertIn(("katana", "url", "https://example-target.test"), job_keys)
+        self.assertIn(("official_site_extractor", "url", "https://example-target.test"), job_keys)
 
     def test_progressive_inference_expands_website_email_phone_and_news(self):
         registry = default_tool_registry()

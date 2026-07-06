@@ -187,6 +187,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     seed_value=payload["seed_value"],
                     strategy_name=payload.get("strategy", "standard"),
                     metadata=payload.get("metadata", {}),
+                    respect_tool_health=True,
                 )
             except (KeyError, ValueError, NormalizationError) as exc:
                 self._json({"detail": str(exc)}, status=400)
@@ -684,6 +685,7 @@ def system_status_payload(store_obj=store, root_dir: str | None = None) -> dict:
         "investigations": {
             "total": totals.get("investigations", 0),
             "by_status": counts.get("investigations_by_status", {}),
+            "outcome_metrics": _investigation_outcome_metrics(counts.get("investigations_by_status", {})),
         },
         "jobs": {
             "total": totals.get("jobs", 0),
@@ -701,6 +703,32 @@ def system_status_payload(store_obj=store, root_dir: str | None = None) -> dict:
             "health": tool_health["summary"],
         },
         "scripts": scripts,
+    }
+
+
+def _investigation_outcome_metrics(by_status: dict) -> dict:
+    success_total = by_status.get("COMPLETED", 0)
+    blocked_total = by_status.get("BLOCKED", 0)
+    failed_total = by_status.get("FAILED", 0) + by_status.get("PARTIAL_FAILED", 0)
+    terminal_total = success_total + blocked_total + failed_total
+    if not terminal_total:
+        return {
+            "terminal_total": 0,
+            "success_total": 0,
+            "blocked_total": 0,
+            "failed_total": 0,
+            "success_rate": 0.0,
+            "blocked_rate": 0.0,
+            "failed_rate": 0.0,
+        }
+    return {
+        "terminal_total": terminal_total,
+        "success_total": success_total,
+        "blocked_total": blocked_total,
+        "failed_total": failed_total,
+        "success_rate": round(success_total / terminal_total, 4),
+        "blocked_rate": round(blocked_total / terminal_total, 4),
+        "failed_rate": round(failed_total / terminal_total, 4),
     }
 
 

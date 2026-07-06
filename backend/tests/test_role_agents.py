@@ -132,12 +132,12 @@ class LocalRoleAgentTests(unittest.TestCase):
         investigation = store.create_investigation(
             name="Sparse lead dependency order",
             seed_type="sparse_lead",
-            seed_value="Alibaba:in19034126503jgqn",
+            seed_value="Alibaba:member-redacted",
             strategy_name="deep",
             metadata={
                 "platform": "Alibaba",
-                "lead_display_name": "Long Way",
-                "member_id": "in19034126503jgqn",
+                "lead_display_name": "Sample Lead",
+                "member_id": "member-redacted",
                 "country_region": "IN",
                 "categories": ["Induction Cookers"],
                 "recent_rfqs": ["2200W Electric Cook Top"],
@@ -171,7 +171,7 @@ class LocalRoleAgentTests(unittest.TestCase):
         investigation = store.create_investigation(
             name="Stable scheduling",
             seed_type="company",
-            seed_value="SRR Genuine Parts",
+            seed_value="Sample Auto Parts Co.",
             strategy_name="deep",
         )
         store.replace_jobs(
@@ -182,7 +182,7 @@ class LocalRoleAgentTests(unittest.TestCase):
                     "investigation_id": investigation.id,
                     "tool_name": "company_osint",
                     "target_type": "company",
-                    "target_value": "SRR Genuine Parts",
+                    "target_value": "Sample Auto Parts Co.",
                     "depth": 0,
                     "status": "QUEUED",
                     "agent_role": "enterprise_intel_agent",
@@ -194,7 +194,7 @@ class LocalRoleAgentTests(unittest.TestCase):
                     "investigation_id": investigation.id,
                     "tool_name": "cross_verification",
                     "target_type": "company",
-                    "target_value": "SRR Genuine Parts",
+                    "target_value": "Sample Auto Parts Co.",
                     "depth": 1,
                     "status": "QUEUED",
                     "agent_role": "cross_verification_agent",
@@ -206,7 +206,7 @@ class LocalRoleAgentTests(unittest.TestCase):
                     "investigation_id": investigation.id,
                     "tool_name": "analysis_judgement",
                     "target_type": "company",
-                    "target_value": "SRR Genuine Parts",
+                    "target_value": "Sample Auto Parts Co.",
                     "depth": 2,
                     "status": "QUEUED",
                     "agent_role": "analysis_judgement_agent",
@@ -215,8 +215,8 @@ class LocalRoleAgentTests(unittest.TestCase):
                 },
             ],
         )
-        store.add_entity(investigation.id, "domain", "srrautopartsonline.com", "operator_seed", 0.85)
-        store.add_evidence(investigation.id, "srrautopartsonline.com", "official_website", "operator_seed", "Operator-confirmed official site.")
+        store.add_entity(investigation.id, "domain", "example-target.test", "operator_seed", 0.85)
+        store.add_evidence(investigation.id, "example-target.test", "official_website", "operator_seed", "Operator-confirmed official site.")
 
         with TemporaryDirectory() as tmpdir:
             run_investigation_jobs(
@@ -242,9 +242,9 @@ class LocalRoleAgentTests(unittest.TestCase):
     def test_cross_verification_and_analysis_jobs_run_locally(self):
         store = MemoryStore()
         investigation = store.create_investigation(
-            name="SRR local role agents",
+            name="SampleCo local role agents",
             seed_type="company",
-            seed_value="SRR Genuine Parts",
+            seed_value="Sample Auto Parts Co.",
             strategy_name="deep",
         )
         store.replace_jobs(
@@ -255,7 +255,7 @@ class LocalRoleAgentTests(unittest.TestCase):
                     "investigation_id": investigation.id,
                     "tool_name": "cross_verification",
                     "target_type": "company",
-                    "target_value": "SRR Genuine Parts",
+                    "target_value": "Sample Auto Parts Co.",
                     "depth": 0,
                     "status": "QUEUED",
                     "agent_role": "cross_verification_agent",
@@ -267,7 +267,7 @@ class LocalRoleAgentTests(unittest.TestCase):
                     "investigation_id": investigation.id,
                     "tool_name": "analysis_judgement",
                     "target_type": "company",
-                    "target_value": "SRR Genuine Parts",
+                    "target_value": "Sample Auto Parts Co.",
                     "depth": 1,
                     "status": "QUEUED",
                     "agent_role": "analysis_judgement_agent",
@@ -278,17 +278,17 @@ class LocalRoleAgentTests(unittest.TestCase):
         )
         evidence_record = store.add_evidence_record(
             investigation.id,
-            "https://www.srrautopartsonline.com/en/contact",
+            "https://www.example-target.test/en/contact",
             "official_website",
             "seed",
-            "SRR contact page lists xs@csituo.com.",
+            "SampleCo contact page lists xs@csituo.com.",
             0.82,
         )
-        store.add_entity(investigation.id, "company", "SRR Genuine Parts", "seed", 0.9)
-        store.add_entity(investigation.id, "domain", "srrautopartsonline.com", "seed", 0.82)
+        store.add_entity(investigation.id, "company", "Sample Auto Parts Co.", "seed", 0.9)
+        store.add_entity(investigation.id, "domain", "example-target.test", "seed", 0.82)
         store.add_entity(investigation.id, "email", "xs@csituo.com", "seed", 0.82)
         store.add_evidence(investigation.id, "xs@csituo.com", "official_contact", "seed", "Official contact page lists xs@csituo.com.")
-        store.add_relationship(investigation.id, "SRR Genuine Parts", "xs@csituo.com", "uses_business_email", 0.82)
+        store.add_relationship(investigation.id, "Sample Auto Parts Co.", "xs@csituo.com", "uses_business_email", 0.82)
 
         result = run_investigation_jobs(store, investigation.id, max_jobs=5, artifact_root=Path("/tmp/unused"))
         detail = store.get_investigation(investigation.id)
@@ -306,7 +306,7 @@ class LocalRoleAgentTests(unittest.TestCase):
         investigation = store.create_investigation(
             name="Followup local role agent",
             seed_type="company",
-            seed_value="SRR Genuine Parts",
+            seed_value="Sample Auto Parts Co.",
             strategy_name="deep",
         )
         store.replace_jobs(
@@ -317,7 +317,7 @@ class LocalRoleAgentTests(unittest.TestCase):
                     "investigation_id": investigation.id,
                     "tool_name": "company_osint",
                     "target_type": "company",
-                    "target_value": "SRR Genuine Parts",
+                    "target_value": "Sample Auto Parts Co.",
                     "depth": 0,
                     "status": "QUEUED",
                     "agent_role": "enterprise_intel_agent",
@@ -329,7 +329,7 @@ class LocalRoleAgentTests(unittest.TestCase):
                     "investigation_id": investigation.id,
                     "tool_name": "analysis_judgement",
                     "target_type": "company",
-                    "target_value": "SRR Genuine Parts",
+                    "target_value": "Sample Auto Parts Co.",
                     "depth": 1,
                     "status": "SKIPPED",
                     "agent_role": "analysis_judgement_agent",
@@ -338,20 +338,20 @@ class LocalRoleAgentTests(unittest.TestCase):
                 }
             ],
         )
-        store.add_entity(investigation.id, "domain", "srrautopartsonline.com", "operator_seed", 0.85)
+        store.add_entity(investigation.id, "domain", "example-target.test", "operator_seed", 0.85)
         store.add_entity(investigation.id, "email", "xs@csituo.com", "operator_seed", 0.8)
-        store.add_evidence(investigation.id, "srrautopartsonline.com", "official_website", "operator_seed", "Operator-confirmed official site.")
+        store.add_evidence(investigation.id, "example-target.test", "official_website", "operator_seed", "Operator-confirmed official site.")
 
         result = run_investigation_jobs(store, investigation.id, max_jobs=1, artifact_root=Path("/tmp/unused"))
         detail = store.get_investigation(investigation.id)
         job_keys = {(job["tool_name"], job["target_type"], job["target_value"]) for job in detail["jobs"]}
 
         self.assertEqual(result["role_completed"], 1)
-        self.assertIn(("theharvester", "domain", "srrautopartsonline.com"), job_keys)
+        self.assertIn(("theharvester", "domain", "example-target.test"), job_keys)
         self.assertIn(("sherlock", "username", "xs"), job_keys)
         inferred = [
             job for job in detail["jobs"]
-            if job["target_value"] in {"srrautopartsonline.com", "xs"} and job["depends_on"].startswith("inferred_from:")
+            if job["target_value"] in {"example-target.test", "xs"} and job["depends_on"].startswith("inferred_from:")
         ]
         self.assertTrue(inferred)
 
@@ -360,7 +360,7 @@ class LocalRoleAgentTests(unittest.TestCase):
         investigation = store.create_investigation(
             name="Role evidence ledger",
             seed_type="company",
-            seed_value="SRR Genuine Parts",
+            seed_value="Sample Auto Parts Co.",
             strategy_name="deep",
         )
         result = run_role_agent(
@@ -371,7 +371,7 @@ class LocalRoleAgentTests(unittest.TestCase):
                 "investigation_id": investigation.id,
                 "tool_name": "candidate_business_discovery",
                 "target_type": "company",
-                "target_value": "SRR Genuine Parts",
+                "target_value": "Sample Auto Parts Co.",
                 "depth": 1,
                 "status": "RUNNING",
                 "agent_role": "enterprise_intel_agent",
@@ -394,7 +394,7 @@ class LocalRoleAgentTests(unittest.TestCase):
         investigation = store.create_investigation(
             name="Ledger to facts",
             seed_type="company",
-            seed_value="SRR Genuine Parts",
+            seed_value="Sample Auto Parts Co.",
             strategy_name="deep",
         )
         collection_result = run_role_agent(
@@ -405,7 +405,7 @@ class LocalRoleAgentTests(unittest.TestCase):
                 "investigation_id": investigation.id,
                 "tool_name": "candidate_business_discovery",
                 "target_type": "company",
-                "target_value": "SRR Genuine Parts",
+                "target_value": "Sample Auto Parts Co.",
                 "depth": 1,
                 "status": "RUNNING",
                 "agent_role": "enterprise_intel_agent",
@@ -422,7 +422,7 @@ class LocalRoleAgentTests(unittest.TestCase):
                 "investigation_id": investigation.id,
                 "tool_name": "cross_verification",
                 "target_type": "company",
-                "target_value": "SRR Genuine Parts",
+                "target_value": "Sample Auto Parts Co.",
                 "depth": 2,
                 "status": "RUNNING",
                 "agent_role": "cross_verification_agent",
@@ -444,11 +444,11 @@ class LocalRoleAgentTests(unittest.TestCase):
         investigation = store.create_investigation(
             name="Sparse lead candidate enrichment",
             seed_type="sparse_lead",
-            seed_value="ZAWIJA / Nswana Mukuma",
+            seed_value="Sample Sparse Lead / Contact A",
             strategy_name="deep",
             metadata={
-                "lead_display_name": "Nswana Mukuma",
-                "company_name_raw": "ZAWIJA",
+                "lead_display_name": "Contact A",
+                "company_name_raw": "Sample Sparse Lead",
                 "privacy_state": "email_hidden_phone_hidden",
                 "categories": ["Auto Parts", "Truck Spare Parts"],
             },
@@ -462,7 +462,7 @@ class LocalRoleAgentTests(unittest.TestCase):
                 "investigation_id": investigation.id,
                 "tool_name": "candidate_business_discovery",
                 "target_type": "sparse_lead",
-                "target_value": "ZAWIJA / Nswana Mukuma",
+                "target_value": "Sample Sparse Lead / Contact A",
                 "depth": 1,
                 "status": "RUNNING",
                 "agent_role": "enterprise_intel_agent",
@@ -477,7 +477,7 @@ class LocalRoleAgentTests(unittest.TestCase):
         self.assertTrue(result.completed)
         self.assertIn(("business_scope", "Auto Parts"), entity_pairs)
         self.assertIn(("business_scope", "Truck Spare Parts"), entity_pairs)
-        self.assertIn(("identity", "Nswana Mukuma"), entity_pairs)
+        self.assertIn(("identity", "Contact A"), entity_pairs)
         self.assertNotIn(("email", "email_hidden_phone_hidden"), entity_pairs)
         self.assertNotIn(("phone", "email_hidden_phone_hidden"), entity_pairs)
 
@@ -486,7 +486,7 @@ class LocalRoleAgentTests(unittest.TestCase):
         investigation = store.create_investigation(
             name="Low confidence followup",
             seed_type="company",
-            seed_value="SRR Genuine Parts",
+            seed_value="Sample Auto Parts Co.",
             strategy_name="deep",
         )
         store.replace_jobs(
@@ -497,7 +497,7 @@ class LocalRoleAgentTests(unittest.TestCase):
                     "investigation_id": investigation.id,
                     "tool_name": "company_osint",
                     "target_type": "company",
-                    "target_value": "SRR Genuine Parts",
+                    "target_value": "Sample Auto Parts Co.",
                     "depth": 0,
                     "status": "QUEUED",
                     "agent_role": "enterprise_intel_agent",
@@ -509,7 +509,7 @@ class LocalRoleAgentTests(unittest.TestCase):
                     "investigation_id": investigation.id,
                     "tool_name": "analysis_judgement",
                     "target_type": "company",
-                    "target_value": "SRR Genuine Parts",
+                    "target_value": "Sample Auto Parts Co.",
                     "depth": 1,
                     "status": "SKIPPED",
                     "agent_role": "analysis_judgement_agent",
@@ -533,7 +533,7 @@ class LocalRoleAgentTests(unittest.TestCase):
         investigation = store.create_investigation(
             name="Iterative followup",
             seed_type="company",
-            seed_value="SRR Genuine Parts",
+            seed_value="Sample Auto Parts Co.",
             strategy_name="deep",
         )
         store.replace_jobs(
@@ -544,7 +544,7 @@ class LocalRoleAgentTests(unittest.TestCase):
                     "investigation_id": investigation.id,
                     "tool_name": "company_osint",
                     "target_type": "company",
-                    "target_value": "SRR Genuine Parts",
+                    "target_value": "Sample Auto Parts Co.",
                     "depth": 0,
                     "status": "QUEUED",
                     "agent_role": "enterprise_intel_agent",
@@ -556,7 +556,7 @@ class LocalRoleAgentTests(unittest.TestCase):
                     "investigation_id": investigation.id,
                     "tool_name": "analysis_judgement",
                     "target_type": "company",
-                    "target_value": "SRR Genuine Parts",
+                    "target_value": "Sample Auto Parts Co.",
                     "depth": 1,
                     "status": "SKIPPED",
                     "agent_role": "analysis_judgement_agent",
@@ -565,8 +565,8 @@ class LocalRoleAgentTests(unittest.TestCase):
                 },
             ],
         )
-        store.add_entity(investigation.id, "domain", "srrautopartsonline.com", "operator_seed", 0.85)
-        store.add_evidence(investigation.id, "srrautopartsonline.com", "official_website", "operator_seed", "Operator-confirmed official site.")
+        store.add_entity(investigation.id, "domain", "example-target.test", "operator_seed", 0.85)
+        store.add_evidence(investigation.id, "example-target.test", "official_website", "operator_seed", "Operator-confirmed official site.")
 
         with TemporaryDirectory() as tmpdir:
             result = run_investigation_jobs(
@@ -582,8 +582,8 @@ class LocalRoleAgentTests(unittest.TestCase):
 
         self.assertGreaterEqual(result["role_completed"], 1)
         self.assertGreaterEqual(result["completed"], 1)
-        self.assertEqual(statuses[("theharvester", "srrautopartsonline.com")], "COMPLETED")
-        self.assertIn(("email", "sales@srrautopartsonline.com"), {(item["type"], item["value"]) for item in detail["entities"]})
+        self.assertEqual(statuses[("theharvester", "example-target.test")], "COMPLETED")
+        self.assertIn(("email", "sales@example-target.test"), {(item["type"], item["value"]) for item in detail["entities"]})
 
 
 def _raise_missing(name: str):

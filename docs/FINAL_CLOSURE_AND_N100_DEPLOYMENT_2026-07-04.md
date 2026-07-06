@@ -1,5 +1,7 @@
 # Final Closure and <production-host> Deployment - 2026-07-04
 
+Status note: this deployment closure remains the 2026-07-04 deployment record. It is superseded for current actual-task behavior, quality-gate semantics, and blocked-tool handling by [N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md](N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md).
+
 ## Scope
 
 This closure covers the local audit, hardening, verification, and <production-host> deployment handoff for the OSINT Agent Network / 情报官 project.
@@ -202,3 +204,17 @@ http://192.0.2.10:3008/ -> 200
 - The local project directory is not a Git repository, so standard commit/diff provenance is unavailable.
 - Local Docker does not support the `docker compose` subcommand, so Compose validation was limited to static inspection.
 - Some real OSINT tools may remain unconfigured by design; tool health may report attention-required items until credentials or executables are installed.
+
+## 2026-07-06 Addendum
+
+The <production-host> actual-task test pass on 2026-07-06 verified the deployed workflow with historical and newly created sample tasks.
+
+Current addendum results:
+
+- Health and production readiness remain passing.
+- Remote `bash scripts/verify.sh` passes.
+- Sample company Core v2 quality scoring now consumes verified fields from the cross-verification matrix, EEI coverage, and fact pool; observed score is `82.8`.
+- Sample sparse lead remains `NEEDS_REVIEW` with unresolved official website and contact-channel blockers.
+- Missing external domain tools now produce investigation status `BLOCKED` and summary `工具任务被环境依赖阻断`.
+
+See [N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md](N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md) for the current closure details.

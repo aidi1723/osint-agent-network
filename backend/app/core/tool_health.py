@@ -39,6 +39,19 @@ TOOL_CONFIG = {
         "command_env": "AMASS_COMMAND",
         "default_command": "amass",
     },
+    "subfinder": {
+        "command_env": "SUBFINDER_COMMAND",
+        "default_command": "subfinder",
+    },
+    "httpx": {
+        "command_env": "HTTPX_COMMAND",
+        "default_command": "httpx",
+    },
+    "katana": {
+        "command_env": "KATANA_COMMAND",
+        "default_command": "katana",
+        "optional_env": ("KATANA_DEPTH",),
+    },
     "ghunt": {
         "command_env": "GHUNT_COMMAND",
         "default_command": "ghunt",
@@ -54,6 +67,9 @@ TOOL_CONFIG = {
         "optional_env": ("COMPANY_NEWS_SOURCE",),
     },
     "profile_parser": {
+        "internal": True,
+    },
+    "official_site_extractor": {
         "internal": True,
     },
     "lead_anchor_extraction": {

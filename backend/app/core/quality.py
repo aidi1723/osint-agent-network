@@ -59,7 +59,7 @@ def build_quality_assessment(detail: dict) -> dict:
     score = round((earned / total_weight) * 100, 1) if total_weight else 0.0
     missing = [item for item in checks if not item["present"]]
     missing_keys = [item["key"] for item in missing]
-    blocking_keys = _blocking_keys(missing_keys)
+    blocking_keys = _blocking_keys(missing_keys, detail)
     completion_ready = score >= COMPLETION_MIN_SCORE and not blocking_keys
 
     return {
@@ -72,10 +72,13 @@ def build_quality_assessment(detail: dict) -> dict:
     }
 
 
-def _blocking_keys(missing_keys: list[str]) -> list[str]:
+def _blocking_keys(missing_keys: list[str], detail: dict) -> list[str]:
     missing = set(missing_keys)
     blocking = set(COMPLETION_REQUIRED_KEYS & missing)
-    blocking.update(BUSINESS_CLOSURE_REQUIRED_KEYS & missing)
+    business_required = set(BUSINESS_CLOSURE_REQUIRED_KEYS)
+    if detail.get("seed_type") in {"domain", "url"}:
+        business_required.discard("decision_maker")
+    blocking.update(business_required & missing)
     if {"contact_email", "contact_phone"} <= missing:
         blocking.add("contact_channel")
     return sorted(blocking)
@@ -199,9 +202,9 @@ def render_structured_report(detail: dict, assessment: dict | None = None) -> st
 
 def _present(key: str, accepted_types: tuple[str, ...], detail: dict, entity_types: set[str], report_markdown: str) -> bool:
     if key == "decision_maker":
-        return _has_decision_maker_signal(detail.get("entities") or [])
+        return _has_decision_maker_signal(detail.get("entities") or []) or _has_verified_field_signal(detail, key)
     if accepted_types:
-        return bool(entity_types & set(accepted_types))
+        return bool(entity_types & set(accepted_types)) or _has_verified_field_signal(detail, key)
     if key == "relationships":
         return bool(detail.get("relationships"))
     if key == "evidence_ledger":
@@ -225,6 +228,37 @@ def _present(key: str, accepted_types: tuple[str, ...], detail: dict, entity_typ
     if key == "bluf_report":
         return "bluf" in report_markdown.lower() and len(report_markdown.strip()) >= 20
     return False
+
+
+def _has_verified_field_signal(detail: dict, key: str) -> bool:
+    matrix = detail.get("cross_verification_matrix") or []
+    for row in matrix:
+        if row.get("field_key") != key:
+            continue
+        if row.get("status") not in {"CONFIRMED", "LIKELY", "SUPPORTED"}:
+            continue
+        if row.get("candidate_value") or row.get("linked_fact_ids") or row.get("linked_evidence_ids"):
+            return True
+
+    requirements = detail.get("intelligence_requirements") or {}
+    for eei in requirements.get("eeis") or []:
+        if eei.get("field_key") != key:
+            continue
+        if eei.get("status") not in {"CONFIRMED", "SUPPORTED"}:
+            continue
+        if eei.get("linked_entity_values") or eei.get("linked_fact_ids"):
+            return True
+
+    return any(_fact_supports_field(fact, key) for fact in detail.get("facts") or [])
+
+
+def _fact_supports_field(fact: dict, key: str) -> bool:
+    if fact.get("promotion_stage") != "ACCEPTED_FACT" and fact.get("status") not in {"CONFIRMED", "LIKELY"}:
+        return False
+    predicate = str(fact.get("predicate") or "").lower()
+    if not predicate:
+        return False
+    return predicate == key or predicate.endswith(f"_{key}")
 
 
 def _has_decision_maker_signal(entities: list[dict]) -> bool:

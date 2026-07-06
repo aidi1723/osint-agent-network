@@ -12,7 +12,7 @@
 
 - 多目标类型：`company`、`sparse_lead`、`domain`、`subdomain`、`email`、`username`、`phone`、`ip`、`url`、`profile_url`。
 - 多 Agent 编排：企业情报、社媒情报、联系方式发现、上下游映射、采购意图、交叉验证、分析评价。
-- 工具适配器：Sherlock、Maigret、Socialscan、theHarvester、Amass、SpiderFoot、Recon-ng、GHunt、PhoneInfoga、Profile Parser、Company News、**海关供应链分析**。
+- 工具适配器：Sherlock、Maigret、Socialscan、theHarvester、Amass、Subfinder、httpx、Katana、SpiderFoot、Recon-ng、GHunt、PhoneInfoga、Profile Parser、Company News、Official Site Extractor、**海关供应链分析**。
 - **海关供应链挖掘**：基于跨境魔方API，一键查询企业的上下游贸易伙伴，自动识别客户和供应商关系，零额外成本。详见 [docs/CUSTOMS_SUPPLY_CHAIN.md](docs/CUSTOMS_SUPPLY_CHAIN.md)
 - **智能情报聚合**：自动从多个工具输出中聚合联系方式（邮箱/电话）、社交媒体账号、产品信息，一站式展示。详见 [docs/INTELLIGENCE_AGGREGATION.md](docs/INTELLIGENCE_AGGREGATION.md)
 - 情报工具中枢：按目标类型、策略和运行配置规划工具路线，缺服务或凭证时自动跳过并给出原因。
@@ -79,7 +79,7 @@ systemctl --user status osint-agent-network-api.service osint-agent-network-web.
 systemctl --user restart osint-agent-network-api.service osint-agent-network-web.service
 ```
 
-N100 当前项目目录为 `/opt/osint-agent-network`，备份目录为 `/var/backups/osint-agent-network`。Web 构建使用 `frontend/.env.production` 固定 `VITE_API_BASE_URL=http://192.0.2.10:8088`，避免浏览器从 3008 端口误请求 API。
+N100 当前实测项目目录为 `<production-path>`；`/opt/osint-agent-network` 是文档中的通用部署模板路径。Web 构建使用 `frontend/.env.production` 固定 `VITE_API_BASE_URL=http://192.0.2.10:8088`，避免浏览器从 3008 端口误请求 API。
 
 访问：
 
@@ -139,11 +139,21 @@ docker compose -f docker-compose.prod.yml up --build
 - `UPKUAJING_BASE_URL`: 跨境魔方后台地址，默认 `https://saas.upkuajing.com`
 - `UPKUAJING_AUTHORIZATION`: 跨境魔方 API 的 `Authorization` 请求头完整值，例如 `Bearer ...`
 - `UPKUAJING_TIMEOUT_SECONDS`: 跨境魔方 API 超时时间，默认 `30`
-- `SHERLOCK_*`、`THEHARVESTER_*`、`AMASS_*`、`SPIDERFOOT_*`、`PHONEINFOGA_*`、`GHUNT_*`、`RECONNG_*`、`COMPANY_NEWS_*`: 本地工具或服务配置
+- `SHERLOCK_*`、`THEHARVESTER_*`、`AMASS_*`、`SUBFINDER_COMMAND`、`HTTPX_COMMAND`、`KATANA_COMMAND`、`SPIDERFOOT_*`、`PHONEINFOGA_*`、`GHUNT_*`、`RECONNG_*`、`COMPANY_NEWS_*`: 本地工具或服务配置
 
 `COMPANY_NEWS_SOURCE=gnews` 会优先尝试 GNews Python 包，缺包时回退到 Google News RSS；如果安装了 Newspaper4k，会对新闻 URL 做正文、摘要、发布日期等解析。
 
 凭证只放在运行环境或 `.env`，不要写入事件、证据、报告或截图。
+
+<production-host> 当前已验证的 ProjectDiscovery 配置：
+
+```bash
+SUBFINDER_COMMAND=<osint-bin>/subfinder
+HTTPX_COMMAND=<osint-bin>/httpx
+KATANA_COMMAND=<osint-bin>/katana
+```
+
+最终域名 quick 实测任务 `<final-domain-task-id>` 已完成：`COMPLETED`，质量分 `78.1 / 100`，`subfinder`、`httpx`、`katana`、`official_site_extractor` 全链路完成，失败和阻断均为 `0`。阶段收尾记录见 [docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md](docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md)。
 
 ### 跨境魔方海关 API
 
@@ -281,7 +291,7 @@ python3 scripts/runtime_inventory.py
 UI 人工验收：
 
 - 打开 `http://127.0.0.1:3008/`
-- 选择 `美国企业背调：Family Hospitality LLC / Faiz Chaudhry`
+- 选择 `美国企业背调：Sample Hospitality LLC / Sample Contact`
 - 检查队列中有企业情报、社媒情报、联系方式、上下游、采购意图、交叉验证、分析评价 Agent
 - 检查图谱有 5 个顶部证据、5 个底部证据、中间核心节点、左右企业/决策人信息块
 - 检查连线为很细彩线，结论能看到来源链
@@ -296,6 +306,7 @@ UI 人工验收：
 - [docs/GRAPH_TEMPLATE.md](docs/GRAPH_TEMPLATE.md): 23 位图谱模板和证据关系标准
 - [docs/PROJECT_PACKAGE.md](docs/PROJECT_PACKAGE.md): 成熟项目包、部署、运维、验收清单
 - [docs/N100_DEPLOYMENT_RUNBOOK.md](docs/N100_DEPLOYMENT_RUNBOOK.md): <production-host> 部署、systemd、烟测、备份和回滚 Runbook
+- [docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md](docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md): 2026-07-06 <production-host> 实际任务测试、修复、复测和收尾报告
 - [docs/REAL_TOOL_ENABLEMENT.md](docs/REAL_TOOL_ENABLEMENT.md): <production-host> 真实 OSINT 工具接线、缺口和验收清单
 - [docs/FINAL_HANDOFF.md](docs/FINAL_HANDOFF.md): 最终交付摘要、运行边界和后续增强项
 - [docs/DEVELOPMENT_MANUAL.md](docs/DEVELOPMENT_MANUAL.md): 开发手册和早期规划记录

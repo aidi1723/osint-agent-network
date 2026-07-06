@@ -10,7 +10,7 @@ from app.core.intelligence_requirements import (
 
 class IntelligenceRequirementsTests(unittest.TestCase):
     def test_company_defaults_include_identity_purchase_contact_and_risk(self):
-        req = build_intelligence_requirements("company", "Family Hospitality LLC", "standard", {})
+        req = build_intelligence_requirements("company", "Sample Hospitality LLC", "standard", {})
 
         pir_ids = {item["id"] for item in req["pirs"]}
         eei_ids = {item["id"] for item in req["eeis"]}
@@ -28,7 +28,7 @@ class IntelligenceRequirementsTests(unittest.TestCase):
     def test_sparse_lead_defaults_include_identity_match_pir(self):
         req = build_intelligence_requirements(
             "sparse_lead",
-            "Long Way / in19034126503jgqn",
+            "Sample Lead / member-redacted",
             "quick",
             {"country_region": "IN", "platform": "Alibaba"},
         )

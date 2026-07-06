@@ -5,6 +5,7 @@ import os
 
 from app.core.normalization import normalize_target
 from app.core.registry import ToolRegistry, default_tool_registry
+from app.core.tool_health import CREDENTIAL_BLOCKED, MISSING_CONFIG, MISSING_EXECUTABLE, build_tool_health_report
 
 
 @dataclass(frozen=True)
@@ -56,13 +57,21 @@ ROUTE_MATRIX: dict[str, tuple[_RouteTemplate, ...]] = {
     ),
     "domain": (
         _RouteTemplate("theharvester", "domain_discovery"),
+        _RouteTemplate("subfinder", "passive_subdomain_discovery"),
         _RouteTemplate("amass", "dns_discovery"),
+        _RouteTemplate("httpx", "http_probe"),
         _RouteTemplate("spiderfoot", "passive_enrichment", required_config=("SPIDERFOOT_BASE_URL",)),
         _RouteTemplate("reconng", "passive_enrichment", required_config=("RECONNG_COMMAND",)),
     ),
     "subdomain": (
+        _RouteTemplate("httpx", "http_probe"),
         _RouteTemplate("amass", "dns_discovery"),
         _RouteTemplate("spiderfoot", "passive_enrichment", required_config=("SPIDERFOOT_BASE_URL",)),
+    ),
+    "url": (
+        _RouteTemplate("httpx", "http_probe"),
+        _RouteTemplate("katana", "site_crawl"),
+        _RouteTemplate("official_site_extractor", "official_site_extraction"),
     ),
     "profile_url": (
         _RouteTemplate("profile_parser", "profile_metadata"),
@@ -175,7 +184,17 @@ SPARSE_LEAD_ROUTE_MATRIX: tuple[_RouteTemplate, ...] = (
     ),
 )
 
-QUICK_TOOL_ALLOWLIST = {"sherlock", "theharvester", "phoneinfoga", "socialscan"}
+QUICK_TOOL_ALLOWLIST = {
+    "sherlock",
+    "theharvester",
+    "subfinder",
+    "httpx",
+    "katana",
+    "official_site_extractor",
+    "phoneinfoga",
+    "socialscan",
+}
+STANDARD_EXCLUDED_TOOLS = {"reconng"}
 
 
 def build_intel_plan(
@@ -184,17 +203,26 @@ def build_intel_plan(
     strategy_name: str,
     registry: ToolRegistry | None = None,
     runtime_env: dict[str, str] | None = None,
+    respect_tool_health: bool = False,
 ) -> IntelPlan:
     registry = registry or default_tool_registry()
     runtime_env = os.environ if runtime_env is None else runtime_env
     normalized_value = normalize_target(target_type, target_value)
+    health_by_tool = (
+        {
+            item["name"]: item
+            for item in build_tool_health_report(registry=registry, env=runtime_env).get("tools", [])
+        }
+        if respect_tool_health
+        else {}
+    )
 
     templates = _templates_for(target_type, strategy_name)
     routes: list[IntelRoute] = []
     skipped: list[IntelRoute] = []
     for priority, template in enumerate(templates, start=1):
         route = _route_from_template(template, target_type, normalized_value, priority)
-        skip_reason = _skip_reason(route, template, registry, runtime_env)
+        skip_reason = _skip_reason(route, template, registry, runtime_env, health_by_tool)
         if skip_reason:
             skipped.append(_with_skip_reason(route, skip_reason))
         else:
@@ -235,6 +263,8 @@ def _templates_for(target_type: str, strategy_name: str) -> tuple[_RouteTemplate
     templates = ROUTE_MATRIX.get(target_type, ())
     if strategy_name == "quick":
         return tuple(template for template in templates if template.tool_name in QUICK_TOOL_ALLOWLIST)
+    if strategy_name == "standard":
+        return tuple(template for template in templates if template.tool_name not in STANDARD_EXCLUDED_TOOLS)
     return templates
 
 
@@ -256,6 +286,7 @@ def _skip_reason(
     template: _RouteTemplate,
     registry: ToolRegistry,
     runtime_env,
+    health_by_tool: dict[str, dict],
 ) -> str:
     if route.agent_role != "tool_agent":
         return ""
@@ -270,7 +301,21 @@ def _skip_reason(
     for key in template.required_config:
         if not str(runtime_env.get(key, "")).strip():
             return f"missing_config:{key}"
+    health_skip = _tool_health_skip_reason(route, health_by_tool)
+    if health_skip:
+        return health_skip
     return ""
+
+
+def _tool_health_skip_reason(route: IntelRoute, health_by_tool: dict[str, dict]) -> str:
+    item = health_by_tool.get(route.tool_name)
+    if not item:
+        return ""
+    status = str(item.get("status") or "")
+    if status not in {MISSING_CONFIG, MISSING_EXECUTABLE, CREDENTIAL_BLOCKED}:
+        return ""
+    reason = str(item.get("reason") or status)
+    return f"tool_unavailable:{status}:{reason}"
 
 
 def _with_skip_reason(route: IntelRoute, skip_reason: str) -> IntelRoute:

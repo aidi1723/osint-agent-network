@@ -1,6 +1,6 @@
 # Real Tool Enablement Checklist
 
-Updated: 2026-05-22
+Updated: 2026-07-06
 
 This document tracks the <production-host> real OSINT tool layer after the mature platform baseline has landed. The platform baseline does not require real OSINT tools to stay resident in the background. Keep API/Web/backup timer running; start heavier collectors only when an investigation route actually needs them.
 
@@ -10,8 +10,12 @@ Already wired for on-demand use:
 
 - `sherlock`: command configured as `python3`. The health check only verifies the command layer; run a live adapter job before treating Sherlock collection as fully proven.
 - `profile_parser`: internal artifact parser.
+- `official_site_extractor`: internal official-site HTML fetcher/parser for organization, contact, address, and business-scope fields. Confirmed on <production-host> after gzip-response handling.
 - `lead_anchor_extraction`: internal sparse-lead parser.
 - `company_news`: command configured as `python3`; falls back to public RSS behavior when optional packages are absent.
+- `subfinder`: installed at `<osint-bin>/subfinder` and wired through `SUBFINDER_COMMAND`.
+- `httpx`: installed at `<osint-bin>/httpx` and wired through `HTTPX_COMMAND`.
+- `katana`: installed at `<osint-bin>/katana` and wired through `KATANA_COMMAND`.
 - `phoneinfoga`: adapter supports `PHONEINFOGA_BASE_URL`; leave it empty by default and set it only for phone-enrichment runs.
 - `spiderfoot`: adapter supports `SPIDERFOOT_BASE_URL`; leave it empty by default and set it only for SpiderFoot-enrichment runs. API key is optional for the local no-auth instance.
 - `reconng`: installed at `/opt/osint-tools/recon-ng/recon-ng` and wired through `RECONNG_COMMAND`.
@@ -35,6 +39,9 @@ Default `.env` should keep REST-backed tools disabled:
 SPIDERFOOT_BASE_URL=
 PHONEINFOGA_BASE_URL=
 RECONNG_COMMAND=/opt/osint-tools/recon-ng/recon-ng
+SUBFINDER_COMMAND=<osint-bin>/subfinder
+HTTPX_COMMAND=<osint-bin>/httpx
+KATANA_COMMAND=<osint-bin>/katana
 ```
 
 When a task explicitly needs one of these tools, set the URL temporarily or in the task runner environment:
@@ -50,6 +57,7 @@ PHONEINFOGA_BASE_URL=http://127.0.0.1:5000
 2. `amass`: improves passive subdomain and DNS expansion.
 3. `maigret`: improves username-to-profile coverage.
 4. `socialscan`: improves email/username account existence checks.
+5. Optional REST services: SpiderFoot and PhoneInfoga when a task specifically needs them.
 
 ## Resident Service Policy
 
@@ -86,3 +94,22 @@ PY
 ```
 
 The platform baseline is acceptable when `production_readiness.py` returns `ready: true`. `tool_attention` is informational for on-demand tools; it shows what must be installed or started before using specific collectors, but it does not block the mature platform baseline.
+
+## <production-host> Actual Test Note - 2026-07-06
+
+ProjectDiscovery tools are now proven in a real sample domain task:
+
+- Earlier proof task: `<phase-domain-task-id>`
+- Final completion task: `<final-domain-task-id>`
+- Completed available chain:
+  - `subfinder`
+  - `httpx` domain probe
+  - `httpx` URL probe
+  - `katana`
+  - `official_site_extractor`
+- Failed jobs: `0`
+- Blocked jobs: `0`
+- Score improved from the earlier `26.6` domain-probe-only result to `78.1`.
+- Final status: `COMPLETED`
+
+Remaining quality-gate work is now broader company/sparse-lead coverage, not basic execution of the ProjectDiscovery domain quick chain.

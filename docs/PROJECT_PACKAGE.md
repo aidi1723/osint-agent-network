@@ -1,7 +1,7 @@
 # 成熟项目包说明
 
 Version: 1.0
-Updated: 2026-05-22
+Updated: 2026-07-06
 
 本文是情报官项目交付、部署、验收和后续扩展的总清单。它面向接手项目的工程师、运维人员和情报 Agent 执行人员。
 
@@ -47,6 +47,7 @@ osint-agent-network/
 - OSINT 工具按实际需要安装在固定路径。
 - 推荐先用 `scripts/start.sh` 做原生烟测；长期运行使用用户级 systemd。
 - 详细部署、烟测、备份和回滚步骤见 `docs/N100_DEPLOYMENT_RUNBOOK.md`。
+- 最新 <production-host> 实际任务测试、ProjectDiscovery 域名 quick 链路达标、质量闸门修复、阻断状态修复和复测结论见 `docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md`。
 - 真实工具按需启用，不要求常驻后台；接线、剩余缺口和验收命令见 `docs/REAL_TOOL_ENABLEMENT.md`。
 
 ## 3. 启动方式
@@ -124,6 +125,9 @@ EOF
 SHERLOCK_COMMAND=python3
 THEHARVESTER_COMMAND=python3
 AMASS_COMMAND=amass
+SUBFINDER_COMMAND=<osint-bin>/subfinder
+HTTPX_COMMAND=<osint-bin>/httpx
+KATANA_COMMAND=<osint-bin>/katana
 SPIDERFOOT_BASE_URL=
 PHONEINFOGA_BASE_URL=
 GHUNT_COMMAND=ghunt
@@ -211,6 +215,7 @@ npm run build
 - 本地 API 与前端联通。
 - SQLite 持久化。
 - 多工具适配器框架。
+- ProjectDiscovery 社区工具链：`subfinder`、`httpx`、`katana`，以及内置 `official_site_extractor` 官网解析器。
 - `company`、`sparse_lead`、`domain`、`email`、`username`、`phone`、`url` 等目标类型与职责型 Agent 队列。
 - 依赖感知队列、并发保护、递进式推演和 IntelCore 预测分析输出合同。
 - Intelligence Core v3：任务需求层、事实晋级、交叉验证矩阵和专业白皮书结构。
@@ -223,9 +228,11 @@ npm run build
 - 完整验证脚本：后端测试、前端状态检查、图谱/报告 bundle 检查、Vite build。
 - 稳定性收尾包：schema 版本记录、`/api/system/status`、`scripts/backup.sh`、`scripts/healthcheck.sh` 和前端系统自检面板。
 - 运维增强包：`/api/tools/health` 真实工具就绪检查、固定样本回归库、`BACKUP_KEEP_LAST` 备份保留策略、user-level systemd 定时备份和 `scripts/production_readiness.py` 成熟版本验收脚本。
+- <production-host> 域名 quick 链路已达到当前设计目标：最终任务 `<final-domain-task-id>` 为 `COMPLETED`，质量分 `78.1 / 100`，`subfinder`、`httpx`、`katana`、`official_site_extractor` 全部完成，失败和阻断均为 `0`。
 
 需要后续增强：
 
+- company/sparse_lead 的官网搜索层、决策人发现和跨来源佐证。
 - 更丰富的真实工具样本和解析回归测试。
 - 报告 PDF/HTML 导出模板。
 - 用户权限分层和审计日志。

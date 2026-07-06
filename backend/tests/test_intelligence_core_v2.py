@@ -12,8 +12,8 @@ class IntelligenceCoreV2DomainTests(unittest.TestCase):
         fact = FactRecord(
             id="fact-1",
             investigation_id="inv-1",
-            statement="SRR uses xs@csituo.com as a public contact email.",
-            subject="SRR Genuine Parts",
+            statement="SampleCo uses xs@csituo.com as a public contact email.",
+            subject="Sample Auto Parts Co.",
             predicate="uses_contact_email",
             object="xs@csituo.com",
             status="CONFIRMED",
@@ -30,8 +30,8 @@ class IntelligenceCoreV2DomainTests(unittest.TestCase):
         fact = FactRecord(
             id="fact-1",
             investigation_id="inv-1",
-            statement="SRR uses xs@csituo.com as a public contact email.",
-            subject="SRR Genuine Parts",
+            statement="SampleCo uses xs@csituo.com as a public contact email.",
+            subject="Sample Auto Parts Co.",
             predicate="uses_contact_email",
             object="xs@csituo.com",
             status="CONFIRMED",
@@ -50,7 +50,7 @@ class IntelligenceCoreV2DomainTests(unittest.TestCase):
             id="fact-old",
             investigation_id="inv-1",
             statement="Company phone is +86-991-3966766.",
-            subject="Xinjiang SRR Auto Parts",
+            subject="Sample Auto Parts Branch",
             predicate="has_phone",
             object="+86-991-3966766",
             status="CONFIRMED",
@@ -80,10 +80,10 @@ class EvidenceLedgerTests(unittest.TestCase):
         record = build_evidence_record(
             id="ev-1",
             investigation_id="inv-1",
-            source_url="https://www.srrautopartsonline.com/en/",
+            source_url="https://www.example-target.test/en/",
             source_type="official_website",
             source_tool="official_web",
-            snippet="SRR contact page lists xs@csituo.com.",
+            snippet="SampleCo contact page lists xs@csituo.com.",
             observed_at="2026-05-21T00:00:00+00:00",
             credibility=0.82,
         )
@@ -98,23 +98,23 @@ class CoreV2StoreTests(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             store = SQLiteStore(str(Path(tmpdir) / "osint.sqlite"))
             investigation = store.create_investigation(
-                name="SRR core v2",
+                name="SampleCo core v2",
                 seed_type="company",
-                seed_value="SRR Genuine Parts",
+                seed_value="Sample Auto Parts Co.",
                 strategy_name="deep",
             )
             evidence = store.add_evidence_record(
                 investigation_id=investigation.id,
-                source_url="https://www.srrautopartsonline.com/en/",
+                source_url="https://www.example-target.test/en/",
                 source_type="official_website",
                 source_tool="official_web",
-                snippet="SRR contact page lists xs@csituo.com.",
+                snippet="SampleCo contact page lists xs@csituo.com.",
                 credibility=0.82,
             )
             fact = store.add_fact(
                 investigation_id=investigation.id,
-                statement="SRR uses xs@csituo.com as a public contact email.",
-                subject="SRR Genuine Parts",
+                statement="SampleCo uses xs@csituo.com as a public contact email.",
+                subject="Sample Auto Parts Co.",
                 predicate="uses_contact_email",
                 object_value="xs@csituo.com",
                 status="CONFIRMED",
@@ -137,32 +137,32 @@ class HypothesisPoolStoreTests(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             store = SQLiteStore(str(Path(tmpdir) / "osint.sqlite"))
             investigation = store.create_investigation(
-                name="SRR ACH",
+                name="SampleCo ACH",
                 seed_type="company",
-                seed_value="SRR Genuine Parts",
+                seed_value="Sample Auto Parts Co.",
                 strategy_name="deep",
             )
             store.add_hypothesis(
                 investigation.id,
                 "h1",
-                "SRR is an active export brand network.",
+                "SampleCo is an active export brand network.",
             )
             store.add_hypothesis(
                 investigation.id,
                 "h2",
-                "SRR is only a dormant brand shell.",
+                "SampleCo is only a dormant brand shell.",
             )
             store.add_hypothesis(
                 investigation.id,
                 "h3",
-                "SRR evidence is mostly same-name noise.",
+                "SampleCo evidence is mostly same-name noise.",
             )
             result = store.score_hypotheses(
                 investigation.id,
                 [
                     {
                         "id": "ev-export",
-                        "summary": "MIMS exhibitor page shows SRR export contact and product categories.",
+                        "summary": "MIMS exhibitor page shows SampleCo export contact and product categories.",
                         "kinds": ["company_news_report"],
                         "supports": ["h1"],
                         "contradicts": ["h2", "h3"],

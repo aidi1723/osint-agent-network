@@ -1,8 +1,8 @@
 # 情报官 OSINT Agent Network - 项目结尾、维护与部署日志
 
 **项目名称**: 情报官 OSINT Agent Network
-**项目目录**: `/opt/osint-agent-network` (<production-host>) / `/path/to/osint-agent-network` (本地)
-**最后更新**: 2026-07-02
+**项目目录**: `<production-path>` (<production-host> 当前实测路径) / `/opt/osint-agent-network` (通用部署模板路径) / `/path/to/osint-agent-network` (本地)
+**最后更新**: 2026-07-06
 **项目状态**: 生产就绪 ✅
 
 ---
@@ -33,6 +33,12 @@
 - 修复前端错误状态和 CSS 构建警告。
 - 修复 `production_readiness.py` 对受保护读接口的授权请求。
 - 重新部署到 <production-host>，启用 user-level systemd 服务，并验证 `ready: true`。
+
+#### N100 实际任务测试收尾阶段（2026-07-06）
+- 在 <production-host> 上复跑历史和新建任务，验证 Sample Company、Sample Sparse Lead、弱线索和 domain 任务的真实行为。
+- 修复 Core v2/v3 已验证字段未被质量闸门计入的问题。
+- 修复缺少外部 OSINT 命令时调查状态误显示为普通失败的问题。
+- 新增收尾报告：`docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md`。
 
 ### 1.2 最终项目状态
 
@@ -134,6 +140,7 @@
 │   ├── CUSTOMS_SUPPLY_CHAIN.md         # 供应链功能文档
 │   ├── INTELLIGENCE_AGGREGATION.md     # 情报聚合文档
 │   ├── N100_DEPLOYMENT_RUNBOOK.md      # <production-host> 部署 Runbook
+│   ├── N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md # <production-host> 实测收尾报告
 │   ├── REAL_OSINT_WORKFLOW.md          # 真实 OSINT 工作流
 │   └── ...
 │
@@ -352,7 +359,7 @@ Web 服务: osint-agent-network-web.service active/enabled
 
 ```text
 bash scripts/verify.sh:
-  Ran 110 tests ... OK
+  passed
   Regression smoke: case_count=4, failed=0
   Frontend checks: passed
   Vite build: passed
@@ -361,6 +368,19 @@ python3 scripts/production_readiness.py:
   ready=true
   api/database/web/backup/tool health: ok
   tool_attention=7
+
+2026-07-06 actual-task verification:
+  local backend: 278 passed
+  historical Sample Company Core v2: score 82.8, NEEDS_REVIEW
+  historical Sample Sparse Lead: score 77.3, NEEDS_REVIEW
+  missing domain tool: BLOCKED with environment-dependency summary
+  ProjectDiscovery domain quick final task: <final-domain-task-id>
+  final domain quick status: COMPLETED
+  final domain quick score: 78.1 / 100
+  completed live chain: subfinder, httpx, katana, official_site_extractor
+  failed jobs: 0
+  blocked jobs: 0
+  <production-host> readiness: ready=true, tool health ready=9 attention_required=7
 ```
 
 #### 下次升级标准流程
@@ -926,9 +946,11 @@ WantedBy=default.target
 ## 五、联系方式与资源
 
 ### 项目资源
-- **<production-host> 项目目录**: `/opt/osint-agent-network`
-- **<production-host> 备份目录**: `/var/backups/osint-agent-network`
-- **<production-host> 数据库**: `/opt/osint-agent-network/data/osint.sqlite`
+- **<production-host> 当前实测项目目录**: `<production-path>`
+- **通用部署模板目录**: `/opt/osint-agent-network`
+- **<production-host> 当前备份目录**: `<backup-path>`
+- **通用备份模板目录**: `/var/backups/osint-agent-network`
+- **<production-host> 当前数据库**: `<production-path>/data/osint.sqlite`
 - **本地项目目录**: `/path/to/osint-agent-network`
 
 ### 关键文档索引
@@ -941,8 +963,9 @@ WantedBy=default.target
 | 供应链文档 | docs/CUSTOMS_SUPPLY_CHAIN.md | 海关供应链功能 |
 | 情报聚合文档 | docs/INTELLIGENCE_AGGREGATION.md | 情报聚合功能 |
 | <production-host> 部署手册 | docs/N100_DEPLOYMENT_RUNBOOK.md | 部署步骤 |
-| 交付总结 | DELIVERY_SUMMARY_2026-06-30.md | 最新交付 |
-| 部署报告 | N100_DEPLOYMENT_REPORT_2026-06-30.md | 最新部署详情 |
+| <production-host> 实测收尾报告 | docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md | 实际任务测试、问题修复和复测结果 |
+| 交付总结 | DELIVERY_SUMMARY_2026-06-30.md | 2026-06-30 历史交付 |
+| 部署报告 | N100_DEPLOYMENT_REPORT_2026-06-30.md | 2026-06-30 历史部署详情 |
 | 本文件 | PROJECT_CLOSURE_MAINTENANCE_LOG.md | 结尾/维护/部署综合日志 |
 
 ---

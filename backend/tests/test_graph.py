@@ -102,7 +102,7 @@ class InvestigationGraphTests(unittest.TestCase):
         store.add_entity(
             investigation_id=investigation.id,
             entity_type="identity",
-            value="Faiz Chaudhry",
+            value="Sample Contact",
             source_tool="Alibaba 客户页截图",
             confidence=0.82,
         )
@@ -136,14 +136,14 @@ class InvestigationGraphTests(unittest.TestCase):
         )
         store.add_relationship(
             investigation_id=investigation.id,
-            from_value="Faiz Chaudhry",
+            from_value="Sample Contact",
             to_value="男性，公开称谓旁证",
             relationship_type="person_has_public_gender_claim",
             confidence=0.65,
         )
         store.add_relationship(
             investigation_id=investigation.id,
-            from_value="Faiz Chaudhry",
+            from_value="Sample Contact",
             to_value="35-45，公开履历区间推断",
             relationship_type="person_has_public_age_range",
             confidence=0.55,
@@ -173,15 +173,15 @@ class InvestigationGraphTests(unittest.TestCase):
     def test_enterprise_memory_preserves_non_slot_findings_and_collection_gaps(self):
         store = MemoryStore()
         investigation = store.create_investigation(
-            name="SRR 企业公开情报",
+            name="SampleCo 企业公开情报",
             seed_type="company",
-            seed_value="SRR Genuine Parts",
+            seed_value="Sample Auto Parts Co.",
             strategy_name="deep",
         )
         store.add_entity(
             investigation_id=investigation.id,
             entity_type="organization",
-            value="GUANGZHOU SRR INTERNATIONAL TRADE CO., LTD",
+            value="SAMPLE INTERNATIONAL TRADE CO., LTD",
             source_tool="official_web",
             confidence=0.86,
         )
@@ -208,7 +208,7 @@ class InvestigationGraphTests(unittest.TestCase):
         )
         store.add_relationship(
             investigation_id=investigation.id,
-            from_value="SRR Genuine Parts",
+            from_value="Sample Auto Parts Co.",
             to_value="China Ningbo Cixi Shock Absorber Production Base",
             relationship_type="brand_claims_production_base",
             confidence=0.78,
@@ -238,23 +238,23 @@ class InvestigationGraphTests(unittest.TestCase):
     def test_core_v2_facts_and_evidence_ledger_are_visible_in_graph(self):
         store = MemoryStore()
         investigation = store.create_investigation(
-            name="SRR Core v2 图谱",
+            name="SampleCo Core v2 图谱",
             seed_type="company",
-            seed_value="SRR Genuine Parts",
+            seed_value="Sample Auto Parts Co.",
             strategy_name="deep",
         )
         evidence = store.add_evidence_record(
             investigation_id=investigation.id,
-            source_url="https://www.srrautopartsonline.com/en/",
+            source_url="https://www.example-target.test/en/",
             source_type="official_website",
             source_tool="official_web",
-            snippet="SRR contact page lists xs@csituo.com.",
+            snippet="SampleCo contact page lists xs@csituo.com.",
             credibility=0.82,
         )
         store.add_fact(
             investigation_id=investigation.id,
-            statement="SRR uses xs@csituo.com as a public contact email.",
-            subject="SRR Genuine Parts",
+            statement="SampleCo uses xs@csituo.com as a public contact email.",
+            subject="Sample Auto Parts Co.",
             predicate="uses_contact_email",
             object_value="xs@csituo.com",
             status="CONFIRMED",
@@ -262,13 +262,13 @@ class InvestigationGraphTests(unittest.TestCase):
             admiralty_code=evidence["admiralty_code"],
             evidence_ids=[evidence["id"]],
         )
-        store.add_hypothesis(investigation.id, "h1", "SRR is an active export brand network.")
+        store.add_hypothesis(investigation.id, "h1", "SampleCo is an active export brand network.")
         store.score_hypotheses(
             investigation.id,
             [
                 {
                     "id": "ev-export",
-                    "summary": "MIMS exhibitor page shows SRR export contact.",
+                    "summary": "MIMS exhibitor page shows SampleCo export contact.",
                     "kinds": ["company_news_report"],
                     "supports": ["h1"],
                     "contradicts": [],

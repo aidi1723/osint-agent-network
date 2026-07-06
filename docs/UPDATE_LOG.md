@@ -1,5 +1,40 @@
 # Update Log
 
+## 2026-07-06 - N100 Actual Task Test Closure And Quality/Blocker Alignment
+
+Scope:
+
+- Replayed real historical investigation tasks on the <production-host> deployment.
+- Diagnosed task-result quality gaps using actual Sample Company, Sample Sparse Lead, sparse-lead, and domain runs.
+- Deployed fixes for quality scoring and environment-blocked tool runs.
+- Added the final closure record: [N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md](N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md).
+
+Changes:
+
+- `backend/app/core/quality.py` now counts verified Core v2/v3 field signals from `cross_verification_matrix`, `intelligence_requirements.eeis`, and accepted/confirmed facts when normalized `entities` are absent.
+- `backend/app/services/worker.py` now distinguishes all-blocked tool runs from generic failures. Missing executables produce investigation status `BLOCKED` and summary `工具任务被环境依赖阻断`.
+- Regression coverage added in `backend/tests/test_quality_gate.py` and `backend/tests/test_worker.py`.
+
+Actual task results:
+
+- Sample Company Core v2 score corrected from `60.2` to `82.8`; it remains `NEEDS_REVIEW` because company identity, official website, and decision-maker evidence are still blocking.
+- Sample Sparse Lead score corrected to `77.3`; it remains `NEEDS_REVIEW` because official website and contact channel are still blocking.
+- A new domain verification task correctly returned `BLOCKED` when `theharvester` was unavailable.
+
+Verification:
+
+- Initial local backend verification: `253 passed`.
+- Final local backend verification in the same <production-host> closure cycle: `278 passed` after the domain quick design-goal fixes.
+- <production-host> health/readiness: `api=ok`, `database=ok`, `web=ok`, `ready=true`.
+- <production-host> `bash scripts/verify.sh` passed: backend test suite, manifest validation, regression smoke, frontend checks, Vitest, and production build.
+
+Operational notes:
+
+- Tool health still reports attention-required tools. This is expected until missing external OSINT commands or credentials are installed.
+- Missing external domain tools are now an environment dependency blocker, not an application workflow failure.
+- Continuation update: API-created investigations now use health-aware initial planning. If every initial route is unavailable, the investigation is created as `BLOCKED`, no invalid tool jobs are queued, skipped reasons are saved in metadata, and a planning warning event is written.
+- <production-host> verification task `<planning-blocked-task-id>` confirmed this behavior with `jobs=[]`, `initial_skipped_routes=3`, and summary `工具任务被环境依赖阻断`.
+
 ## 2026-07-05 - Public Repository Privacy Cleanup
 
 Scope:
@@ -209,7 +244,7 @@ Business value:
 Scope:
 
 - Closed the current 皇城司 / OSINT Agent Network maturity phase on `<production-host>`.
-- Focused on turning sparse lead handling into a reusable workflow capability, not a one-off fix for the ZAWIJA / Nswana Mukuma test case.
+- Focused on turning sparse lead handling into a reusable workflow capability, not a one-off fix for the Sample Sparse Lead / Contact A test case.
 - Strengthened the intelligence lifecycle around evidence ledger, fact pool, cross-verification, directed gap follow-up, and completion gating.
 
 Changes:
@@ -270,7 +305,7 @@ Deployment result on <production-host>:
 Workflow validation task:
 
 - Created and ran <production-host> task `95c0cef1-0f39-4258-8846-73dbf02ca783`.
-- Name: `成熟度验证：ZAWIJA / Nswana Mukuma`.
+- Name: `成熟度验证：Sample Sparse Lead / Contact A`.
 - Final queue state:
   - 16 completed jobs,
   - 0 queued,
@@ -445,3 +480,216 @@ Operational notes:
 - Keep `frontend/.env.production` aligned with `ADMIN_API_TOKEN`, because the web app now sends the token on read and write API requests.
 - Public LAN access to the API should still be treated as sensitive. Token protection is now enforced for sensitive reads, but reverse-proxy access controls remain recommended for wider exposure.
 - Do not commit or package `.env`, SQLite files, job artifacts, logs, cookies, API keys, or tool credentials.
+
+---
+
+## 2026-07-06 - <production-host> Continuation: Outcome Metrics
+
+Scope:
+
+- Continued the <production-host> actual-task optimization pass after tool-health-aware planning was deployed.
+- Added success-rate observability to `/api/system/status`.
+
+Changes:
+
+- `investigations.outcome_metrics` now reports:
+  - `terminal_total`
+  - `success_total`
+  - `blocked_total`
+  - `failed_total`
+  - `success_rate`
+  - `blocked_rate`
+  - `failed_rate`
+- `BLOCKED` is separated from `FAILED`, so missing executables, credentials, or configured endpoints no longer inflate application failure interpretation.
+- `FAILED` and `PARTIAL_FAILED` are grouped as failed outcomes.
+- Open/running/claimed tasks are excluded from the terminal denominator.
+
+Verification:
+
+- Added `backend/tests/test_system_status.py` coverage for outcome metrics.
+- Local backend test suite: `256 passed`.
+
+Operational note:
+
+- This improves measurement and comparison of task execution quality. It does not install missing external OSINT tools; those remain an environment readiness item reported by `/api/tools/health`.
+
+---
+
+## 2026-07-06 - <production-host> Continuation: Multi-Round Actual Testing
+
+Scope:
+
+- Ran another multi-round actual-task pass on <production-host> using historical-style targets:
+  - `example.com`
+  - `example-target.test`
+  - `Sample Hospitality LLC`
+  - `Sample Lead / member-redacted`
+  - `Sample Auto Parts Co.`
+- Ran second-pass followups for the non-blocked company/sparse-lead tasks.
+
+Results:
+
+- Domain tests were correctly blocked at planning time:
+  - `<blocked-domain-task-id-1>`: `example.com`, `BLOCKED`, no jobs queued.
+  - `<blocked-domain-task-id-2>`: `example-target.test`, `BLOCKED`, no jobs queued.
+- Company tests completed local role-agent passes but remained `NEEDS_REVIEW`:
+  - `<company-task-id-1>`: `Sample Hospitality LLC`, score stayed `60.2`.
+  - `<company-task-id-2>`: `Sample Auto Parts Co.`, score stayed `60.2`.
+- Sparse-lead test improved but still did not pass the quality gate:
+  - `<sparse-lead-task-id>`: `Sample Lead / member-redacted`, score improved from `58.6` to `71.1`, still `NEEDS_REVIEW`.
+
+Issue fixed:
+
+- Planning-blocked investigations with no jobs could revert from `BLOCKED` to `OPEN` if `/run-jobs` was invoked manually.
+- `backend/app/services/worker.py` now preserves planning-blocked state when `metadata.initial_skipped_routes` exists and there are no jobs.
+- Regression coverage added in `backend/tests/test_worker.py`.
+
+Verification:
+
+- Local backend test suite: `257 passed`.
+- <production-host> backup before deploy: `<backup-path>/blocked-run-jobs-preserve-20260706-103920`.
+- <production-host> health/readiness: `api=ok`, `database=ok`, `web=ok`, `ready=true`.
+- <production-host> `bash scripts/verify.sh` passed.
+- <production-host> API verification task `<blocked-rerun-task-id>` stayed `BLOCKED` after `/run-jobs`, with `jobs=0` and `initial_skipped_routes=3`.
+
+Remaining findings:
+
+- Actual `COMPLETED` success rate has not improved yet because no new real task passed the quality gate.
+- Execution quality has improved because missing-tool tasks are blocked cleanly and no longer fail after doomed execution.
+- Company and sparse-lead success rate now depends on either installing external OSINT tools or adding real source-backed extraction for official website, contact channel, business scope, decision-maker, and relationship fields.
+
+---
+
+## 2026-07-06 - Community Tool Gap Fill: Phase 1
+
+Scope:
+
+- Began executing the approved GitHub community tool gap-fill plan.
+- Added first-class support for the domain/site discovery chain needed to improve real task success rate.
+
+Changes:
+
+- Added CLI adapters:
+  - `subfinder`: passive subdomain discovery.
+  - `httpx`: live HTTP probing, title, status, and technology extraction.
+  - `katana`: scoped crawling for contact/about/product/business pages.
+- Added internal artifact parser:
+  - `official_site_extractor`: extracts organization, email, phone, address, and business-scope entities from official-site HTML.
+- Registered these tools in registry, health checks, agent client, adapter lookup, and planning routes.
+- Domain route planning now includes `subfinder` and `httpx`.
+- URL route planning now includes `httpx`, `katana`, and `official_site_extractor`.
+
+Verification:
+
+- Added/updated tests in:
+  - `backend/tests/test_tool_adapters.py`
+  - `backend/tests/test_intel_gateway.py`
+  - `backend/tests/test_agent_protocol.py`
+- Local backend test suite: `265 passed`.
+- <production-host> backup before deploy: `<backup-path>/community-tool-gap-fill-20260706-110041`.
+- <production-host> health/readiness: `api=ok`, `database=ok`, `web=ok`, `ready=true`.
+- <production-host> `bash scripts/verify.sh` passed.
+- <production-host> API verification task `<planning-verification-task-id>` confirmed health-aware planning skips `theharvester`, `subfinder`, `amass`, `httpx`, and `spiderfoot` when commands/config are missing.
+
+Operational note:
+
+- This adds code support only. <production-host> still needs command installation/configuration for `subfinder`, `httpx`, and `katana`.
+- Until installed, health-aware planning should mark those routes unavailable instead of queueing doomed jobs.
+
+---
+
+## 2026-07-06 - <production-host> Continuation: ProjectDiscovery Actual Success Pass
+
+Scope:
+
+- Installed and wired ProjectDiscovery tools on <production-host>.
+- Replayed the sample domain task through multiple actual API runs.
+- Fixed follow-up planning, official-site extraction, and event-log issues found during live runs.
+
+<production-host> tool installation:
+
+- `subfinder` v2.14.0 at `<osint-bin>/subfinder`
+- `httpx` v1.9.0 at `<osint-bin>/httpx`
+- `katana` v1.6.1 at `<osint-bin>/katana`
+
+Changes:
+
+- Quick URL follow-up now includes `katana` and `official_site_extractor`.
+- `httpx` live URL entities can trigger site follow-up at medium confidence.
+- `official_site_extractor` now fetches HTML internally, handles gzip responses, and avoids UTF-8 decode crashes.
+- Follow-up planning respects tool health for health-aware investigations, preventing unavailable tools such as `theHarvester` from being re-queued after initial planning skipped them.
+- Worker event metadata now truncates large stdout/stderr excerpts before database insertion.
+- ProjectDiscovery adapters use bounded runtime options and safe job-local output paths.
+
+Verification:
+
+- Local backend test suite: `274 passed`.
+- <production-host> healthcheck: `api=ok`, `database=ok`, `web=ok`.
+- <production-host> production readiness: `ready=true`, `severity=ok`.
+- <production-host> tool health: `ready=9`, `attention_required=7`.
+
+Actual task result:
+
+- Phase final task before the design-goal continuation: `<phase-domain-task-id>`
+- Final job states:
+  - `subfinder`: `COMPLETED`
+  - `httpx` domain probe: `COMPLETED`
+  - `httpx` URL probe: `COMPLETED`
+  - `katana`: `COMPLETED`
+  - `official_site_extractor`: `COMPLETED`
+- Final run had `0 failed` and `0 blocked` jobs.
+- Quality score improved from `26.6` in the domain-probe-only run to `42.2`.
+- At this phase, status remained `NEEDS_REVIEW` because stronger official identity, address/business-scope normalization, decision-maker discovery, and cross-source corroboration were still needed.
+
+Backups:
+
+- `<backup-path>/env-before-projectdiscovery-tools-20260706-110444`
+- `<backup-path>/projectdiscovery-time-bounds-20260706-112508`
+- `<backup-path>/url-followup-official-fetch-20260706-114549`
+- `<backup-path>/gzip-event-truncate-20260706-115437`
+- `<backup-path>/followup-health-filter-20260706-115928`
+
+Remaining work:
+
+- Install/configure `theHarvester`, `amass`, `maigret`, and `socialscan` if their collection routes are needed.
+- Improve `katana` asset filtering so CSS/JS files are not promoted as business pages.
+- Improve official-site extraction for company names, addresses, business scope, and malformed phone filtering.
+- Add a controlled search layer, such as SearXNG, for company/sparse-lead official website discovery.
+
+---
+
+## 2026-07-06 - <production-host> Continuation: Domain Quick Design Goal Reached
+
+Scope:
+
+- Continued from the ProjectDiscovery actual success pass.
+- Focused on the remaining sample domain quick blockers after the score reached `42.2`.
+
+Changes:
+
+- `katana` parser now filters static assets before page-type promotion.
+- `official_site_extractor` now handles all-caps company names and broader auto-parts business-scope terms.
+- Phone normalization now rejects overlong concatenated numbers while preserving normal phone formats.
+- Worker now promotes high-confidence official-site extractor outputs into accepted source-backed facts.
+- Domain/URL reconnaissance quality gate no longer hard-blocks on missing decision-maker evidence.
+- Completed quality-gate summaries are stable on later empty-queue reruns.
+
+Verification:
+
+- Local backend test suite: `278 passed`.
+- <production-host> healthcheck: `api=ok`, `database=ok`, `web=ok`.
+- <production-host> production readiness: `ready=true`, `severity=ok`.
+
+Actual task result:
+
+- Final task: `<final-domain-task-id>`
+- Status: `COMPLETED`
+- Summary: `质量闸门已通过：完整度 78.1 / 100`
+- Failed jobs: `0`
+- Blocked jobs: `0`
+- Completed chain: `subfinder`, `httpx`, `katana`, `official_site_extractor`
+
+Operational conclusion:
+
+- The domain quick community-tool chain has reached the current design target on <production-host>.
+- Remaining work belongs to broader company/sparse-lead closure, especially official website search and decision-maker discovery.

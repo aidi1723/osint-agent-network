@@ -39,7 +39,9 @@ DEPENDENCY_ALIASES = {
 DEPENDENCY_READY_STATUSES = {"COMPLETED", "PARTIAL_FAILED", "FAILED", "BLOCKED"}
 HEAVY_ENRICHMENT_TOOLS = {"amass", "spiderfoot", "reconng", "ghunt"}
 FOLLOWUP_CONFIDENCE_THRESHOLD = 0.7
+HTTP_PROBED_URL_FOLLOWUP_THRESHOLD = 0.6
 PRE_ANALYSIS_FOLLOWUP_LIMIT = 1
+EVENT_OUTPUT_LIMIT = 4000
 
 
 def run_investigation_jobs(
@@ -76,6 +78,15 @@ def run_investigation_jobs(
 
     if any(job.get("status") == "RUNNING" for job in detail.get("jobs", [])):
         summary["busy"] = True
+        summary["quality_assessment"] = build_quality_assessment(detail)
+        return summary
+
+    if (
+        detail.get("status") == "BLOCKED"
+        and not detail.get("jobs")
+        and (detail.get("metadata") or {}).get("initial_skipped_routes")
+    ):
+        summary["blocked"] = 1
         summary["quality_assessment"] = build_quality_assessment(detail)
         return summary
 
@@ -246,7 +257,7 @@ def _run_single_job(
     summary["started"] += 1
     parsed = _execute_job(store, detail, job, artifact_root, adapter_factory)
     if parsed is None:
-        summary["failed"] += 1
+        _record_unsuccessful_job(summary, store, investigation_id, job["id"])
         return
     summary["completed"] += 1
     _write_parsed_output(store, investigation_id, parsed)
@@ -276,6 +287,17 @@ def _run_single_job(
                 ],
             },
         )
+
+
+def _record_unsuccessful_job(summary: dict, store, investigation_id: str, job_id: str) -> None:
+    detail = store.get_investigation_raw(investigation_id)
+    status = ""
+    if detail:
+        status = next((job.get("status") for job in detail.get("jobs", []) if job.get("id") == job_id), "")
+    if status == "BLOCKED":
+        summary["blocked"] += 1
+    else:
+        summary["failed"] += 1
 
 
 def _execute_role_job(store, detail: dict, job: dict, strategy: StrategyProfile, registry) -> object | None:
@@ -313,6 +335,7 @@ def _queue_role_followups(store, detail: dict, entities: list[dict], strategy: S
         strategy=strategy,
         registry=registry,
         already_planned=existing,
+        respect_tool_health=_respect_tool_health_for_followups(detail),
     )
     planned = [job for job in planned if getattr(job, "agent_role", "tool_agent") == "tool_agent"]
     remaining_jobs = max(0, detail.get("max_jobs", strategy.max_jobs) - len(detail.get("jobs", [])))
@@ -397,8 +420,8 @@ def _execute_job(store, detail: dict, job: dict, artifact_root: Path, adapter_fa
                 "job_id": job["id"],
                 "tool_name": job["tool_name"],
                 "returncode": run_result.returncode,
-                "stdout_excerpt": run_result.stdout_excerpt,
-                "stderr_excerpt": run_result.stderr_excerpt,
+                "stdout_excerpt": _event_output_excerpt(run_result.stdout_excerpt),
+                "stderr_excerpt": _event_output_excerpt(run_result.stderr_excerpt),
             },
         )
         return parsed
@@ -412,9 +435,16 @@ def _execute_job(store, detail: dict, job: dict, artifact_root: Path, adapter_fa
         return None
 
 
+def _event_output_excerpt(value: str) -> str:
+    if len(value) <= EVENT_OUTPUT_LIMIT:
+        return value
+    return f"{value[:EVENT_OUTPUT_LIMIT]}\n...[truncated event output from {len(value)} chars]"
+
+
 def _write_parsed_output(store, investigation_id: str, parsed: ParsedToolOutput) -> None:
     for item in parsed.entities:
         store.add_entity(investigation_id, item.type, item.value, item.source_tool, item.confidence)
+    evidence_records_by_value: dict[str, list[dict]] = {}
     for item in parsed.evidence:
         store.add_evidence(
             investigation_id,
@@ -423,7 +453,7 @@ def _write_parsed_output(store, investigation_id: str, parsed: ParsedToolOutput)
             item.source_tool,
             item.snippet,
         )
-        store.add_evidence_record(
+        record = store.add_evidence_record(
             investigation_id,
             _evidence_source_url(item),
             item.evidence_kind,
@@ -431,6 +461,7 @@ def _write_parsed_output(store, investigation_id: str, parsed: ParsedToolOutput)
             item.snippet,
             _evidence_credibility(item),
         )
+        evidence_records_by_value.setdefault(item.entity_value, []).append(record)
     for item in parsed.relationships:
         store.add_relationship(
             investigation_id,
@@ -439,6 +470,55 @@ def _write_parsed_output(store, investigation_id: str, parsed: ParsedToolOutput)
             item.relationship_type,
             item.confidence,
         )
+    _write_source_backed_facts(store, investigation_id, parsed, evidence_records_by_value)
+
+
+def _write_source_backed_facts(
+    store,
+    investigation_id: str,
+    parsed: ParsedToolOutput,
+    evidence_records_by_value: dict[str, list[dict]],
+) -> None:
+    if parsed.tool != "official_site_extractor":
+        return
+    for entity in parsed.entities:
+        fact_shape = _official_site_fact_shape(parsed.target_value, entity.type, entity.value)
+        if fact_shape is None:
+            continue
+        evidence_records = evidence_records_by_value.get(entity.value) or []
+        if not evidence_records:
+            continue
+        record = evidence_records[0]
+        store.add_fact(
+            investigation_id=investigation_id,
+            statement=fact_shape["statement"],
+            subject=fact_shape["subject"],
+            predicate=fact_shape["predicate"],
+            object_value=fact_shape["object"],
+            status="CONFIRMED" if entity.confidence >= 0.74 else "LIKELY",
+            confidence=entity.confidence,
+            admiralty_code=str(record.get("admiralty_code") or "A-3"),
+            evidence_ids=[str(item.get("id")) for item in evidence_records if item.get("id")],
+        )
+
+
+def _official_site_fact_shape(source_url: str, entity_type: str, value: str) -> dict | None:
+    predicates = {
+        "organization": "has_company_identity",
+        "email": "uses_contact_email",
+        "phone": "uses_contact_phone",
+        "address": "has_operation_location",
+        "business_scope": "has_business_scope",
+    }
+    predicate = predicates.get(entity_type)
+    if predicate is None:
+        return None
+    return {
+        "subject": source_url,
+        "predicate": predicate,
+        "object": value,
+        "statement": f"Official site {source_url} supports {predicate}: {value}.",
+    }
 
 
 def _evidence_source_url(item) -> str:
@@ -559,7 +639,7 @@ def _plan_followups(detail: dict, parsed: ParsedToolOutput, strategy: StrategyPr
     entity_dicts = [
         {"type": entity.type, "value": entity.value, "source_tool": entity.source_tool, "confidence": entity.confidence}
         for entity in parsed.entities
-        if entity.confidence >= FOLLOWUP_CONFIDENCE_THRESHOLD
+        if _eligible_followup_entity(entity, parsed)
         if not (entity.type == parsed.target_type and entity.value == parsed.target_value)
     ]
     planned = plan_progressive_jobs(
@@ -577,9 +657,25 @@ def _plan_followups(detail: dict, parsed: ParsedToolOutput, strategy: StrategyPr
         strategy=strategy,
         registry=registry,
         already_planned=already_planned,
+        respect_tool_health=_respect_tool_health_for_followups(detail),
     )
     remaining_jobs = max(0, detail.get("max_jobs", strategy.max_jobs) - len(detail["jobs"]))
     return planned[:remaining_jobs]
+
+
+def _respect_tool_health_for_followups(detail: dict) -> bool:
+    metadata = detail.get("metadata") or {}
+    return bool(metadata.get("respect_tool_health") or metadata.get("initial_skipped_routes"))
+
+
+def _eligible_followup_entity(entity, parsed: ParsedToolOutput) -> bool:
+    if entity.confidence >= FOLLOWUP_CONFIDENCE_THRESHOLD:
+        return True
+    return (
+        entity.type == "url"
+        and parsed.tool == "httpx"
+        and entity.confidence >= HTTP_PROBED_URL_FOLLOWUP_THRESHOLD
+    )
 
 
 def parsed_target_depth(detail: dict, parsed: ParsedToolOutput) -> int:
@@ -614,21 +710,30 @@ def _risk_report_for_detail(detail: dict) -> dict:
 def _final_status(detail: dict, risk_report: dict) -> str:
     counts = detail.get("job_counts", {})
     useful = counts.get("COMPLETED", 0) + counts.get("PARTIAL_FAILED", 0)
-    failed = counts.get("FAILED", 0) + counts.get("BLOCKED", 0)
+    failed = counts.get("FAILED", 0)
+    blocked = counts.get("BLOCKED", 0)
     if risk_report.get("review_required"):
         return "NEEDS_REVIEW"
-    if useful and failed:
+    if useful and (failed or blocked):
         return "PARTIAL_FAILED"
     if useful:
         return "COMPLETED"
-    return "FAILED" if failed else "OPEN"
+    if failed:
+        return "FAILED"
+    if blocked:
+        return "BLOCKED"
+    return "OPEN"
 
 
 def _summary_text(risk_report: dict, summary: dict, quality_assessment: dict | None = None) -> str:
     if risk_report.get("review_required"):
         return f"已生成风险复核评分：{risk_report.get('overall_risk_score', 0)}"
+    if summary["blocked"]:
+        return "工具任务被环境依赖阻断"
     if quality_assessment and not quality_assessment.get("completion_ready"):
         return f"质量闸门未通过：完整度 {quality_assessment.get('score', 0)} / 100"
+    if quality_assessment and quality_assessment.get("completion_ready"):
+        return f"质量闸门已通过：完整度 {quality_assessment.get('score', 0)} / 100"
     if summary["completed"]:
         return f"已完成 {summary['completed']} 个工具任务"
     if summary["failed"]:

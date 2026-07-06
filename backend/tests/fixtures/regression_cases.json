@@ -9,12 +9,12 @@
   {
     "id": "sparse_lead_long_way",
     "seed_type": "sparse_lead",
-    "seed_value": "Long Way / in19034126503jgqn",
+    "seed_value": "Sample Lead / member-redacted",
     "strategy": "deep",
     "metadata": {
       "platform": "Alibaba",
-      "member_id": "in19034126503jgqn",
-      "company_name_raw": "Long Way",
+      "member_id": "member-redacted",
+      "company_name_raw": "Sample Lead",
       "purchase_category": "construction machinery spare parts",
       "country_region": "India"
     }

@@ -17,8 +17,10 @@ class StartScriptTests(unittest.TestCase):
     def test_start_script_uses_stable_python3_by_default(self):
         script = (ROOT_DIR / "scripts" / "start.sh").read_text(encoding="utf-8")
 
-        self.assertIn('PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"', script)
-        self.assertNotIn("python3.13 || command -v python3.12", script)
+        self.assertIn("find_python_bin", script)
+        self.assertIn("python3.14 python3.13 python3.12 python3.11 python3", script)
+        self.assertIn("Python 3.11 or newer is required", script)
+        self.assertIn("sys.version_info >= (3, 11)", script)
 
 
 if __name__ == "__main__":

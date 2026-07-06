@@ -98,7 +98,7 @@ def _sample_detail(case: dict) -> dict:
         entities.extend(
             [
                 _entity("platform_account", metadata.get("member_id", seed_value), "alibaba_screenshot", 0.85),
-                _entity("company", metadata.get("company_name_raw", "Long Way"), "alibaba_screenshot", 0.7),
+                _entity("company", metadata.get("company_name_raw", "Sample Lead"), "alibaba_screenshot", 0.7),
                 _entity("country_region", metadata.get("country_region", "India"), "alibaba_screenshot", 0.65),
                 _entity("purchase_category", metadata.get("purchase_category", "construction machinery spare parts"), "alibaba_screenshot", 0.75),
             ]

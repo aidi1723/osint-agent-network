@@ -28,6 +28,7 @@ def plan_progressive_jobs(
     registry: ToolRegistry,
     already_planned: set[tuple[str, str, str]],
     runtime_env: dict[str, str] | None = None,
+    respect_tool_health: bool = False,
 ) -> list[PlannedJob]:
     if depth >= strategy.max_depth:
         return []
@@ -45,6 +46,7 @@ def plan_progressive_jobs(
                     registry=registry,
                     already_planned=seen,
                     runtime_env=runtime_env,
+                    respect_tool_health=respect_tool_health,
                 )
             except (NormalizationError, ValueError):
                 continue
@@ -72,7 +74,9 @@ def _candidate_targets(entity: dict) -> list[tuple[str, str]]:
         return targets
 
     if entity_type == "url":
-        targets = [("profile_url", value)] if _looks_like_high_value_url(value) else []
+        targets = [("url", value)]
+        if _looks_like_high_value_url(value):
+            targets.append(("profile_url", value))
         domain = _domain_from_url(value)
         if domain:
             targets.append(("domain", domain))

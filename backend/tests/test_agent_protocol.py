@@ -103,7 +103,7 @@ class AgentProtocolTests(unittest.TestCase):
         self.assertEqual(detail["confidence"], 0.81)
         self.assertFalse(detail["quality_assessment"]["completion_ready"])
         self.assertIn("## BLUF", detail["report_markdown"])
-        self.assertEqual(len(detail["events"]), 1)
+        self.assertIn("开始运行 Amass", {item["message"] for item in detail["events"]})
         self.assertEqual(len(detail["entities"]), 1)
         self.assertEqual(len(detail["evidence"]), 1)
         self.assertEqual(len(detail["relationships"]), 1)
@@ -113,23 +113,23 @@ class AgentProtocolTests(unittest.TestCase):
             db_path = Path(tmpdir) / "osint.sqlite"
             first_store = SQLiteStore(str(db_path))
             investigation = first_store.create_investigation(
-                name="SRR core v2",
+                name="SampleCo core v2",
                 seed_type="company",
-                seed_value="SRR Genuine Parts",
+                seed_value="Sample Auto Parts Co.",
                 strategy_name="deep",
             )
             evidence = first_store.add_evidence_record(
                 investigation_id=investigation.id,
-                source_url="https://www.srrautopartsonline.com/en/",
+                source_url="https://www.example-target.test/en/",
                 source_type="official_website",
                 source_tool="official_web",
-                snippet="SRR contact page lists xs@csituo.com.",
+                snippet="SampleCo contact page lists xs@csituo.com.",
                 credibility=0.82,
             )
             first_store.add_fact(
                 investigation_id=investigation.id,
-                statement="SRR uses xs@csituo.com as a public contact email.",
-                subject="SRR Genuine Parts",
+                statement="SampleCo uses xs@csituo.com as a public contact email.",
+                subject="Sample Auto Parts Co.",
                 predicate="uses_contact_email",
                 object_value="xs@csituo.com",
                 status="CONFIRMED",
@@ -140,14 +140,14 @@ class AgentProtocolTests(unittest.TestCase):
             first_store.add_hypothesis(
                 investigation.id,
                 "h1",
-                "SRR is an active export brand network.",
+                "SampleCo is an active export brand network.",
             )
             first_store.score_hypotheses(
                 investigation.id,
                 [
                     {
                         "id": "ev-export",
-                        "summary": "MIMS exhibitor page shows SRR export contact.",
+                        "summary": "MIMS exhibitor page shows SampleCo export contact.",
                         "kinds": ["company_news_report"],
                         "supports": ["h1"],
                         "contradicts": [],
@@ -168,23 +168,23 @@ class AgentProtocolTests(unittest.TestCase):
     def test_sqlite_import_detail_preserves_core_v2_protocol_data(self):
         source = MemoryStore()
         investigation = source.create_investigation(
-            name="SRR imported core v2",
+            name="SampleCo imported core v2",
             seed_type="company",
-            seed_value="SRR Genuine Parts",
+            seed_value="Sample Auto Parts Co.",
             strategy_name="deep",
         )
         evidence = source.add_evidence_record(
             investigation_id=investigation.id,
-            source_url="https://www.srrautopartsonline.com/en/",
+            source_url="https://www.example-target.test/en/",
             source_type="official_website",
             source_tool="official_web",
-            snippet="SRR contact page lists xs@csituo.com.",
+            snippet="SampleCo contact page lists xs@csituo.com.",
             credibility=0.82,
         )
         source.add_fact(
             investigation_id=investigation.id,
-            statement="SRR uses xs@csituo.com as a public contact email.",
-            subject="SRR Genuine Parts",
+            statement="SampleCo uses xs@csituo.com as a public contact email.",
+            subject="Sample Auto Parts Co.",
             predicate="uses_contact_email",
             object_value="xs@csituo.com",
             status="CONFIRMED",
@@ -192,13 +192,13 @@ class AgentProtocolTests(unittest.TestCase):
             admiralty_code=evidence["admiralty_code"],
             evidence_ids=[evidence["id"]],
         )
-        source.add_hypothesis(investigation.id, "h1", "SRR is an active export brand network.")
+        source.add_hypothesis(investigation.id, "h1", "SampleCo is an active export brand network.")
         source.score_hypotheses(
             investigation.id,
             [
                 {
                     "id": "ev-export",
-                    "summary": "MIMS exhibitor page shows SRR export contact.",
+                    "summary": "MIMS exhibitor page shows SampleCo export contact.",
                     "kinds": ["company_news_report"],
                     "supports": ["h1"],
                     "contradicts": [],
@@ -223,24 +223,24 @@ class AgentProtocolTests(unittest.TestCase):
     def test_memory_store_tracks_core_v2_protocol_data_in_detail(self):
         store = MemoryStore()
         investigation = store.create_investigation(
-            name="SRR memory core v2",
+            name="SampleCo memory core v2",
             seed_type="company",
-            seed_value="SRR Genuine Parts",
+            seed_value="Sample Auto Parts Co.",
             strategy_name="deep",
         )
 
         evidence = store.add_evidence_record(
             investigation_id=investigation.id,
-            source_url="https://www.srrautopartsonline.com/en/",
+            source_url="https://www.example-target.test/en/",
             source_type="official_website",
             source_tool="official_web",
-            snippet="SRR contact page lists xs@csituo.com.",
+            snippet="SampleCo contact page lists xs@csituo.com.",
             credibility=0.82,
         )
         fact = store.add_fact(
             investigation_id=investigation.id,
-            statement="SRR uses xs@csituo.com as a public contact email.",
-            subject="SRR Genuine Parts",
+            statement="SampleCo uses xs@csituo.com as a public contact email.",
+            subject="Sample Auto Parts Co.",
             predicate="uses_contact_email",
             object_value="xs@csituo.com",
             status="CONFIRMED",
@@ -248,13 +248,13 @@ class AgentProtocolTests(unittest.TestCase):
             admiralty_code=evidence["admiralty_code"],
             evidence_ids=[evidence["id"]],
         )
-        store.add_hypothesis(investigation.id, "h1", "SRR is an active export brand network.")
+        store.add_hypothesis(investigation.id, "h1", "SampleCo is an active export brand network.")
         result = store.score_hypotheses(
             investigation.id,
             [
                 {
                     "id": "ev-export",
-                    "summary": "MIMS exhibitor page shows SRR export contact.",
+                    "summary": "MIMS exhibitor page shows SampleCo export contact.",
                     "kinds": ["company_news_report"],
                     "supports": ["h1"],
                     "contradicts": [],
@@ -276,9 +276,9 @@ class AgentProtocolTests(unittest.TestCase):
     def test_agent_http_routes_accept_core_v2_protocol_writes(self):
         memory_store = MemoryStore()
         investigation = memory_store.create_investigation(
-            name="SRR API core v2",
+            name="SampleCo API core v2",
             seed_type="company",
-            seed_value="SRR Genuine Parts",
+            seed_value="Sample Auto Parts Co.",
             strategy_name="deep",
         )
         original_store = app_main.store
@@ -292,10 +292,10 @@ class AgentProtocolTests(unittest.TestCase):
                 f"{base_url}/api/agent/evidence-records",
                 {
                     "task_id": investigation.id,
-                    "source_url": "https://www.srrautopartsonline.com/en/",
+                    "source_url": "https://www.example-target.test/en/",
                     "source_type": "official_website",
                     "source_tool": "official_web",
-                    "snippet": "SRR contact page lists xs@csituo.com.",
+                    "snippet": "SampleCo contact page lists xs@csituo.com.",
                     "credibility": 0.82,
                 },
             )
@@ -303,8 +303,8 @@ class AgentProtocolTests(unittest.TestCase):
                 f"{base_url}/api/agent/facts",
                 {
                     "task_id": investigation.id,
-                    "statement": "SRR uses xs@csituo.com as a public contact email.",
-                    "subject": "SRR Genuine Parts",
+                    "statement": "SampleCo uses xs@csituo.com as a public contact email.",
+                    "subject": "Sample Auto Parts Co.",
                     "predicate": "uses_contact_email",
                     "object": "xs@csituo.com",
                     "status": "CONFIRMED",
@@ -318,7 +318,7 @@ class AgentProtocolTests(unittest.TestCase):
                 {
                     "task_id": investigation.id,
                     "hypothesis_id": "h1",
-                    "statement": "SRR is an active export brand network.",
+                    "statement": "SampleCo is an active export brand network.",
                 },
             )
             analysis = _post_json(
@@ -328,7 +328,7 @@ class AgentProtocolTests(unittest.TestCase):
                     "evidence_items": [
                         {
                             "id": "ev-export",
-                            "summary": "MIMS exhibitor page shows SRR export contact.",
+                            "summary": "MIMS exhibitor page shows SampleCo export contact.",
                             "kinds": ["company_news_report"],
                             "supports": ["h1"],
                             "contradicts": [],
@@ -449,9 +449,9 @@ class AgentProtocolTests(unittest.TestCase):
     def test_company_investigation_jobs_include_agent_roles_and_output_contracts(self):
         store = MemoryStore()
         investigation = store.create_investigation(
-            name="美国企业背调：Family Hospitality LLC / Faiz Chaudhry",
+            name="美国企业背调：Sample Hospitality LLC / Sample Contact",
             seed_type="company",
-            seed_value="Family Hospitality LLC / Faiz Chaudhry",
+            seed_value="Sample Hospitality LLC / Sample Contact",
             strategy_name="deep",
         )
 
@@ -468,14 +468,14 @@ class AgentProtocolTests(unittest.TestCase):
     def test_memory_store_creates_sparse_lead_with_metadata(self):
         store = MemoryStore()
         investigation = store.create_investigation(
-            name="Alibaba 买家弱线索：Long Way",
+            name="Alibaba 买家弱线索：Sample Lead",
             seed_type="sparse_lead",
-            seed_value="Long Way / in19034126503jgqn",
+            seed_value="Sample Lead / member-redacted",
             strategy_name="deep",
             metadata={
                 "platform": "Alibaba",
-                "lead_display_name": "Long Way",
-                "member_id": "in19034126503jgqn",
+                "lead_display_name": "Sample Lead",
+                "member_id": "member-redacted",
                 "country_region": "IN",
             },
         )
@@ -484,21 +484,21 @@ class AgentProtocolTests(unittest.TestCase):
 
         self.assertEqual(detail["seed_type"], "sparse_lead")
         self.assertEqual(detail["metadata"]["platform"], "Alibaba")
-        self.assertEqual(detail["metadata"]["member_id"], "in19034126503jgqn")
+        self.assertEqual(detail["metadata"]["member_id"], "member-redacted")
 
     def test_sqlite_store_persists_sparse_lead_metadata(self):
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "osint.sqlite"
             first_store = SQLiteStore(str(db_path))
             investigation = first_store.create_investigation(
-                name="Alibaba 买家弱线索：Long Way",
+                name="Alibaba 买家弱线索：Sample Lead",
                 seed_type="sparse_lead",
-                seed_value="Long Way / in19034126503jgqn",
+                seed_value="Sample Lead / member-redacted",
                 strategy_name="deep",
                 metadata={
                     "platform": "Alibaba",
-                    "lead_display_name": "Long Way",
-                    "member_id": "in19034126503jgqn",
+                    "lead_display_name": "Sample Lead",
+                    "member_id": "member-redacted",
                     "country_region": "IN",
                     "categories": ["Induction Cookers", "Gas Cooktops"],
                 },
@@ -513,11 +513,11 @@ class AgentProtocolTests(unittest.TestCase):
     def test_sparse_lead_investigation_jobs_include_agent_roles_and_contracts(self):
         store = MemoryStore()
         investigation = store.create_investigation(
-            name="Alibaba 买家弱线索：Long Way",
+            name="Alibaba 买家弱线索：Sample Lead",
             seed_type="sparse_lead",
-            seed_value="Long Way / in19034126503jgqn",
+            seed_value="Sample Lead / member-redacted",
             strategy_name="deep",
-            metadata={"platform": "Alibaba", "member_id": "in19034126503jgqn"},
+            metadata={"platform": "Alibaba", "member_id": "member-redacted"},
         )
 
         jobs = store.get_investigation(investigation.id)["jobs"]
@@ -533,9 +533,9 @@ class AgentProtocolTests(unittest.TestCase):
         store = MemoryStore()
         investigation = Investigation(
             id="legacy-family-hospitality",
-            name="美国企业背调：Family Hospitality LLC / Faiz Chaudhry",
+            name="美国企业背调：Sample Hospitality LLC / Sample Contact",
             seed_type="username",
-            seed_value="Family Hospitality LLC / Faiz Chaudhry",
+            seed_value="Sample Hospitality LLC / Sample Contact",
             strategy="deep",
             status="NEEDS_REVIEW",
             created_at="2026-05-19T00:00:00+00:00",
@@ -550,7 +550,7 @@ class AgentProtocolTests(unittest.TestCase):
             investigation_id=investigation.id,
             tool_name="maigret",
             target_type="username",
-            target_value="Faiz Chaudhry",
+            target_value="Sample Contact",
             depth=0,
             status="COMPLETED",
         )
@@ -632,7 +632,7 @@ class AgentProtocolTests(unittest.TestCase):
             self.assertFalse(detail["quality_assessment"]["completion_ready"])
             self.assertIn("## BLUF", detail["report_markdown"])
             self.assertEqual(detail["claimed_by_agent_name"], "codex-desktop")
-            self.assertEqual(len(detail["jobs"]), 4)
+            self.assertEqual(len(detail["jobs"]), 6)
             self.assertEqual(len(detail["events"]), 1)
             self.assertEqual(len(detail["entities"]), 1)
             self.assertEqual(len(detail["evidence"]), 1)

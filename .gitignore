@@ -28,6 +28,7 @@ data/jobs/
 data/artifacts/
 data/screenshots/
 data/snapshots/
+backend/data/
 reports/*
 !reports/.gitkeep
 output/

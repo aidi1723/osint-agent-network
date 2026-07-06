@@ -15,13 +15,13 @@ WEB_PORT="${WEB_PORT:-3008}"
 API_URL="${API_URL:-http://127.0.0.1:$APP_PORT}"
 WEB_URL="${WEB_URL:-http://127.0.0.1:$WEB_PORT}"
 READ_TOKEN="${READ_API_TOKEN:-${ADMIN_API_TOKEN:-${AGENT_API_TOKEN:-}}}"
-AUTH_ARGS=()
-if [[ -n "$READ_TOKEN" ]]; then
-  AUTH_ARGS=(-H "Authorization: Bearer $READ_TOKEN")
-fi
 
 api_health="$(curl -fsS "$API_URL/api/health")"
-system_status="$(curl -fsS "${AUTH_ARGS[@]}" "$API_URL/api/system/status")"
+if [[ -n "$READ_TOKEN" ]]; then
+  system_status="$(curl -fsS -H "Authorization: Bearer $READ_TOKEN" "$API_URL/api/system/status")"
+else
+  system_status="$(curl -fsS "$API_URL/api/system/status")"
+fi
 web_head="$(curl -fsS "$WEB_URL/" | head -n 5)"
 
 python3 - "$api_health" "$system_status" <<'PY'

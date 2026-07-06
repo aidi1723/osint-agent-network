@@ -41,6 +41,34 @@ class SystemStatusTests(unittest.TestCase):
         self.assertIn("health", payload["tools"])
         self.assertGreaterEqual(payload["tools"]["health"]["total"], 1)
 
+    def test_system_status_payload_reports_investigation_outcome_metrics(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            store = SQLiteStore(str(root / "data" / "osint.sqlite"))
+            open_task = store.create_investigation("Open", "company", "Open LLC", "quick")
+            completed_task = store.create_investigation("Done", "company", "Done LLC", "quick")
+            blocked_task = store.create_investigation("Blocked", "company", "Blocked LLC", "quick")
+            failed_task = store.create_investigation("Failed", "company", "Failed LLC", "quick")
+            store.set_investigation_status(open_task.id, "OPEN")
+            store.set_investigation_status(completed_task.id, "COMPLETED")
+            store.set_investigation_status(blocked_task.id, "BLOCKED")
+            store.set_investigation_status(failed_task.id, "FAILED")
+
+            payload = system_status_payload(store_obj=store, root_dir=str(root))
+
+        self.assertEqual(
+            payload["investigations"]["outcome_metrics"],
+            {
+                "terminal_total": 3,
+                "success_total": 1,
+                "blocked_total": 1,
+                "failed_total": 1,
+                "success_rate": 0.3333,
+                "blocked_rate": 0.3333,
+                "failed_rate": 0.3333,
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

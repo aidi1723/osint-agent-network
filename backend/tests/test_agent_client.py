@@ -186,13 +186,13 @@ class AgentClientCliTests(unittest.TestCase):
                 "--task-id",
                 "task-1",
                 "--source-url",
-                "https://www.srrautopartsonline.com/en/",
+                "https://www.example-target.test/en/",
                 "--source-type",
                 "official_website",
                 "--source-tool",
                 "official_web",
                 "--snippet",
-                "SRR contact page lists xs@csituo.com.",
+                "SampleCo contact page lists xs@csituo.com.",
                 "--credibility",
                 "0.82",
             ],
@@ -204,9 +204,9 @@ class AgentClientCliTests(unittest.TestCase):
                 "--task-id",
                 "task-1",
                 "--statement",
-                "SRR uses xs@csituo.com as a public contact email.",
+                "SampleCo uses xs@csituo.com as a public contact email.",
                 "--subject",
-                "SRR Genuine Parts",
+                "Sample Auto Parts Co.",
                 "--predicate",
                 "uses_contact_email",
                 "--object",
@@ -230,7 +230,7 @@ class AgentClientCliTests(unittest.TestCase):
                 "--id",
                 "h1",
                 "--statement",
-                "SRR is an active export brand network.",
+                "SampleCo is an active export brand network.",
             ],
             fake_post,
         )
@@ -240,7 +240,7 @@ class AgentClientCliTests(unittest.TestCase):
                 "--task-id",
                 "task-1",
                 "--evidence-json",
-                '[{"id":"ev-export","summary":"MIMS exhibitor page shows SRR export contact.","kinds":["company_news_report"],"supports":["h1"],"contradicts":["h2"],"source_reliability":"B","credibility":0.72,"keywords":["export"]}]',
+                '[{"id":"ev-export","summary":"MIMS exhibitor page shows SampleCo export contact.","kinds":["company_news_report"],"supports":["h1"],"contradicts":["h2"],"source_reliability":"B","credibility":0.72,"keywords":["export"]}]',
             ],
             fake_post,
         )
@@ -511,7 +511,7 @@ class AgentClientCliTests(unittest.TestCase):
 
         self.assertEqual(output["target_type"], "email")
         self.assertEqual(output["target_value"], "buyer@example.com")
-        self.assertEqual([route["tool_name"] for route in output["routes"]], ["socialscan", "spiderfoot", "reconng"])
+        self.assertEqual([route["tool_name"] for route in output["routes"]], ["socialscan", "spiderfoot"])
         self.assertEqual(output["skipped_routes"][0]["tool_name"], "ghunt")
 
     def test_plan_tools_loads_project_dotenv_without_printing_secrets(self):

@@ -14,7 +14,7 @@ from app.core.fact_pool import FactRecord, default_promotion_stage_for_status, v
 from app.core.graph import build_investigation_graph
 from app.core.intelligence_memory import build_intelligence_memory
 from app.core.intelligence_requirements import apply_requirement_updates, build_intelligence_requirements
-from app.core.planner import StrategyProfile, plan_initial_jobs
+from app.core.planner import StrategyProfile, plan_initial_job_set, plan_initial_jobs
 from app.core.quality import build_quality_assessment, completion_status_for_detail, render_structured_report
 from app.core.registry import default_tool_registry
 
@@ -138,10 +138,19 @@ class MemoryStore:
         seed_value: str,
         strategy_name: str,
         metadata: dict | None = None,
+        respect_tool_health: bool = False,
     ) -> Investigation:
         strategy = _strategy_from_name(strategy_name)
         registry = default_tool_registry()
-        planned_jobs = plan_initial_jobs(seed_type, seed_value, strategy, registry)
+        initial_plan = plan_initial_job_set(seed_type, seed_value, strategy, registry, respect_tool_health=respect_tool_health)
+        planned_jobs = initial_plan.jobs
+        skipped_routes = initial_plan.skipped_routes
+        metadata = metadata or {}
+        if respect_tool_health:
+            metadata = {**metadata, "respect_tool_health": True}
+        if skipped_routes:
+            metadata = {**metadata, "initial_skipped_routes": [asdict(route) for route in skipped_routes]}
+        planning_blocked = bool(skipped_routes and not planned_jobs)
         now = datetime.now(UTC).isoformat()
         investigation = Investigation(
             id=str(uuid4()),
@@ -149,13 +158,14 @@ class MemoryStore:
             seed_type=seed_type,
             seed_value=seed_value,
             strategy=strategy.name,
-            status="OPEN",
+            status="BLOCKED" if planning_blocked else "OPEN",
             created_at=now,
             updated_at=now,
             max_depth=strategy.max_depth,
             max_jobs=strategy.max_jobs,
             max_entities=strategy.max_entities,
-            metadata=metadata or {},
+            summary="工具任务被环境依赖阻断" if planning_blocked else "",
+            metadata=metadata,
         )
 
         with self.lock:
@@ -173,6 +183,17 @@ class MemoryStore:
                     depends_on=planned.depends_on,
                 )
                 self.jobs[job.id] = job
+            if skipped_routes:
+                event = AgentEvent(
+                    id=str(uuid4()),
+                    investigation_id=investigation.id,
+                    agent_id="planner",
+                    level="warning",
+                    message="规划阶段跳过不可用工具",
+                    metadata={"skipped_routes": [asdict(route) for route in skipped_routes]},
+                    created_at=now,
+                )
+                self.events[event.id] = event
 
         return investigation
 
@@ -890,12 +911,20 @@ class SQLiteStore:
         seed_value: str,
         strategy_name: str,
         metadata: dict | None = None,
+        respect_tool_health: bool = False,
     ) -> Investigation:
         strategy = _strategy_from_name(strategy_name)
         registry = default_tool_registry()
-        planned_jobs = plan_initial_jobs(seed_type, seed_value, strategy, registry)
+        initial_plan = plan_initial_job_set(seed_type, seed_value, strategy, registry, respect_tool_health=respect_tool_health)
+        planned_jobs = initial_plan.jobs
+        skipped_routes = initial_plan.skipped_routes
         now = _now()
         metadata = metadata or {}
+        if respect_tool_health:
+            metadata = {**metadata, "respect_tool_health": True}
+        if skipped_routes:
+            metadata = {**metadata, "initial_skipped_routes": [asdict(route) for route in skipped_routes]}
+        planning_blocked = bool(skipped_routes and not planned_jobs)
         requirements = build_intelligence_requirements(seed_type, seed_value, strategy.name, metadata)
         metadata = {**metadata, "intelligence_requirements": requirements}
         investigation = Investigation(
@@ -904,12 +933,13 @@ class SQLiteStore:
             seed_type=seed_type,
             seed_value=seed_value,
             strategy=strategy.name,
-            status="OPEN",
+            status="BLOCKED" if planning_blocked else "OPEN",
             created_at=now,
             updated_at=now,
             max_depth=strategy.max_depth,
             max_jobs=strategy.max_jobs,
             max_entities=strategy.max_entities,
+            summary="工具任务被环境依赖阻断" if planning_blocked else "",
             metadata=metadata,
         )
 
@@ -955,6 +985,23 @@ class SQLiteStore:
                     for planned in planned_jobs
                 ],
             )
+            if skipped_routes:
+                conn.execute(
+                    """
+                    INSERT INTO events (
+                        id, investigation_id, agent_id, level, message, metadata_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid4()),
+                        investigation.id,
+                        "planner",
+                        "warning",
+                        "规划阶段跳过不可用工具",
+                        json.dumps({"skipped_routes": [asdict(route) for route in skipped_routes]}, ensure_ascii=False),
+                        now,
+                    ),
+                )
         return investigation
 
     def register_agent(

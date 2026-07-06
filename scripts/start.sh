@@ -26,6 +26,44 @@ is_running() {
   [[ -f "$pid_file" ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null
 }
 
+find_python_bin() {
+  if [[ -n "${PYTHON_BIN:-}" ]]; then
+    echo "$PYTHON_BIN"
+    return
+  fi
+
+  local candidate
+  for candidate in python3.14 python3.13 python3.12 python3.11 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      command -v "$candidate"
+      return
+    fi
+  done
+
+  for candidate in /opt/homebrew/bin/python3.14 /opt/homebrew/bin/python3.13 /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 $HOME/.local/bin/python3.11; do
+    if [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return
+    fi
+  done
+}
+
+require_python_version() {
+  local python_bin="$1"
+  if [[ -z "$python_bin" ]]; then
+    echo "Python 3.11 or newer is required, but no python3 executable was found." >&2
+    exit 1
+  fi
+  if ! "$python_bin" - <<'PY'
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+PY
+  then
+    echo "Python 3.11 or newer is required, but $python_bin is too old." >&2
+    exit 1
+  fi
+}
+
 wait_for_http() {
   local name="$1"
   local url="$2"
@@ -49,7 +87,8 @@ if is_running "$API_PID"; then
   echo "api already running: $(cat "$API_PID")"
 else
   cd "$ROOT_DIR"
-  PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
+  PYTHON_BIN="$(find_python_bin)"
+  require_python_version "$PYTHON_BIN"
   nohup bash -lc "cd '$ROOT_DIR' && exec env PYTHONPATH=backend '$PYTHON_BIN' -m app.main" > "$API_LOG" 2>&1 &
   echo $! > "$API_PID"
   echo "api started: $(cat "$API_PID")"

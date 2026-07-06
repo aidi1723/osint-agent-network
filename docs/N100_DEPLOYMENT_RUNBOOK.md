@@ -1,11 +1,13 @@
 # N100 Deployment Runbook
 
-Version: 1.1
-Updated: 2026-07-02
+Version: 1.2
+Updated: 2026-07-06
 Target host: `<production-host>`
 Target path: `/opt/osint-agent-network`
 
-This runbook is the handoff document for deploying and upgrading OSINT Agent Network / 情报官 on <production-host>. The latest detailed deployment record is [N100_DEPLOYMENT_LOG_2026-07-02.md](N100_DEPLOYMENT_LOG_2026-07-02.md).
+This runbook is the handoff document for deploying and upgrading OSINT Agent Network / 情报官 on <production-host>. The latest actual-task closure record is [N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md](N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md). Earlier deployment details are recorded in [N100_DEPLOYMENT_LOG_2026-07-02.md](N100_DEPLOYMENT_LOG_2026-07-02.md) and [FINAL_CLOSURE_AND_N100_DEPLOYMENT_2026-07-04.md](FINAL_CLOSURE_AND_N100_DEPLOYMENT_2026-07-04.md).
+
+Current <production-host> actual path used by the latest live tests: `<production-path>`. Older command examples that use `/opt/osint-agent-network` are deployment templates; substitute the real host path when operating the current <production-host> instance.
 
 ## 1. Current Completion Status
 
@@ -28,10 +30,10 @@ Verified capabilities:
 bash scripts/verify.sh
 ```
 
-Expected final result as of 2026-07-02:
+Expected final result as of 2026-07-06:
 
 ```text
-Ran 110 tests ... OK
+Backend tests pass
 Regression smoke: case_count=4, failed=0
 ui state checks passed
 graph helper checks passed
@@ -41,6 +43,16 @@ core v3 helper checks passed
 system status helper checks passed
 vite build ... built
 ```
+
+The 2026-07-06 <production-host> actual-task verification additionally confirmed:
+
+- Local backend verification: `278 passed`.
+- <production-host> full verification passed through `bash scripts/verify.sh`.
+- Historical Sample Company Core v2 quality score: `82.8`, still `NEEDS_REVIEW` due unresolved identity, website, and decision-maker blockers.
+- Historical Sample Sparse Lead quality score: `77.3`, still `NEEDS_REVIEW` due unresolved website and contact-channel blockers.
+- Missing external commands produce investigation status `BLOCKED` with summary `工具任务被环境依赖阻断`.
+- ProjectDiscovery domain quick chain reached the current design target on <production-host> in task `<final-domain-task-id>`: `COMPLETED`, `78.1 / 100`, failed jobs `0`, blocked jobs `0`.
+- Final live chain completed: `subfinder`, `httpx`, `katana`, and `official_site_extractor`.
 
 ## 2. Deployment Options
 
@@ -137,6 +149,10 @@ THEHARVESTER_LIMIT=500
 
 AMASS_COMMAND=amass
 AMASS_PASSIVE=true
+
+SUBFINDER_COMMAND=<osint-bin>/subfinder
+HTTPX_COMMAND=<osint-bin>/httpx
+KATANA_COMMAND=<osint-bin>/katana
 
 SPIDERFOOT_BASE_URL=
 SPIDERFOOT_API_KEY=
@@ -406,15 +422,15 @@ curl -sS -X POST http://127.0.0.1:8088/api/investigations \
   -d '{
     "name":"<production-host> smoke sparse lead",
     "seed_type":"sparse_lead",
-    "seed_value":"Long Way / in19034126503jgqn",
+    "seed_value":"Sample Lead / member-redacted",
     "strategy":"quick",
     "metadata":{
       "platform":"Alibaba",
-      "lead_display_name":"Long Way",
-      "member_id":"in19034126503jgqn",
+      "lead_display_name":"Sample Lead",
+      "member_id":"member-redacted",
       "country_region":"IN",
       "registration_year":"2023",
-      "company_name_raw":"Long Way",
+      "company_name_raw":"Sample Lead",
       "privacy_state":"email_phone_hidden",
       "categories":["Induction Cookers"],
       "recent_rfqs":["2200W Electric Cook Top"]
@@ -500,6 +516,7 @@ systemctl --user start osint-agent-network-api.service osint-agent-network-web.s
 
 - `scripts/start.sh` is suitable for normal shell use. In some Codex sandbox sessions, background processes may not align with PID files; systemd is preferred on <production-host>.
 - Missing external tools are not fatal. They should show as `BLOCKED` jobs and appear in the queue panel.
+- A run where every executed tool job is blocked by missing commands or credentials should finish as investigation status `BLOCKED`, not `FAILED`.
 - `ADMIN_API_TOKEN` protects management write routes. If enabled, the web build must include `VITE_ADMIN_API_TOKEN`.
 - `AGENT_API_TOKEN` protects `/api/agent/*` writeback routes.
 - `NEEDS_REVIEW` is a terminal review state, not an active-running state.
@@ -513,6 +530,7 @@ The deployment is accepted when all are true:
 - API health passes on localhost and LAN IP.
 - Web UI opens on LAN IP.
 - A quick sparse-lead smoke task can run and produce `NEEDS_REVIEW`.
+- A domain task with an intentionally missing command produces `BLOCKED` and a visible environment-dependency summary.
 - Queue panel shows job status correctly.
 - Whitepaper and quality gate render in the intended order.
 - Investigation detail returns `intelligence_requirements` and `cross_verification_matrix`.
