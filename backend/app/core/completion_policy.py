@@ -216,6 +216,7 @@ def _evidence_floor(detail: dict) -> dict:
             "source_record": bool(detail.get("evidence") or detail.get("evidence_ledger") or detail.get("relationships")),
             "evidence_ledger": _has_evidence_ledger(detail),
             "risk_summary": bool(detail.get("risk_report") or detail.get("summary") or detail.get("report_markdown")),
+            "cross_verification": _has_source_backed_verification(detail),
         }
     return {
         "identity": _has_entity_type(detail, {"company", "organization"}) or _has_fact_predicate(detail, "company_identity"),

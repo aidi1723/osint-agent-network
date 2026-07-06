@@ -467,6 +467,129 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertFalse(policy["limited_completion_ready"])
         self.assertFalse(policy["evidence_floor"]["cross_verification"])
 
+    def test_username_strict_quality_ready_requires_source_backed_cross_verification(self):
+        detail = {
+            "seed_type": "username",
+            "seed_value": "sample_user",
+            "entities": [
+                {"type": "username", "value": "sample_user", "confidence": 0.92},
+                {"type": "profile_url", "value": "https://profiles.example-target.test/sample_user", "confidence": 0.84},
+            ],
+            "evidence": [
+                {
+                    "entity_value": "sample_user",
+                    "evidence_kind": "profile_observation",
+                    "source_tool": "profile_lookup",
+                }
+            ],
+            "evidence_ledger": [
+                {
+                    "id": "ev-profile-1",
+                    "source_url": "https://profiles.example-target.test/sample_user",
+                    "source_type": "public_profile",
+                    "source_tool": "profile_lookup",
+                    "snippet": "Public profile uses sample_user.",
+                }
+            ],
+            "facts": [],
+            "relationships": [{"from_value": "sample_user", "to_value": "https://profiles.example-target.test/sample_user"}],
+            "hypotheses": [],
+            "summary": "sample_user has a public profile record.",
+            "quality_assessment": {
+                "score": 95.0,
+                "completion_ready": True,
+                "missing_keys": [],
+                "blocking_keys": [],
+                "checks": [],
+            },
+            "gap_analysis": [],
+            "gap_tool_plan": [],
+            "gap_followup_summary": {
+                "total_gaps": 0,
+                "blocking_gaps": 0,
+                "ready": 0,
+                "queued": 0,
+                "already_attempted": 0,
+                "blocked_by_config": 0,
+                "exhausted": 0,
+                "manual_review_required": 0,
+            },
+            "cross_verification_matrix": [
+                {
+                    "field_key": "profile_identity",
+                    "status": "SUPPORTED",
+                    "candidate_value": "sample_user",
+                }
+            ],
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+
+    def test_email_limited_completion_requires_source_backed_cross_verification(self):
+        detail = {
+            "seed_type": "email",
+            "seed_value": "sample@example-target.test",
+            "entities": [
+                {"type": "email", "value": "sample@example-target.test", "confidence": 0.9},
+                {"type": "profile_url", "value": "https://profiles.example-target.test/sample", "confidence": 0.76},
+            ],
+            "evidence": [
+                {
+                    "entity_value": "sample@example-target.test",
+                    "evidence_kind": "profile_contact",
+                    "source_tool": "profile_lookup",
+                }
+            ],
+            "evidence_ledger": [
+                {
+                    "id": "ev-email-1",
+                    "source_url": "https://profiles.example-target.test/sample",
+                    "source_type": "public_profile",
+                    "source_tool": "profile_lookup",
+                    "snippet": "Public profile lists sample@example-target.test.",
+                }
+            ],
+            "facts": [],
+            "relationships": [{"from_value": "sample@example-target.test", "to_value": "sample_user"}],
+            "hypotheses": [],
+            "risk_report": {"summary": "No high-risk conflicts identified."},
+            "quality_assessment": {
+                "score": 78.0,
+                "completion_ready": False,
+                "missing_keys": ["decision_maker"],
+                "blocking_keys": ["decision_maker"],
+                "checks": [],
+            },
+            "gap_analysis": [{"gap_key": "decision_maker", "severity": "blocking"}],
+            "gap_tool_plan": [],
+            "gap_followup_summary": {
+                "total_gaps": 1,
+                "blocking_gaps": 1,
+                "ready": 0,
+                "queued": 0,
+                "already_attempted": 1,
+                "blocked_by_config": 0,
+                "exhausted": 1,
+                "manual_review_required": 0,
+            },
+            "cross_verification_matrix": [
+                {
+                    "field_key": "profile_contact",
+                    "status": "SUPPORTED",
+                    "candidate_value": "sample@example-target.test",
+                }
+            ],
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "limited")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["limited_completion_ready"])
+
     def test_non_waivable_blocker_prevents_limited_completion(self):
         detail = complete_company_detail()
         detail["entities"] = [
