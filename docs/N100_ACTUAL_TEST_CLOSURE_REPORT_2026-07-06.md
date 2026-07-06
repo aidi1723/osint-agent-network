@@ -1020,7 +1020,7 @@ Fresh verification:
 Updated design-goal status:
 
 - The project execution success rate is higher than before this follow-up: the official-site search component moved from unconfigured to ready, and real company/sparse-lead tasks now produce website candidate evidence and followup jobs.
-- Orchestration risk was addressed after this retest: `/run-jobs` now enqueues an in-process background worker run and returns immediately. Large collector batches should still use bounded `max_jobs` and be monitored through investigation detail plus `/api/system/status`.
+- Orchestration risk was addressed after this retest: `/run-jobs` now enqueues a SQLite-backed recoverable background worker run and returns immediately. Large collector batches should still use bounded `max_jobs` and be monitored through investigation detail plus `/api/system/status`.
 
 ## URL Site-Collection Priority Follow-up - 2026-07-06
 
@@ -1054,4 +1054,4 @@ Fresh verification:
 Updated design-goal status:
 
 - Short company/sparse-lead runs now produce deeper website evidence earlier.
-- Background/asynchronous job execution for larger batches has been implemented as an in-process queue. A future upgrade can make the queue persistent across process restarts.
+- Background/asynchronous job execution for larger batches has been implemented as a SQLite-backed recoverable queue. A future upgrade can add external broker support if multi-host workers become necessary.

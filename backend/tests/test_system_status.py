@@ -43,7 +43,7 @@ class SystemStatusTests(unittest.TestCase):
 
     def test_system_status_payload_reports_worker_queue_state(self):
         class FakeQueue:
-            def snapshot(self):
+            def snapshot(self, store_obj=None):
                 return {
                     "mode": "in_process",
                     "queue_depth": 1,

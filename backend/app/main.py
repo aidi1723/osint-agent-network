@@ -569,6 +569,7 @@ def run():
     if not os.getenv("AGENT_API_TOKEN") and not os.getenv("ADMIN_API_TOKEN"):
         print("\n⚠️  WARNING: No AGENT_API_TOKEN or ADMIN_API_TOKEN configured.")
         print("   The API is running without authentication. Set tokens in .env for production use.\n")
+    job_queue.ensure_running(store)
     server = ThreadingHTTPServer((host, port), ApiHandler)
     print(f"OSINT Agent Network API listening on http://{host}:{port}")
     server.serve_forever()
@@ -705,7 +706,7 @@ def system_status_payload(store_obj=store, root_dir: str | None = None, worker_q
             "enabled_by_default": len([tool for tool in registry.all() if tool.enabled_by_default]),
             "health": tool_health["summary"],
         },
-        "worker": (worker_queue or job_queue).snapshot(),
+        "worker": (worker_queue or job_queue).snapshot(store_obj),
         "scripts": scripts,
     }
 

@@ -167,8 +167,9 @@ Existing worker tests should continue to validate the synchronous
 
 ## Future Upgrade Path
 
-After the in-process queue proves stable, the next upgrade should be a
-SQLite-backed queue table or an external task runner. The new queue runner
-interface should keep enqueue/status/process boundaries clear so a future
-persistent implementation can replace the in-memory pending list without
+The SQLite-backed queue table upgrade is covered by
+`2026-07-06-persistent-background-queue-design.md`. After that phase, the next
+upgrade should be considered only if multi-host workers require an external
+broker. The queue runner interface should keep enqueue/status/process
+boundaries clear so future persistence or broker changes do not require
 rewriting `run_investigation_jobs()`.

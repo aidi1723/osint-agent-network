@@ -451,6 +451,7 @@ curl -sS -X POST http://127.0.0.1:8088/api/investigations/<id>/run-jobs \
 Expected:
 
 - The API returns immediately with `mode: "background"` and `accepted: true`.
+- Queue requests are stored in SQLite and can be recovered after an API process restart.
 - `/api/system/status` shows worker queue depth, running investigation id, recent runs, and recent errors.
 - Poll `/api/investigations/<id>` for job-level progress.
 - `lead_anchor_extraction` completes.

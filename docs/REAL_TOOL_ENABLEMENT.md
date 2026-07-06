@@ -197,7 +197,7 @@ Hardening added after real testing:
 
 Runbook note:
 
-- `/api/investigations/<id>/run-jobs` now enqueues an in-process background worker run and returns immediately with `mode: "background"`.
+- `/api/investigations/<id>/run-jobs` now enqueues a SQLite-backed recoverable background worker run and returns immediately with `mode: "background"`.
 - Poll `/api/investigations/<id>` for job-by-job progress and `/api/system/status` for queue depth, running investigation id, recent runs, and recent errors.
-- For larger real tasks, enqueue bounded batches with `max_jobs` and let the background queue process one investigation at a time.
+- For larger real tasks, enqueue bounded batches with `max_jobs`; queued requests are persisted and can be recovered after an API process restart.
 - After official-site search queues multiple URL candidates, worker priority completes one URL evidence chain first: `httpx(url)`, `katana(url)`, then `official_site_extractor(url)`. Domain expansion remains queued behind the active URL group.

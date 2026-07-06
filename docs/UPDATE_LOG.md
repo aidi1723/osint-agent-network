@@ -882,7 +882,7 @@ Design-goal conclusion:
 
 - Company and sparse-lead tasks now have a real, controlled official-website discovery path on <production-host>.
 - The task success rate should be higher than the previous stage because one more core blocker moved from `attention_required` to `ready`, and real tasks now produce official-site URL evidence plus site-collection followups.
-- Orchestration follow-up completed: `/run-jobs` now enqueues an in-process background worker run and returns immediately. Larger tasks should use bounded `max_jobs` batches while polling investigation detail and `/api/system/status`.
+- Orchestration follow-up completed: `/run-jobs` now enqueues a SQLite-backed recoverable background worker run and returns immediately. Larger tasks should use bounded `max_jobs` batches while polling investigation detail and `/api/system/status`.
 
 ---
 

@@ -1,6 +1,6 @@
 from contextlib import closing
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 import os
 import sqlite3
@@ -904,6 +904,186 @@ class SQLiteStore:
                 "facts": conn.execute("SELECT COUNT(*) AS count FROM facts").fetchone()["count"],
             }
         return {"totals": totals, "investigations_by_status": investigations, "jobs_by_status": jobs}
+
+    def enqueue_worker_run(self, investigation_id: str, max_jobs: int | None = None) -> dict:
+        now = _now()
+        with self.lock, closing(self._connect()) as conn, conn:
+            investigation = conn.execute(
+                "SELECT id FROM investigations WHERE id = ?",
+                (investigation_id,),
+            ).fetchone()
+            if investigation is None:
+                raise ValueError(f"investigation not found: {investigation_id}")
+            active = conn.execute(
+                """
+                SELECT * FROM worker_queue_runs
+                WHERE investigation_id = ? AND status IN ('QUEUED', 'RUNNING')
+                ORDER BY requested_at ASC
+                LIMIT 1
+                """,
+                (investigation_id,),
+            ).fetchone()
+            if active is not None:
+                status = "ALREADY_RUNNING" if active["status"] == "RUNNING" else "ALREADY_QUEUED"
+                return self._worker_queue_response(conn, False, status, investigation_id, max_jobs)
+            conn.execute(
+                """
+                INSERT INTO worker_queue_runs (
+                    id, investigation_id, max_jobs, status, requested_at,
+                    started_at, finished_at, worker_id, heartbeat_at, summary_json, error
+                ) VALUES (?, ?, ?, ?, ?, NULL, NULL, '', NULL, '{}', '')
+                """,
+                (str(uuid4()), investigation_id, max_jobs, "QUEUED", now),
+            )
+            return self._worker_queue_response(conn, True, "QUEUED", investigation_id, max_jobs)
+
+    def claim_next_worker_run(self, worker_id: str, stale_after_seconds: int = 1800) -> dict | None:
+        now_dt = datetime.now(UTC)
+        now = now_dt.isoformat()
+        stale_cutoff = (now_dt - timedelta(seconds=max(0, stale_after_seconds))).isoformat()
+        with self.lock, closing(self._connect()) as conn, conn:
+            conn.execute(
+                """
+                UPDATE worker_queue_runs
+                SET status = 'QUEUED', worker_id = '', started_at = NULL, heartbeat_at = NULL
+                WHERE status = 'RUNNING'
+                  AND COALESCE(heartbeat_at, started_at, requested_at) <= ?
+                """,
+                (stale_cutoff,),
+            )
+            target = conn.execute(
+                """
+                SELECT * FROM worker_queue_runs
+                WHERE status = 'QUEUED'
+                ORDER BY requested_at ASC
+                LIMIT 1
+                """
+            ).fetchone()
+            if target is None:
+                return None
+            conn.execute(
+                """
+                UPDATE worker_queue_runs
+                SET status = 'RUNNING', worker_id = ?, started_at = ?, heartbeat_at = ?, error = ''
+                WHERE id = ? AND status = 'QUEUED'
+                """,
+                (worker_id, now, now, target["id"]),
+            )
+            updated = conn.execute("SELECT * FROM worker_queue_runs WHERE id = ?", (target["id"],)).fetchone()
+        return _worker_queue_claim_from_row(updated)
+
+    def complete_worker_run(self, queue_id: str, summary: dict) -> dict | None:
+        now = _now()
+        summary_json = json.dumps(_worker_queue_summary(summary), ensure_ascii=False)
+        with self.lock, closing(self._connect()) as conn, conn:
+            row = conn.execute("SELECT * FROM worker_queue_runs WHERE id = ?", (queue_id,)).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                """
+                UPDATE worker_queue_runs
+                SET status = 'COMPLETED', finished_at = ?, heartbeat_at = ?, summary_json = ?, error = ''
+                WHERE id = ?
+                """,
+                (now, now, summary_json, queue_id),
+            )
+            updated = conn.execute("SELECT * FROM worker_queue_runs WHERE id = ?", (queue_id,)).fetchone()
+        return _worker_queue_claim_from_row(updated)
+
+    def fail_worker_run(self, queue_id: str, error: str) -> dict | None:
+        now = _now()
+        with self.lock, closing(self._connect()) as conn, conn:
+            row = conn.execute("SELECT * FROM worker_queue_runs WHERE id = ?", (queue_id,)).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                """
+                UPDATE worker_queue_runs
+                SET status = 'FAILED', finished_at = ?, heartbeat_at = ?, error = ?
+                WHERE id = ?
+                """,
+                (now, now, _worker_queue_error_excerpt(error), queue_id),
+            )
+            updated = conn.execute("SELECT * FROM worker_queue_runs WHERE id = ?", (queue_id,)).fetchone()
+        return _worker_queue_claim_from_row(updated)
+
+    def worker_queue_snapshot(self, limit: int = 20) -> dict:
+        with self.lock, closing(self._connect()) as conn:
+            queued_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM worker_queue_runs WHERE status = 'QUEUED'"
+            ).fetchone()["count"]
+            running = conn.execute(
+                """
+                SELECT * FROM worker_queue_runs
+                WHERE status = 'RUNNING'
+                ORDER BY started_at ASC, requested_at ASC
+                LIMIT 1
+                """
+            ).fetchone()
+            pending_rows = conn.execute(
+                """
+                SELECT * FROM worker_queue_runs
+                WHERE status = 'QUEUED'
+                ORDER BY requested_at ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            completed_rows = conn.execute(
+                """
+                SELECT * FROM worker_queue_runs
+                WHERE status = 'COMPLETED'
+                ORDER BY finished_at DESC, requested_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            failed_rows = conn.execute(
+                """
+                SELECT * FROM worker_queue_runs
+                WHERE status = 'FAILED'
+                ORDER BY finished_at DESC, requested_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return {
+            "mode": "sqlite",
+            "queue_depth": queued_count,
+            "running": running["investigation_id"] if running is not None else None,
+            "pending": [_worker_queue_pending_from_row(row) for row in pending_rows],
+            "recent_runs": [_worker_queue_run_from_row(row) for row in completed_rows],
+            "recent_errors": [_worker_queue_error_from_row(row) for row in failed_rows],
+        }
+
+    def _worker_queue_response(
+        self,
+        conn: sqlite3.Connection,
+        accepted: bool,
+        status: str,
+        investigation_id: str,
+        max_jobs: int | None,
+    ) -> dict:
+        queued_count = conn.execute(
+            "SELECT COUNT(*) AS count FROM worker_queue_runs WHERE status = 'QUEUED'"
+        ).fetchone()["count"]
+        running = conn.execute(
+            """
+            SELECT investigation_id FROM worker_queue_runs
+            WHERE status = 'RUNNING'
+            ORDER BY started_at ASC, requested_at ASC
+            LIMIT 1
+            """
+        ).fetchone()
+        return {
+            "accepted": accepted,
+            "mode": "background",
+            "status": status,
+            "investigation_id": investigation_id,
+            "max_jobs": max_jobs,
+            "queue_depth": queued_count,
+            "running": running["investigation_id"] if running is not None else None,
+        }
 
     def create_investigation(
         self,
@@ -2341,6 +2521,21 @@ class SQLiteStore:
                     FOREIGN KEY (investigation_id) REFERENCES investigations(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS worker_queue_runs (
+                    id TEXT PRIMARY KEY,
+                    investigation_id TEXT NOT NULL,
+                    max_jobs INTEGER,
+                    status TEXT NOT NULL,
+                    requested_at TEXT NOT NULL,
+                    started_at TEXT,
+                    finished_at TEXT,
+                    worker_id TEXT NOT NULL DEFAULT '',
+                    heartbeat_at TEXT,
+                    summary_json TEXT NOT NULL DEFAULT '{}',
+                    error TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY (investigation_id) REFERENCES investigations(id) ON DELETE CASCADE
+                );
+
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     version TEXT PRIMARY KEY,
                     applied_at TEXT NOT NULL
@@ -2352,6 +2547,10 @@ class SQLiteStore:
                     ON investigations(status, created_at);
                 CREATE INDEX IF NOT EXISTS idx_events_investigation_created
                     ON events(investigation_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_worker_queue_status_requested
+                    ON worker_queue_runs(status, requested_at);
+                CREATE INDEX IF NOT EXISTS idx_worker_queue_investigation_status
+                    ON worker_queue_runs(investigation_id, status);
                 """
             )
             columns = {
@@ -2411,6 +2610,7 @@ class SQLiteStore:
                 )
             _record_schema_migration(conn, "20260522_core_v3")
             _record_schema_migration(conn, "20260522_stability_pack")
+            _record_schema_migration(conn, "20260706_persistent_background_queue")
             _dedupe_existing_rows(conn)
             conn.executescript(
                 """
@@ -2577,6 +2777,78 @@ def _record_schema_migration(conn: sqlite3.Connection, version: str) -> None:
         "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
         (version, _now()),
     )
+
+
+def _worker_queue_pending_from_row(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "investigation_id": row["investigation_id"],
+        "max_jobs": row["max_jobs"],
+        "status": row["status"],
+        "requested_at": row["requested_at"],
+    }
+
+
+def _worker_queue_claim_from_row(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "investigation_id": row["investigation_id"],
+        "max_jobs": row["max_jobs"],
+        "status": row["status"],
+        "requested_at": row["requested_at"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+        "worker_id": row["worker_id"],
+        "heartbeat_at": row["heartbeat_at"],
+        "summary": json.loads(row["summary_json"] or "{}"),
+        "error": row["error"],
+    }
+
+
+def _worker_queue_run_from_row(row: sqlite3.Row) -> dict:
+    summary = json.loads(row["summary_json"] or "{}")
+    return {
+        "id": row["id"],
+        "investigation_id": row["investigation_id"],
+        "max_jobs": row["max_jobs"],
+        "requested_at": row["requested_at"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+        "started": int(summary.get("started") or 0),
+        "completed": int(summary.get("completed") or 0),
+        "failed": int(summary.get("failed") or 0),
+        "blocked": int(summary.get("blocked") or 0),
+        "queued_followups": int(summary.get("queued_followups") or 0),
+    }
+
+
+def _worker_queue_error_from_row(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "investigation_id": row["investigation_id"],
+        "max_jobs": row["max_jobs"],
+        "requested_at": row["requested_at"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+        "error": row["error"],
+    }
+
+
+def _worker_queue_summary(summary: dict) -> dict:
+    return {
+        "started": int(summary.get("started") or 0),
+        "completed": int(summary.get("completed") or 0),
+        "failed": int(summary.get("failed") or 0),
+        "blocked": int(summary.get("blocked") or 0),
+        "queued_followups": int(summary.get("queued_followups") or 0),
+    }
+
+
+def _worker_queue_error_excerpt(value: str, limit: int = 500) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}...[truncated]"
 
 
 def _apply_core_v3(data: dict) -> None:
