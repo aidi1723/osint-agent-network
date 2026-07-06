@@ -743,3 +743,50 @@ Issue found during verification:
 Design-goal conclusion:
 
 - The official-site discovery path now meets the current design requirement for company/sparse-lead route expansion when `OFFICIAL_SITE_SEARCH_BASE_URL` points to a controlled internal SearXNG-compatible endpoint.
+
+---
+
+## 2026-07-06 - Official Site Decision-Maker Candidate Extraction
+
+Scope:
+
+- Enhanced `official_site_extractor` to extract conservative public decision-maker candidates from official website HTML already fetched by the existing URL collection path.
+- The change targets the remaining company/sparse-lead `decision_maker` quality-gate gap without adding a new external tool.
+
+Changes:
+
+- Visible official-site text can now produce candidate `person`, `job_title`, and `decision_maker` entities when a person-like name appears near a role marker such as `Export Manager`, `Sales Manager`, `Managing Director`, `Founder`, `Owner`, or `CEO`.
+- JSON-LD `Person` records with `jobTitle` can produce the same candidate family.
+- The extractor emits:
+  - evidence kind `official_site_decision_maker_candidate`;
+  - `official_site_mentions_decision_maker`;
+  - `person_has_public_role`;
+  - `person_has_contact` only when a nearby email or phone is in the same short context window.
+- Generic labels such as `Contact Us`, `Sales Team`, and `Customer Service` are not promoted as people.
+- The default SQLite store test was made worktree-compatible by asserting the current project root data path rather than a fixed parent directory name.
+
+Verification:
+
+- Targeted local tests passed: `20 tests OK`.
+- Local full verification passed:
+  - backend unit suite: `287 tests OK`;
+  - regression smoke: `4` cases, failed `0`;
+  - frontend helper checks, Vitest, and production build passed.
+- <production-host> targeted tests passed: `20 tests OK`.
+- <production-host> health/readiness passed:
+  - `api=ok`;
+  - `database=ok`;
+  - `web=ok`;
+  - `ready=true`;
+  - tool health summary: total `18`, ready `9`, attention required `8`.
+- <production-host> in-memory parser verification passed for a sample leadership snippet:
+  - `person` entity written;
+  - `job_title` entity written;
+  - `decision_maker` entity written;
+  - `person_has_public_role` relationship written;
+  - nearby `person_has_contact` relationship written.
+
+Design-goal conclusion:
+
+- The official-site chain now has a source-backed path to reduce the company/sparse-lead `decision_maker` gap after official-site discovery is configured.
+- Extracted people remain candidates. Cross-verification and accepted-fact promotion still decide whether they can become confirmed findings.

@@ -873,3 +873,55 @@ Design-goal status:
 - The previous domain quick chain already reached the design target.
 - The company/sparse-lead official-site discovery gap is now closed at the route, adapter, parser, health, and followup-planning levels.
 - Real-world company/sparse-lead uplift still depends on configuring `OFFICIAL_SITE_SEARCH_BASE_URL` to a controlled internal SearXNG-compatible endpoint for the task run.
+
+## Official-Site Decision-Maker Extraction Follow-up - 2026-07-06
+
+This follow-up addresses the next company/sparse-lead blocker after official-site discovery: public decision-maker candidate evidence.
+
+Implementation state:
+
+- `official_site_extractor` now parses official-site visible text and JSON-LD `Person` records for conservative public person/title candidates.
+- Accepted role context includes owner, founder, CEO, managing director, director, general manager, sales manager, export manager, procurement manager, purchasing manager, and contact person.
+- The parser emits:
+  - `person`;
+  - `job_title`;
+  - `decision_maker`;
+  - `official_site_decision_maker_candidate` evidence;
+  - `official_site_mentions_decision_maker`;
+  - `person_has_public_role`;
+  - `person_has_contact` only when contact data is in the same short context window.
+- Generic page labels such as `Contact Us`, `Sales Team`, and `Customer Service` are filtered.
+
+Fresh verification:
+
+- Local targeted tests passed:
+  - `OfficialSiteExtractorAdapterTests`
+  - `QualityGateTests`
+  - worktree-compatible default SQLite store regression
+  - result: `20 tests OK`
+- Local full verification passed:
+  - backend unit suite: `287 tests OK`
+  - regression smoke: `4` cases, failed `0`
+  - frontend helper checks, Vitest, and production build passed
+- <production-host> targeted tests passed: `20 tests OK`
+- <production-host> health/readiness passed:
+  - `api=ok`
+  - `database=ok`
+  - `web=ok`
+  - `ready=true`
+  - tool health summary: total tools `18`, ready `9`, attention required `8`
+- <production-host> in-memory parser verification passed:
+  - sample official page snippet produced `person`, `job_title`, and `decision_maker`
+  - `person_has_public_role` was written
+  - nearby `person_has_contact` was written
+
+Issue found and resolved in verification:
+
+- Running the full suite inside an isolated git worktree exposed a test that assumed the repository parent directory name. The store behavior was correct, but the assertion was too specific. The test now asserts the current project root `data/osint.sqlite` path.
+- A worktree-local `npm install` rewrote `frontend/package-lock.json`; that unrelated lockfile churn was reverted before commit.
+
+Design-goal status:
+
+- The domain quick chain remains complete.
+- Company/sparse-lead official-site discovery is now paired with a conservative official-site decision-maker candidate path.
+- These candidates reduce the `decision_maker` collection gap but do not become accepted facts without cross-verification.
