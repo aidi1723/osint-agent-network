@@ -541,6 +541,61 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertTrue(policy["environment_blocked"])
         self.assertTrue(policy["manual_decision_required"])
 
+    def test_environment_blocked_with_source_backed_ledger_recommends_review(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Example Manufacturing LLC",
+            "entities": [{"type": "company", "value": "Example Manufacturing LLC", "confidence": 0.72}],
+            "evidence": [],
+            "evidence_ledger": [
+                {
+                    "id": "ev-source-1",
+                    "source_url": "https://example-target.test/about",
+                    "source_type": "official_site_identity",
+                    "source_tool": "official_site_extractor",
+                    "snippet": "Official page references Example Manufacturing LLC.",
+                }
+            ],
+            "facts": [],
+            "relationships": [],
+            "hypotheses": [],
+            "jobs": [{"tool_name": "official_site_search", "status": "BLOCKED"}],
+            "report_markdown": "",
+            "quality_assessment": {
+                "score": 20.0,
+                "completion_ready": False,
+                "missing_keys": ["official_website", "fact_pool"],
+                "blocking_keys": ["official_website", "fact_pool"],
+                "checks": [],
+            },
+            "gap_analysis": [{"gap_key": "official_website", "severity": "blocking"}],
+            "gap_tool_plan": [
+                {
+                    "gap_key": "official_website",
+                    "tool_name": "official_site_search",
+                    "status": "missing_config",
+                    "health_reason": "search provider API key is not configured",
+                }
+            ],
+            "gap_followup_summary": {
+                "total_gaps": 1,
+                "blocking_gaps": 1,
+                "ready": 0,
+                "queued": 0,
+                "already_attempted": 0,
+                "blocked_by_config": 1,
+                "exhausted": 0,
+                "manual_review_required": 0,
+            },
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "blocked_by_environment")
+        self.assertEqual(policy["recommended_status"], "NEEDS_REVIEW")
+        self.assertTrue(policy["environment_blocked"])
+        self.assertTrue(policy["manual_decision_required"])
+
     def test_environment_blocked_with_bare_cross_verification_candidate_recommends_blocked(self):
         detail = {
             "seed_type": "company",
