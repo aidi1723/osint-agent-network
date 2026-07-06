@@ -499,6 +499,70 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertNotEqual(policy["recommended_status"], "COMPLETED")
         self.assertFalse(policy["limited_completion_ready"])
 
+    def test_company_limited_completion_rejects_contact_verification_linked_only_to_contact_page(self):
+        detail = complete_company_detail()
+        detail["entities"] = [
+            item
+            for item in detail["entities"]
+            if item["type"] not in {"email", "phone", "decision_maker"}
+        ]
+        detail["evidence_ledger"] = [
+            {
+                "id": "ev-1",
+                "source_url": "https://example-target.test/about",
+                "source_type": "official_site_profile",
+                "source_tool": "official_site_extractor",
+                "snippet": "Official profile confirms Sample Auto Parts Co. identity and auto parts distribution.",
+            },
+            {
+                "id": "ev-2",
+                "source_url": "https://example-target.test/contact",
+                "source_type": "official_site_page",
+                "source_tool": "official_site_extractor",
+                "snippet": "Official site has a contact page.",
+            },
+        ]
+        detail["facts"] = [
+            fact for fact in detail["facts"] if fact["predicate"] != "has_contact_email"
+        ]
+        detail["quality_assessment"] = {
+            "score": 78.0,
+            "completion_ready": False,
+            "missing_keys": ["decision_maker"],
+            "blocking_keys": ["decision_maker"],
+            "checks": [],
+        }
+        detail["gap_analysis"] = [{"gap_key": "decision_maker", "severity": "blocking"}]
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 1,
+            "blocking_gaps": 1,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 1,
+            "blocked_by_config": 0,
+            "exhausted": 1,
+            "manual_review_required": 0,
+        }
+        detail["cross_verification_matrix"] = [
+            {
+                **row,
+                "candidate_value": "",
+                "linked_evidence_ids": ["ev-2"],
+                "linked_fact_ids": [],
+            }
+            if row["field_key"] == "contact_channel"
+            else row
+            for row in detail["cross_verification_matrix"]
+        ]
+
+        policy = build_completion_policy(detail)
+
+        self.assertFalse(policy["evidence_floor"]["contact_channel"])
+        self.assertNotEqual(policy["completion_mode"], "limited")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["limited_completion_ready"])
+
     def test_environment_blocked_without_useful_evidence_recommends_blocked(self):
         detail = {
             "seed_type": "domain",

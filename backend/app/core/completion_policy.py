@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from app.core.gap_followups import build_gap_analysis, build_gap_followup_summary, build_gap_tool_plan
 
 
@@ -8,6 +10,8 @@ NEGATIVE_FACT_STATUSES = {"REJECTED", "DISPROVEN", "CONTRADICTED", "FALSE", "INV
 BLOCKED_TOOL_STATUSES = {"missing_config", "missing_executable", "credential_blocked", "disabled"}
 PROFILE_IDENTITY_TYPES = {"email", "username", "identity", "profile_url", "platform_account"}
 CONTACT_CHANNEL_TYPES = {"email", "phone", "whatsapp"}
+CONTACT_EMAIL_RE = re.compile(r"\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b", re.IGNORECASE)
+CONTACT_PHONE_RE = re.compile(r"(?:\+?\d[\d\s().-]{5,}\d)")
 NON_ACCEPTABLE_BLOCKERS = {
     "company_identity",
     "official_website",
@@ -496,20 +500,27 @@ def _has_source_backed_contact_fact(detail: dict) -> bool:
             str(fact.get(key) or "").lower()
             for key in ("statement", "predicate", "subject", "object", "value")
         )
-        if any(term in haystack for term in ("contact", "email", "phone", "whatsapp")):
+        if _contains_contact_value(haystack):
             return True
     return False
 
 
 def _has_source_backed_contact_verification(detail: dict) -> bool:
     source_backed_evidence_ids = _source_backed_evidence_ids(detail)
-    source_backed_fact_ids = {
-        str(item.get("id") or "").strip()
+    source_backed_facts = [
+        item
         for item in detail.get("facts") or []
         if str(item.get("id") or "").strip()
         and _fact_is_accepted(item)
         and _fact_has_source_backed_evidence(item, source_backed_evidence_ids)
+    ]
+    source_backed_fact_ids = {str(item.get("id") or "").strip() for item in source_backed_facts}
+    evidence_by_id = {
+        str(item.get("id") or "").strip(): item
+        for item in _source_backed_ledger(detail)
+        if str(item.get("id") or "").strip()
     }
+    fact_by_id = {str(item.get("id") or "").strip(): item for item in source_backed_facts}
     contact_fields = {"contact_channel", "contact_phone", "contact_email", "phone", "email", "whatsapp"}
     for item in detail.get("cross_verification_matrix") or []:
         if str(item.get("status") or "").upper() not in SUPPORTED_VERIFICATION_STATUSES:
@@ -517,6 +528,8 @@ def _has_source_backed_contact_verification(detail: dict) -> bool:
         field_key = str(item.get("field_key") or "").strip().lower()
         if field_key not in contact_fields:
             continue
+        if _contains_contact_value(str(item.get("candidate_value") or "")):
+            return True
         linked_evidence_ids = {
             str(evidence_id).strip()
             for evidence_id in item.get("linked_evidence_ids") or item.get("evidence_ids") or []
@@ -527,7 +540,34 @@ def _has_source_backed_contact_verification(detail: dict) -> bool:
             for fact_id in item.get("linked_fact_ids") or item.get("fact_ids") or []
             if str(fact_id).strip()
         }
-        if linked_evidence_ids & source_backed_evidence_ids or linked_fact_ids & source_backed_fact_ids:
+        for evidence_id in linked_evidence_ids & source_backed_evidence_ids:
+            evidence = evidence_by_id.get(evidence_id) or {}
+            haystack = " ".join(
+                str(evidence.get(key) or "")
+                for key in ("entity_value", "subject", "object", "source_url", "source_type", "snippet")
+            )
+            if _contains_contact_value(haystack):
+                return True
+        for fact_id in linked_fact_ids & source_backed_fact_ids:
+            fact = fact_by_id.get(fact_id) or {}
+            haystack = " ".join(
+                str(fact.get(key) or "")
+                for key in ("statement", "predicate", "subject", "object", "value")
+            )
+            if _contains_contact_value(haystack):
+                return True
+    return False
+
+
+def _contains_contact_value(value: str) -> bool:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return False
+    if CONTACT_EMAIL_RE.search(normalized):
+        return True
+    if CONTACT_PHONE_RE.search(normalized):
+        return True
+    if any(term in normalized for term in ("mailto:", "tel:", "whatsapp", "wa.me/")):
             return True
     return False
 
