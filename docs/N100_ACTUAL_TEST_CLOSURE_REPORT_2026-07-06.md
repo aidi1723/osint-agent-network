@@ -925,3 +925,43 @@ Design-goal status:
 - The domain quick chain remains complete.
 - Company/sparse-lead official-site discovery is now paired with a conservative official-site decision-maker candidate path.
 - These candidates reduce the `decision_maker` collection gap but do not become accepted facts without cross-verification.
+
+## Decision-Maker Candidate Verification Follow-up - 2026-07-06
+
+This follow-up connects the new official-site decision-maker extraction output to the verified field layer.
+
+Implementation state:
+
+- Cross-verification now recognizes:
+  - `has_decision_maker_candidate`
+  - `has_public_profile_candidate`
+- Source support for matrix rows now includes evidence ledger records linked from facts by `evidence_ids`.
+- The quality gate recognizes candidate facts as `decision_maker` support.
+- Candidate facts remain conservative:
+  - no automatic `CONFIRMED` status from a single official page;
+  - no automatic `ACCEPTED_FACT` promotion;
+  - completion still requires the existing evidence ledger, fact pool, cross-verification, BLUF, official website, business scope, and contact-channel gates.
+
+Fresh verification:
+
+- Local targeted tests passed:
+  - `CrossVerificationTests`
+  - `QualityGateTests`
+  - `LocalRoleAgentTests`
+  - result: `32 tests OK`
+- Local full verification passed:
+  - backend unit suite: `289 tests OK`
+  - regression smoke: `4` cases, failed `0`
+  - frontend helper checks, Vitest, and production build passed
+- <production-host> targeted tests passed: `18 tests OK`
+- <production-host> health/readiness passed:
+  - `api=ok`
+  - `database=ok`
+  - `web=ok`
+  - `ready=true`
+  - tool health summary: total tools `18`, ready `9`, attention required `8`
+
+Design-goal status:
+
+- Official-site person/title candidates now flow from extraction to cross-verification matrix support and quality-gate field recognition.
+- This should improve company/sparse-lead task success rate when official-site discovery is configured, while preserving the distinction between a candidate and a confirmed decision-maker.

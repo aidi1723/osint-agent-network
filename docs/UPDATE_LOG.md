@@ -790,3 +790,39 @@ Design-goal conclusion:
 
 - The official-site chain now has a source-backed path to reduce the company/sparse-lead `decision_maker` gap after official-site discovery is configured.
 - Extracted people remain candidates. Cross-verification and accepted-fact promotion still decide whether they can become confirmed findings.
+
+---
+
+## 2026-07-06 - Decision-Maker Candidate Verification
+
+Scope:
+
+- Connected official-site decision-maker candidates to cross-verification and quality-gate recognition at the fact layer.
+- This keeps candidates conservative while allowing source-backed `has_decision_maker_candidate` facts to reduce the `decision_maker` gap.
+
+Changes:
+
+- `cross_verification` now treats `has_decision_maker_candidate` and `has_public_profile_candidate` as decision-maker field predicates.
+- Cross-verification source support now includes fact-linked evidence ledger records, so a candidate fact with official-site evidence can produce `SUPPORTED` / `LIKELY` matrix status instead of `NEEDS_REVIEW`.
+- The quality gate now treats `has_decision_maker_candidate` and `has_public_profile_candidate` facts as `decision_maker` support.
+- Completion rules remain unchanged: candidates do not become confirmed accepted facts automatically.
+
+Verification:
+
+- Local targeted tests passed: `32 tests OK` for cross-verification, quality gate, and local role-agent coverage.
+- Local full verification passed:
+  - backend unit suite: `289 tests OK`;
+  - regression smoke: `4` cases, failed `0`;
+  - frontend helper checks, Vitest, and production build passed.
+- <production-host> targeted tests passed: `18 tests OK`.
+- <production-host> health/readiness passed:
+  - `api=ok`;
+  - `database=ok`;
+  - `web=ok`;
+  - `ready=true`;
+  - tool health summary: total `18`, ready `9`, attention required `8`.
+
+Design-goal conclusion:
+
+- The system now carries official-site decision-maker candidates from extraction into matrix/fact recognition.
+- This improves company/sparse-lead completion readiness without weakening source reliability rules.
