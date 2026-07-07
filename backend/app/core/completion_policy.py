@@ -34,6 +34,7 @@ NON_ACCEPTABLE_BLOCKERS = {
     "fact_pool",
     "cross_verification",
     "bluf_report",
+    "risk_review",
     "contact_channel",
     "unresolved_contradiction",
 }
@@ -64,7 +65,7 @@ def build_completion_policy(detail: dict) -> dict:
         else build_gap_followup_summary(gap_tool_plan, gap_analysis)
     )
     evidence_floor = _evidence_floor(detail)
-    remaining_blockers = _remaining_blockers(assessment, gap_analysis)
+    remaining_blockers = _remaining_blockers(assessment, gap_analysis, detail)
     strict_ready = (
         bool(assessment.get("completion_ready"))
         and all(evidence_floor.values())
@@ -244,7 +245,7 @@ def _planner_detail_for_explicit_gaps(detail: dict, gap_analysis: list[dict]) ->
     }
 
 
-def _remaining_blockers(assessment: dict, gap_analysis: list[dict]) -> list[str]:
+def _remaining_blockers(assessment: dict, gap_analysis: list[dict], detail: dict) -> list[str]:
     blockers = {
         normalized
         for item in assessment.get("blocking_keys") or []
@@ -256,6 +257,8 @@ def _remaining_blockers(assessment: dict, gap_analysis: list[dict]) -> list[str]
             gap_key = _normalize_blocker_key(gap.get("gap_key"))
             if gap_key:
                 blockers.add(gap_key)
+    if _has_high_risk_review(detail):
+        blockers.add("risk_review")
     return sorted(blockers)
 
 
@@ -277,6 +280,7 @@ def _evidence_floor(detail: dict) -> dict:
             "evidence_ledger": _has_evidence_ledger(detail),
             "fact_pool": _has_linked_fact(detail),
             "cross_verification": _has_source_backed_verification(detail),
+            "bluf_report": _has_bluf_report(detail),
         }
     if seed_type in {"email", "username"}:
         source_backed_identity = _has_source_backed_profile_identity(detail)
@@ -295,6 +299,7 @@ def _evidence_floor(detail: dict) -> dict:
         "evidence_ledger": _has_evidence_ledger(detail),
         "fact_pool": _has_linked_fact(detail),
         "cross_verification": _has_source_backed_verification(detail),
+        "bluf_report": _has_bluf_report(detail),
     }
 
 
@@ -312,6 +317,8 @@ def _acceptable_limitations(detail: dict, remaining_blockers: list[str], evidenc
 def _has_non_acceptable_blocker(remaining_blockers: list[str], detail: dict) -> bool:
     if set(remaining_blockers) & NON_ACCEPTABLE_BLOCKERS:
         return True
+    if _has_high_risk_review(detail):
+        return True
     if any(_has_conflict_status(fact) for fact in detail.get("facts") or []):
         return True
     matrix = detail.get("cross_verification_matrix") or []
@@ -320,6 +327,22 @@ def _has_non_acceptable_blocker(remaining_blockers: list[str], detail: dict) -> 
 
 def _has_conflict_status(item: dict) -> bool:
     return _normalized_status(item.get("status")) in CONFLICT_VERIFICATION_STATUSES
+
+
+def _has_high_risk_review(detail: dict) -> bool:
+    risk_report = detail.get("risk_report") or {}
+    if not isinstance(risk_report, dict):
+        return False
+    if bool(risk_report.get("review_required")):
+        return True
+    if str(risk_report.get("overall_risk_level") or "").strip().lower() in {"high", "critical"}:
+        return True
+    signals = risk_report.get("top_risk_signals") or risk_report.get("signals") or []
+    return any(
+        str(signal.get("severity") or "").strip().lower() in {"high", "critical"}
+        for signal in signals
+        if isinstance(signal, dict)
+    )
 
 
 def _environment_blocked(gap_tool_plan: list[dict], gap_summary: dict) -> bool:
@@ -737,6 +760,10 @@ def _has_evidence_ledger(detail: dict) -> bool:
     return any(item.get("source_url") or item.get("source_type") for item in detail.get("evidence_ledger") or [])
 
 
+def _has_bluf_report(detail: dict) -> bool:
+    return bool(str(detail.get("report_markdown") or "").strip())
+
+
 def _has_linked_fact(detail: dict) -> bool:
     ledger_ids = {
         str(item.get("id") or "").strip()
@@ -811,6 +838,7 @@ def _operator_actions(remaining_blockers: list[str]) -> list[str]:
         "evidence_ledger": "Collect source-backed evidence records before accepting conclusions.",
         "fact_pool": "Promote source-backed claims into facts before accepting conclusions.",
         "cross_verification": "Run or perform cross-verification before accepting conclusions.",
+        "risk_review": "Resolve high-risk or review-required signals before accepting conclusions.",
     }
     if not remaining_blockers:
         return []

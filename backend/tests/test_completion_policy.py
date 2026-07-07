@@ -159,6 +159,76 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertTrue(policy["strict_completion_ready"])
         self.assertFalse(policy["manual_decision_required"])
 
+    def test_strict_completion_rejects_missing_bluf_report(self):
+        detail = complete_company_detail()
+        detail["quality_assessment"] = {
+            "score": 95.0,
+            "completion_ready": True,
+            "missing_keys": [],
+            "blocking_keys": [],
+            "checks": [],
+        }
+        detail["gap_analysis"] = []
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 0,
+            "blocking_gaps": 0,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 0,
+            "blocked_by_config": 0,
+            "exhausted": 0,
+            "manual_review_required": 0,
+        }
+        detail["report_markdown"] = ""
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["strict_completion_ready"])
+        self.assertFalse(policy["evidence_floor"]["bluf_report"])
+
+    def test_strict_completion_rejects_high_risk_review_required(self):
+        detail = complete_company_detail()
+        detail["quality_assessment"] = {
+            "score": 95.0,
+            "completion_ready": True,
+            "missing_keys": [],
+            "blocking_keys": [],
+            "checks": [],
+        }
+        detail["gap_analysis"] = []
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 0,
+            "blocking_gaps": 0,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 0,
+            "blocked_by_config": 0,
+            "exhausted": 0,
+            "manual_review_required": 0,
+        }
+        detail["risk_report"] = {
+            "overall_risk_level": "high",
+            "review_required": True,
+            "top_risk_signals": [
+                {
+                    "kind": "business_risk_keyword",
+                    "severity": "high",
+                    "summary": "High-risk business-content signal needs review.",
+                }
+            ],
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["strict_completion_ready"])
+        self.assertIn("risk_review", policy["remaining_blockers"])
+
     def test_strict_completion_accepts_padded_positive_cross_verification_statuses(self):
         detail = complete_company_detail()
         detail["quality_assessment"] = {
