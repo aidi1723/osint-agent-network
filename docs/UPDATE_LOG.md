@@ -11,6 +11,8 @@ Scope:
 - Started Task 2 limited-completion evidence-floor work and added explicit
   tests for decision-maker-only limited completion, missing official website,
   and missing evidence ledger / fact pool blockers.
+- Started Task 3 store integration and exposed completion policy on both
+  in-memory and SQLite investigation detail views.
 
 Changes:
 
@@ -21,6 +23,9 @@ Changes:
 - `backend/tests/test_completion_policy.py` now locks the limited-completion
   evidence floor against non-waivable official website and evidence/fact-pool
   gaps.
+- `backend/app/services/store.py` now computes `completion_policy` in store
+  detail payloads and uses policy-backed status selection when completing
+  tasks.
 
 Verification:
 
@@ -29,6 +34,9 @@ Verification:
 - Full backend unittest discovery after Task 1: 402 tests passed.
 - Focused Task 2 limited evidence-floor tests: 3 tests passed.
 - Completion policy suite after Task 2 test alignment: 67 tests passed.
+- Focused Task 3 store detail tests: 2 tests passed.
+- Completion policy suite after Task 3 store integration: 69 tests passed.
+- Full backend unittest discovery after Task 3: 407 tests passed.
 
 ## 2026-07-06 - Gap-to-Tool Follow-up Planner
 

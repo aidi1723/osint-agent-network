@@ -8,6 +8,7 @@ from threading import Lock
 from uuid import uuid4
 
 from app.core.ach_engine import EvidenceItem, Hypothesis, run_ach_analysis
+from app.core.completion_policy import build_completion_policy
 from app.core.cross_verification import build_cross_verification_matrix
 from app.core.evidence_ledger import build_evidence_record
 from app.core.fact_pool import FactRecord, default_promotion_stage_for_status, validate_fact_record
@@ -537,7 +538,10 @@ class MemoryStore:
             preview["summary"] = summary
             preview["report_markdown"] = report_markdown
             assessment = build_quality_assessment(preview)
-            investigation.status = completion_status_for_detail(preview, status)
+            preview["quality_assessment"] = assessment
+            _apply_gap_plans(preview)
+            preview["completion_policy"] = build_completion_policy(preview)
+            investigation.status = _policy_status_for_detail(preview, status)
             investigation.summary = summary
             investigation.report_markdown = render_structured_report(preview, assessment)
             investigation.confidence = confidence
@@ -764,6 +768,7 @@ class MemoryStore:
         raw["intelligence_memory"] = build_intelligence_memory(raw)
         raw["quality_assessment"] = build_quality_assessment(raw)
         _apply_gap_plans(raw)
+        raw["completion_policy"] = build_completion_policy(raw)
         raw["graph"] = build_investigation_graph(raw)
         return raw
 
@@ -805,6 +810,7 @@ class MemoryStore:
         data["intelligence_memory"] = build_intelligence_memory(data)
         data["quality_assessment"] = build_quality_assessment(data)
         _apply_gap_plans(data)
+        data["completion_policy"] = build_completion_policy(data)
         data["graph"] = build_investigation_graph(data)
         return data
 
@@ -1734,7 +1740,10 @@ class SQLiteStore:
         detail["summary"] = summary
         detail["report_markdown"] = report_markdown
         assessment = build_quality_assessment(detail)
-        final_status = completion_status_for_detail(detail, status)
+        detail["quality_assessment"] = assessment
+        _apply_gap_plans(detail)
+        detail["completion_policy"] = build_completion_policy(detail)
+        final_status = _policy_status_for_detail(detail, status)
         final_report = render_structured_report(detail, assessment)
         with self.lock, closing(self._connect()) as conn, conn:
             row = conn.execute(
@@ -2041,6 +2050,7 @@ class SQLiteStore:
         data["intelligence_memory"] = build_intelligence_memory(data)
         data["quality_assessment"] = build_quality_assessment(data)
         _apply_gap_plans(data)
+        data["completion_policy"] = build_completion_policy(data)
         data["graph"] = build_investigation_graph(data)
         return data
 
@@ -2701,6 +2711,17 @@ def _apply_gap_plans(data: dict) -> None:
     data["gap_analysis"] = gap_analysis
     data["gap_tool_plan"] = gap_tool_plan
     data["gap_followup_summary"] = build_gap_followup_summary(gap_tool_plan, gap_analysis)
+
+
+def _policy_status_for_detail(detail: dict, requested_status: str) -> str:
+    if requested_status in {"FAILED", "PARTIAL_FAILED", "CANCELLED", "ARCHIVED"}:
+        return requested_status
+    policy = detail.get("completion_policy") or build_completion_policy(detail)
+    if requested_status == "COMPLETED":
+        return str(policy.get("recommended_status") or completion_status_for_detail(detail, requested_status))
+    if requested_status == "BLOCKED" and policy.get("completion_mode") == "blocked_by_environment":
+        return str(policy.get("recommended_status") or "BLOCKED")
+    return completion_status_for_detail(detail, requested_status)
 
 
 def _dedupe_existing_rows(conn: sqlite3.Connection) -> None:

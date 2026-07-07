@@ -1,6 +1,9 @@
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
 from app.core.completion_policy import build_completion_policy
+from app.services.store import MemoryStore, SQLiteStore
 
 
 REQUIRED_POLICY_KEYS = {
@@ -151,6 +154,45 @@ def complete_company_detail() -> dict:
 
 
 class CompletionPolicyTests(unittest.TestCase):
+    def test_memory_store_detail_includes_completion_policy(self):
+        store = MemoryStore()
+        investigation = store.create_investigation(
+            name="Example Manufacturing LLC review",
+            seed_type="company",
+            seed_value="Example Manufacturing LLC",
+            strategy_name="quick",
+        )
+
+        detail = store.get_investigation(investigation.id)
+
+        self.assertIn("completion_policy", detail)
+        self.assertIn(
+            detail["completion_policy"]["completion_mode"],
+            {
+                "continue_collection",
+                "ready_for_human_decision",
+                "blocked_by_environment",
+                "failed",
+                "limited",
+                "strict",
+            },
+        )
+
+    def test_sqlite_store_detail_includes_completion_policy(self):
+        with TemporaryDirectory() as tmpdir:
+            store = SQLiteStore(Path(tmpdir) / "store.db")
+            investigation = store.create_investigation(
+                name="Example Manufacturing LLC review",
+                seed_type="company",
+                seed_value="Example Manufacturing LLC",
+                strategy_name="quick",
+            )
+
+            detail = store.get_investigation(investigation.id)
+
+        self.assertIn("completion_policy", detail)
+        self.assertIn("recommended_status", detail["completion_policy"])
+
     def test_strict_completion_recommends_completed(self):
         policy = build_completion_policy(complete_company_detail())
 
