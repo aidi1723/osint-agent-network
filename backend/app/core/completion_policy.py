@@ -97,8 +97,6 @@ def build_completion_policy(detail: dict) -> dict:
         gap_summary,
         detail,
     )
-    if environment_blocked:
-        ready_tools = 0
     auto_exhausted = ready_tools == 0 and bool(gap_analysis or remaining_blockers)
     useful_evidence = _has_useful_evidence(detail)
     acceptable_limitations = _acceptable_limitations(detail, remaining_blockers, evidence_floor)
@@ -423,7 +421,7 @@ def _environment_blocked(
     gap_summary: dict,
     detail: dict,
 ) -> bool:
-    if _summary_count(gap_summary, "ready") + _summary_count(gap_summary, "queued") > 0:
+    if _ready_tool_count(gap_tool_plan, gap_summary) > 0:
         return False
     if _summary_count(gap_summary, "blocked_by_config") > 0:
         return True
