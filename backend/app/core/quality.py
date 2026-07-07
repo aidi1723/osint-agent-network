@@ -105,6 +105,16 @@ def render_structured_report(detail: dict, assessment: dict | None = None) -> st
     analysis = detail.get("hypothesis_analysis") or {}
     gap_analysis = detail.get("gap_analysis") or build_gap_analysis(planner_detail)
     gap_tool_plan = detail.get("gap_tool_plan") or build_gap_tool_plan(planner_detail)
+    from app.core.completion_policy import build_completion_policy
+
+    completion_policy = detail.get("completion_policy") or build_completion_policy(
+        {
+            **detail,
+            "quality_assessment": assessment,
+            "gap_analysis": gap_analysis,
+            "gap_tool_plan": gap_tool_plan,
+        }
+    )
 
     lines = [
         f"# {detail.get('name') or detail.get('seed_value') or '情报评估报告'}",
@@ -137,6 +147,7 @@ def render_structured_report(detail: dict, assessment: dict | None = None) -> st
         ]
         lines.append(f"- 缺口：{'、'.join(missing_labels)}")
 
+    lines.extend(_completion_policy_lines(completion_policy))
     lines.extend(_gap_followup_lines(gap_analysis, gap_tool_plan))
 
     lines.extend(["", "## EEI 覆盖摘要"])
@@ -328,6 +339,33 @@ def _gap_followup_lines(gap_analysis: list[dict], gap_tool_plan: list[dict]) -> 
         hint = str(gap.get("manual_review_hint") or "").strip()
         if hint:
             lines.append(f"  - 人工复核：{hint}")
+    return lines
+
+
+def _completion_policy_lines(policy: dict) -> list[str]:
+    mode = str(policy.get("completion_mode") or "unknown")
+    status = str(policy.get("recommended_status") or "NEEDS_REVIEW")
+    lines = [
+        "",
+        "## 完成策略",
+        f"- 策略模式：{mode}",
+        f"- 推荐状态：{status}",
+        f"- 严格完成：{'是' if policy.get('strict_completion_ready') else '否'}",
+        f"- 有限完成：{'是' if policy.get('limited_completion_ready') else '否'}",
+        f"- 自动补采耗尽：{'是' if policy.get('auto_exhausted') else '否'}",
+        f"- 原因：{policy.get('reason') or '未记录'}",
+    ]
+    blockers = [str(item) for item in policy.get("remaining_blockers") or []]
+    if blockers:
+        lines.append(f"- 剩余卡点：{'、'.join(blockers)}")
+    limitations = [str(item) for item in policy.get("acceptable_limitations") or []]
+    if limitations:
+        lines.append(f"- 可接受限制：{'、'.join(limitations)}")
+    actions = [str(item) for item in policy.get("operator_next_actions") or []]
+    if actions:
+        lines.append("- 操作员下一步：")
+        for action in actions[:6]:
+            lines.append(f"  - {action}")
     return lines
 
 

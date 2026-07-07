@@ -8,6 +8,64 @@ from app.services.store import SQLiteStore
 
 
 class QualityGateTests(unittest.TestCase):
+    def test_report_renders_completion_policy_section(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Sample Auto Parts Co.",
+            "entities": [],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "hypotheses": [],
+            "relationships": [],
+            "report_markdown": "## BLUF\nSample Auto Parts Co. has source-backed contact and scope evidence.",
+            "quality_assessment": {
+                "score": 84.0,
+                "completion_ready": False,
+                "missing_keys": ["decision_maker"],
+                "blocking_keys": ["decision_maker"],
+                "checks": [],
+            },
+            "completion_policy": {
+                "recommended_status": "COMPLETED",
+                "completion_mode": "limited",
+                "strict_completion_ready": False,
+                "limited_completion_ready": True,
+                "auto_exhausted": True,
+                "manual_decision_required": False,
+                "environment_blocked": False,
+                "reason": "Core evidence floor is satisfied; only acceptable limitations remain: decision_maker.",
+                "remaining_blockers": ["decision_maker"],
+                "acceptable_limitations": ["decision_maker"],
+                "operator_next_actions": [
+                    "Manually verify decision-maker from an official team page, public profile, or trusted directory."
+                ],
+                "evidence_floor": {},
+            },
+            "gap_analysis": [{"gap_key": "decision_maker", "severity": "blocking"}],
+            "gap_tool_plan": [
+                {"gap_key": "decision_maker", "tool_name": "official_site_extractor", "status": "already_attempted"}
+            ],
+            "gap_followup_summary": {
+                "total_gaps": 1,
+                "blocking_gaps": 1,
+                "ready": 0,
+                "queued": 0,
+                "already_attempted": 1,
+                "blocked_by_config": 0,
+                "exhausted": 0,
+                "manual_review_required": 0,
+            },
+            "cross_verification_matrix": [],
+        }
+
+        report = render_structured_report(detail, detail["quality_assessment"])
+
+        self.assertIn("## 完成策略", report)
+        self.assertIn("limited", report)
+        self.assertIn("decision_maker", report)
+        self.assertIn("Manually verify decision-maker", report)
+
     def test_quality_assessment_marks_sparse_results_incomplete(self):
         detail = {
             "seed_value": "Sample Hospitality LLC",

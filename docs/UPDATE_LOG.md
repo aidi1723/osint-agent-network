@@ -15,6 +15,8 @@ Scope:
   in-memory and SQLite investigation detail views.
 - Started Task 4 worker integration and exposed completion policy in worker
   summaries while applying policy-backed final status decisions.
+- Started Task 5 report rendering and added the completion-policy section to
+  structured reports.
 
 Changes:
 
@@ -31,6 +33,9 @@ Changes:
 - `backend/app/services/worker.py` now computes final `completion_policy`,
   returns `completion_mode` in summaries, and lets limited completion persist
   as `COMPLETED` when the policy recommends it.
+- `backend/app/core/quality.py` now renders `## 完成策略` with mode,
+  recommended status, remaining blockers, acceptable limitations, and operator
+  next actions.
 
 Verification:
 
@@ -45,6 +50,9 @@ Verification:
 - Focused Task 4 worker limited-completion regression: 1 test passed.
 - Worker suite after Task 4: 27 tests passed.
 - Full backend unittest discovery after Task 4: 408 tests passed.
+- Focused Task 5 report rendering regression: 1 test passed.
+- Quality gate suite after Task 5: 15 tests passed.
+- Full backend unittest discovery after Task 5: 409 tests passed.
 
 ## 2026-07-06 - Gap-to-Tool Follow-up Planner
 
