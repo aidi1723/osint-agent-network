@@ -49,6 +49,8 @@ def build_completion_policy(detail: dict) -> dict:
         if "gap_analysis" in detail and detail["gap_analysis"] is not None
         else build_gap_analysis(planner_detail)
     )
+    explicit_gap_tool_plan = "gap_tool_plan" in detail and detail["gap_tool_plan"] is not None
+    explicit_gap_summary = "gap_followup_summary" in detail and detail["gap_followup_summary"] is not None
     if "gap_tool_plan" in detail and detail["gap_tool_plan"] is not None:
         gap_tool_plan = list(detail["gap_tool_plan"])
     elif "gap_analysis" in detail:
@@ -73,8 +75,15 @@ def build_completion_policy(detail: dict) -> dict:
         and not _has_non_acceptable_blocker(remaining_blockers, detail)
     )
     ready_tools = int(gap_summary.get("ready") or 0) + int(gap_summary.get("queued") or 0)
+    environment_blocked = _environment_blocked(
+        gap_tool_plan,
+        gap_summary,
+        detail,
+        explicit_gap_health=explicit_gap_tool_plan or explicit_gap_summary,
+    )
+    if environment_blocked and not (explicit_gap_tool_plan or explicit_gap_summary):
+        ready_tools = 0
     auto_exhausted = ready_tools == 0 and bool(gap_analysis or remaining_blockers)
-    environment_blocked = _environment_blocked(gap_tool_plan, gap_summary)
     useful_evidence = _has_useful_evidence(detail)
     acceptable_limitations = _acceptable_limitations(detail, remaining_blockers, evidence_floor)
     limited_ready = (
@@ -146,7 +155,7 @@ def build_completion_policy(detail: dict) -> dict:
             reason="Automatic collection is blocked by unavailable tools, configuration, credentials, or disabled routes.",
             remaining_blockers=remaining_blockers,
             acceptable_limitations=acceptable_limitations,
-            operator_next_actions=_environment_actions(gap_tool_plan),
+            operator_next_actions=_environment_actions(gap_tool_plan, detail),
             evidence_floor=evidence_floor,
         )
 
@@ -345,12 +354,27 @@ def _has_high_risk_review(detail: dict) -> bool:
     )
 
 
-def _environment_blocked(gap_tool_plan: list[dict], gap_summary: dict) -> bool:
+def _environment_blocked(
+    gap_tool_plan: list[dict],
+    gap_summary: dict,
+    detail: dict,
+    *,
+    explicit_gap_health: bool,
+) -> bool:
     if int(gap_summary.get("ready") or 0) + int(gap_summary.get("queued") or 0) > 0:
-        return False
+        return False if explicit_gap_health else _jobs_environment_blocked(detail)
     if int(gap_summary.get("blocked_by_config") or 0) > 0:
         return True
-    return any(str(item.get("status") or "").strip().lower() in BLOCKED_TOOL_STATUSES for item in gap_tool_plan)
+    return any(str(item.get("status") or "").strip().lower() in BLOCKED_TOOL_STATUSES for item in gap_tool_plan) or _jobs_environment_blocked(detail)
+
+
+def _jobs_environment_blocked(detail: dict) -> bool:
+    return any(_job_is_environment_blocked(job) for job in detail.get("jobs") or [])
+
+
+def _job_is_environment_blocked(job: dict) -> bool:
+    status = str(job.get("status") or "").strip().lower()
+    return status == "blocked" or status in BLOCKED_TOOL_STATUSES
 
 
 def _has_useful_evidence(detail: dict) -> bool:
@@ -761,7 +785,8 @@ def _has_evidence_ledger(detail: dict) -> bool:
 
 
 def _has_bluf_report(detail: dict) -> bool:
-    return bool(str(detail.get("report_markdown") or "").strip())
+    report_markdown = str(detail.get("report_markdown") or "")
+    return "bluf" in report_markdown.lower() and len(report_markdown.strip()) >= 20
 
 
 def _has_linked_fact(detail: dict) -> bool:
@@ -845,8 +870,9 @@ def _operator_actions(remaining_blockers: list[str]) -> list[str]:
     return [action_by_key.get(key, f"Manually resolve evidence gap: {key}.") for key in sorted(set(remaining_blockers))]
 
 
-def _environment_actions(gap_tool_plan: list[dict]) -> list[str]:
+def _environment_actions(gap_tool_plan: list[dict], detail: dict | None = None) -> list[str]:
     actions = []
+    action_tool_names = set()
     for item in gap_tool_plan:
         status = str(item.get("status") or "").strip().lower()
         if status not in BLOCKED_TOOL_STATUSES:
@@ -854,4 +880,16 @@ def _environment_actions(gap_tool_plan: list[dict]) -> list[str]:
         tool_name = str(item.get("tool_name") or "unknown_tool")
         reason = str(item.get("health_reason") or "Tool route is unavailable.")
         actions.append(f"Restore {tool_name}: {reason}")
+        action_tool_names.add(tool_name)
+    for job in (detail or {}).get("jobs") or []:
+        if not _job_is_environment_blocked(job):
+            continue
+        tool_name = str(job.get("tool_name") or "unknown_tool")
+        if tool_name in action_tool_names:
+            continue
+        reason = str(job.get("health_reason") or job.get("error") or "Tool route is unavailable.")
+        action = f"Restore {tool_name}: {reason}"
+        if action not in actions:
+            actions.append(action)
+            action_tool_names.add(tool_name)
     return actions or ["Restore blocked tool routes, credentials, or configuration, then rerun collection."]
