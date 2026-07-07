@@ -188,6 +188,8 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertNotEqual(policy["recommended_status"], "COMPLETED")
         self.assertFalse(policy["strict_completion_ready"])
         self.assertFalse(policy["evidence_floor"]["bluf_report"])
+        self.assertIn("bluf_report", policy["remaining_blockers"])
+        self.assertTrue(policy["operator_next_actions"])
 
     def test_strict_completion_rejects_non_bluf_report_text(self):
         detail = complete_company_detail()
@@ -620,6 +622,126 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertFalse(policy["evidence_floor"]["identity"])
         self.assertFalse(policy["evidence_floor"]["official_website"])
         self.assertFalse(policy["evidence_floor"]["business_scope"])
+
+    def test_company_strict_quality_ready_rejects_generic_official_website_fact_without_url(self):
+        detail = complete_company_detail()
+        detail["entities"] = [
+            item
+            for item in detail["entities"]
+            if item["type"] not in {"domain", "url", "website", "official_website"}
+        ]
+        detail["evidence_ledger"] = [
+            {
+                "id": "ev-1",
+                "source_type": "business_registry",
+                "source_tool": "registry_lookup",
+                "snippet": "Registry record confirms Sample Auto Parts Co. identity and auto parts distribution.",
+            },
+            {
+                "id": "ev-2",
+                "source_type": "official_site_contact",
+                "source_tool": "official_site_extractor",
+                "snippet": "Official contact page lists sales@example-target.test.",
+            },
+        ]
+        detail["facts"] = [
+            {
+                "id": "fact-1",
+                "statement": "Sample Auto Parts Co. is the registered company identity.",
+                "predicate": "company_identity",
+                "subject": "Sample Auto Parts Co.",
+                "object": "Sample Auto Parts Co.",
+                "status": "CONFIRMED",
+                "promotion_stage": "ACCEPTED_FACT",
+                "evidence_ids": ["ev-1"],
+            },
+            {
+                "id": "fact-2",
+                "statement": "Sample Auto Parts Co. has an official_website field in a registry profile.",
+                "predicate": "official_website",
+                "subject": "Sample Auto Parts Co.",
+                "object": "official website",
+                "status": "CONFIRMED",
+                "promotion_stage": "ACCEPTED_FACT",
+                "evidence_ids": ["ev-1"],
+            },
+            {
+                "id": "fact-3",
+                "statement": "Sample Auto Parts Co. business scope is auto parts distribution.",
+                "predicate": "business_scope",
+                "subject": "Sample Auto Parts Co.",
+                "object": "auto parts distribution",
+                "status": "CONFIRMED",
+                "promotion_stage": "ACCEPTED_FACT",
+                "evidence_ids": ["ev-1"],
+            },
+            {
+                "id": "fact-4",
+                "statement": "Sample Auto Parts Co. lists sales@example-target.test.",
+                "predicate": "has_contact_email",
+                "subject": "Sample Auto Parts Co.",
+                "object": "sales@example-target.test",
+                "status": "CONFIRMED",
+                "promotion_stage": "ACCEPTED_FACT",
+                "evidence_ids": ["ev-2"],
+            },
+        ]
+        detail["quality_assessment"] = {
+            "score": 95.0,
+            "completion_ready": True,
+            "missing_keys": [],
+            "blocking_keys": [],
+            "checks": [],
+        }
+        detail["gap_analysis"] = []
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 0,
+            "blocking_gaps": 0,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 0,
+            "blocked_by_config": 0,
+            "exhausted": 0,
+            "manual_review_required": 0,
+        }
+        detail["cross_verification_matrix"] = [
+            {
+                "field_key": "company_identity",
+                "status": "SUPPORTED",
+                "candidate_value": "Sample Auto Parts Co.",
+                "linked_evidence_ids": ["ev-1"],
+                "linked_fact_ids": ["fact-1"],
+            },
+            {
+                "field_key": "official_website",
+                "status": "SUPPORTED",
+                "candidate_value": "official website",
+                "linked_evidence_ids": ["ev-1"],
+                "linked_fact_ids": ["fact-2"],
+            },
+            {
+                "field_key": "business_scope",
+                "status": "SUPPORTED",
+                "candidate_value": "auto parts distribution",
+                "linked_evidence_ids": ["ev-1"],
+                "linked_fact_ids": ["fact-3"],
+            },
+            {
+                "field_key": "contact_channel",
+                "status": "SUPPORTED",
+                "candidate_value": "sales@example-target.test",
+                "linked_evidence_ids": ["ev-2"],
+                "linked_fact_ids": ["fact-4"],
+            },
+        ]
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["evidence_floor"]["official_website"])
+        self.assertIn("official_website", policy["remaining_blockers"])
 
     def test_company_limited_completion_rejects_raw_unlinked_contact_page_evidence(self):
         detail = complete_company_detail()
@@ -1330,11 +1452,11 @@ class CompletionPolicyTests(unittest.TestCase):
             "quality_assessment": {
                 "score": 0.0,
                 "completion_ready": False,
-                "missing_keys": ["official_website", "evidence_ledger"],
-                "blocking_keys": ["official_website", "evidence_ledger"],
+                "missing_keys": ["external_lookup"],
+                "blocking_keys": ["external_lookup"],
                 "checks": [],
             },
-            "gap_analysis": [{"gap_key": "official_website", "severity": "blocking"}],
+            "gap_analysis": [{"gap_key": "external_lookup", "severity": "blocking"}],
         }
 
         policy = build_completion_policy(detail)
@@ -1343,6 +1465,66 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertEqual(policy["recommended_status"], "BLOCKED")
         self.assertTrue(policy["environment_blocked"])
         self.assertEqual(policy["operator_next_actions"], ["Restore httpx: httpx command is not installed"])
+
+    def test_ready_generated_gap_routes_take_precedence_over_unrelated_blocked_job(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Example Manufacturing LLC",
+            "entities": [{"type": "company", "value": "Example Manufacturing LLC", "confidence": 0.72}],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "relationships": [],
+            "hypotheses": [],
+            "jobs": [{"tool_name": "legacy_lookup", "status": "BLOCKED"}],
+            "report_markdown": "",
+            "quality_assessment": {
+                "score": 20.0,
+                "completion_ready": False,
+                "missing_keys": ["official_website"],
+                "blocking_keys": ["official_website"],
+                "checks": [],
+            },
+            "gap_analysis": [{"gap_key": "official_website", "severity": "blocking"}],
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "continue_collection")
+        self.assertEqual(policy["recommended_status"], "NEEDS_REVIEW")
+        self.assertFalse(policy["environment_blocked"])
+
+    def test_malformed_detail_rows_fail_closed_without_crashing(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Example Manufacturing LLC",
+            "entities": [None],
+            "evidence": [None],
+            "evidence_ledger": [None],
+            "facts": [None],
+            "relationships": [],
+            "hypotheses": [],
+            "jobs": [None],
+            "report_markdown": "",
+            "quality_assessment": {
+                "score": 95.0,
+                "completion_ready": True,
+                "missing_keys": [],
+                "blocking_keys": [],
+                "checks": [],
+            },
+            "gap_analysis": [None],
+            "gap_tool_plan": [None],
+            "gap_followup_summary": {},
+            "cross_verification_matrix": [None],
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(set(policy), REQUIRED_POLICY_KEYS)
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(all(policy["evidence_floor"].values()))
 
     def test_environment_blocked_treats_tool_status_case_insensitively(self):
         detail = {

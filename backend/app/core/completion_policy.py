@@ -12,8 +12,22 @@ PROFILE_IDENTITY_TYPES = {"email", "username", "identity", "profile_url", "platf
 CONTACT_CHANNEL_TYPES = {"email", "phone", "whatsapp"}
 CONTACT_EMAIL_RE = re.compile(r"\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b", re.IGNORECASE)
 CONTACT_PHONE_RE = re.compile(r"(?:\+?\d[\d\s().-]{5,}\d)")
+URL_RE = re.compile(r"https?://[^\s)>\]]+", re.IGNORECASE)
+DOMAIN_RE = re.compile(r"\b(?![\w.%+-]+@)(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.IGNORECASE)
 CONFLICT_VERIFICATION_STATUSES = {"CONFLICT", "CONFLICTED", "CONTRADICTED", "HIGH_RISK_CONFLICT"}
 BUSINESS_SCOPE_FIELD_KEYS = {"business_scope", "product_scope", "purchase_category"}
+LIST_DETAIL_KEYS = {
+    "entities",
+    "evidence",
+    "evidence_ledger",
+    "facts",
+    "relationships",
+    "hypotheses",
+    "jobs",
+    "gap_analysis",
+    "gap_tool_plan",
+    "cross_verification_matrix",
+}
 GENERIC_BUSINESS_SCOPE_TERMS = {
     "business",
     "businesses",
@@ -42,6 +56,7 @@ BASE_ACCEPTABLE_LIMITATIONS = {"decision_maker", "purchase_intent", "contact_pho
 
 
 def build_completion_policy(detail: dict) -> dict:
+    detail = _clean_detail(detail)
     assessment = _quality_assessment(detail)
     planner_detail = {**detail, "quality_assessment": assessment}
     gap_analysis = (
@@ -67,7 +82,10 @@ def build_completion_policy(detail: dict) -> dict:
         else build_gap_followup_summary(gap_tool_plan, gap_analysis)
     )
     evidence_floor = _evidence_floor(detail)
-    remaining_blockers = _remaining_blockers(assessment, gap_analysis, detail)
+    remaining_blockers = sorted(
+        set(_remaining_blockers(assessment, gap_analysis, detail))
+        | _evidence_floor_blockers(evidence_floor)
+    )
     strict_ready = (
         bool(assessment.get("completion_ready"))
         and all(evidence_floor.values())
@@ -200,6 +218,18 @@ def _quality_assessment(detail: dict) -> dict:
     return build_quality_assessment(detail)
 
 
+def _clean_detail(detail: dict) -> dict:
+    cleaned = dict(detail or {})
+    for key in LIST_DETAIL_KEYS:
+        if key in cleaned:
+            cleaned[key] = _dict_items(cleaned.get(key))
+    return cleaned
+
+
+def _dict_items(value: object) -> list[dict]:
+    return [item for item in (value or []) if isinstance(item, dict)]
+
+
 def _policy(
     *,
     recommended_status: str,
@@ -269,6 +299,14 @@ def _remaining_blockers(assessment: dict, gap_analysis: list[dict], detail: dict
     if _has_high_risk_review(detail):
         blockers.add("risk_review")
     return sorted(blockers)
+
+
+def _evidence_floor_blockers(evidence_floor: dict) -> set[str]:
+    return {
+        str(key)
+        for key, ready in evidence_floor.items()
+        if not ready and str(key).strip()
+    }
 
 
 def _normalize_blocker_key(value: object) -> str:
@@ -364,7 +402,7 @@ def _environment_blocked(
     explicit_gap_health: bool,
 ) -> bool:
     if int(gap_summary.get("ready") or 0) + int(gap_summary.get("queued") or 0) > 0:
-        return False if explicit_gap_health else _jobs_environment_blocked(detail)
+        return False
     if int(gap_summary.get("blocked_by_config") or 0) > 0:
         return True
     return any(str(item.get("status") or "").strip().lower() in BLOCKED_TOOL_STATUSES for item in gap_tool_plan) or _jobs_environment_blocked(detail)
@@ -427,15 +465,122 @@ def _has_source_backed_identity(detail: dict) -> bool:
 
 
 def _has_source_backed_official_website(detail: dict) -> bool:
-    values = _entity_values(detail, {"domain", "url", "website", "official_website"})
+    values = {
+        value
+        for value in _entity_values(detail, {"domain", "url", "website", "official_website"})
+        if _looks_like_web_boundary(value)
+    }
     seed_type = str(detail.get("seed_type") or "")
     seed_value = str(detail.get("seed_value") or "").strip().lower()
-    if seed_type in {"domain", "url"} and seed_value:
+    if seed_type in {"domain", "url"} and _looks_like_web_boundary(seed_value):
         values.add(seed_value)
-    return _has_source_backed_value(detail, values) or _has_source_backed_field(
-        detail,
-        {"official_website", "official website", "website", "source boundary"},
+    return (
+        _has_source_backed_value(detail, values)
+        or _has_official_source_url(detail)
+        or _has_source_backed_official_website_fact(detail)
+        or _has_source_backed_official_website_verification(detail)
     )
+
+
+def _looks_like_web_boundary(value: object) -> bool:
+    normalized = str(value or "").strip().lower()
+    if not normalized or "@" in normalized:
+        return False
+    return bool(URL_RE.search(normalized) or DOMAIN_RE.search(normalized))
+
+
+def _has_official_source_url(detail: dict) -> bool:
+    for item in _source_backed_ledger(detail):
+        source_url = str(item.get("source_url") or "")
+        source_type = str(item.get("source_type") or "").strip().lower()
+        if source_url.startswith(("http://", "https://")) and source_type.startswith("official_site"):
+            return True
+    return False
+
+
+def _has_source_backed_official_website_fact(detail: dict) -> bool:
+    source_backed_evidence_ids = _source_backed_evidence_ids(detail)
+    if not source_backed_evidence_ids:
+        return False
+    for fact in detail.get("facts") or []:
+        if not _fact_is_accepted(fact) or not _fact_has_source_backed_evidence(fact, source_backed_evidence_ids):
+            continue
+        predicate = str(fact.get("predicate") or "").strip().lower()
+        if not any(term in predicate for term in ("official_website", "website", "source_boundary")):
+            continue
+        content = " ".join(str(fact.get(key) or "") for key in ("object", "value", "statement"))
+        if _looks_like_web_boundary(content):
+            return True
+    return False
+
+
+def _has_source_backed_official_website_verification(detail: dict) -> bool:
+    source_backed_evidence_ids = _source_backed_evidence_ids(detail)
+    evidence_by_id = {
+        str(item.get("id") or "").strip(): item
+        for item in _source_backed_ledger(detail)
+        if str(item.get("id") or "").strip()
+    }
+    source_backed_fact_ids = {
+        str(item.get("id") or "").strip()
+        for item in detail.get("facts") or []
+        if str(item.get("id") or "").strip()
+        and _fact_is_accepted(item)
+        and _fact_has_source_backed_evidence(item, source_backed_evidence_ids)
+    }
+    fact_by_id = {
+        str(item.get("id") or "").strip(): item
+        for item in detail.get("facts") or []
+        if str(item.get("id") or "").strip()
+    }
+    for item in detail.get("cross_verification_matrix") or []:
+        if _normalized_status(item.get("status")) not in SUPPORTED_VERIFICATION_STATUSES:
+            continue
+        field_key = str(item.get("field_key") or "").strip().lower()
+        if field_key not in {"official_website", "website", "source_boundary"}:
+            continue
+        candidate_value = str(item.get("candidate_value") or "")
+        if not _looks_like_web_boundary(candidate_value):
+            continue
+        linked_evidence_ids = {
+            str(evidence_id).strip()
+            for evidence_id in item.get("linked_evidence_ids") or item.get("evidence_ids") or []
+            if str(evidence_id).strip()
+        }
+        linked_fact_ids = {
+            str(fact_id).strip()
+            for fact_id in item.get("linked_fact_ids") or item.get("fact_ids") or []
+            if str(fact_id).strip()
+        }
+        for evidence_id in linked_evidence_ids & source_backed_evidence_ids:
+            evidence = evidence_by_id.get(evidence_id) or {}
+            haystack = " ".join(
+                str(evidence.get(key) or "")
+                for key in ("entity_value", "subject", "object", "source_url", "source_type", "snippet")
+            )
+            if _content_supports_web_boundary(haystack, candidate_value):
+                return True
+        for fact_id in linked_fact_ids & source_backed_fact_ids:
+            fact = fact_by_id.get(fact_id) or {}
+            haystack = " ".join(
+                str(fact.get(key) or "")
+                for key in ("statement", "predicate", "subject", "object", "value")
+            )
+            if _content_supports_web_boundary(haystack, candidate_value):
+                return True
+    return False
+
+
+def _content_supports_web_boundary(content: str, candidate_value: str) -> bool:
+    normalized_content = str(content or "").strip().lower()
+    normalized_candidate = str(candidate_value or "").strip().lower()
+    if not normalized_content or not normalized_candidate:
+        return False
+    if normalized_candidate in normalized_content:
+        return True
+    candidate_domains = set(DOMAIN_RE.findall(normalized_candidate))
+    content_domains = set(DOMAIN_RE.findall(normalized_content))
+    return bool(candidate_domains & content_domains)
 
 
 def _has_source_backed_business_scope(detail: dict) -> bool:
@@ -857,14 +1002,20 @@ def _limited_reason(remaining_blockers: list[str]) -> str:
 
 def _operator_actions(remaining_blockers: list[str]) -> list[str]:
     action_by_key = {
+        "identity": "Collect source-backed identity evidence before accepting conclusions.",
+        "source_record": "Collect a source-backed profile or contact record before accepting conclusions.",
         "decision_maker": "Manually verify decision-maker from an official team page, public profile, or trusted directory.",
         "purchase_intent": "Manually review buying-intent context if this task is used for sales qualification.",
         "contact_phone": "Manually verify phone or WhatsApp if direct calling is required.",
         "contact_email": "Manually verify email if outbound email is required.",
+        "contact_channel": "Collect a source-backed contact channel before accepting conclusions.",
         "official_website": "Confirm official website or trusted source boundary before closure.",
+        "business_scope": "Collect source-backed business scope before accepting conclusions.",
         "evidence_ledger": "Collect source-backed evidence records before accepting conclusions.",
         "fact_pool": "Promote source-backed claims into facts before accepting conclusions.",
         "cross_verification": "Run or perform cross-verification before accepting conclusions.",
+        "bluf_report": "Prepare a BLUF report section before closure.",
+        "risk_summary": "Generate or review risk summary before accepting profile conclusions.",
         "risk_review": "Resolve high-risk or review-required signals before accepting conclusions.",
     }
     if not remaining_blockers:
