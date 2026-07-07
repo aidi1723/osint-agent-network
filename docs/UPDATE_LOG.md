@@ -1,5 +1,35 @@
 # Update Log
 
+## 2026-07-07 - Completion Policy Contract And Limited Evidence Floor
+
+Scope:
+
+- Continued the evidence-shortfall completion-policy implementation plan.
+- Completed Task 1 core policy contract review after fixing terminal blocker
+  explanations for unresolved contradictions and exhausted human-decision
+  states.
+- Started Task 2 limited-completion evidence-floor work and added explicit
+  tests for decision-maker-only limited completion, missing official website,
+  and missing evidence ledger / fact pool blockers.
+
+Changes:
+
+- `backend/app/core/completion_policy.py` now reports unresolved
+  contradictions in `remaining_blockers` and `operator_next_actions`, treats
+  ready-for-human-decision states with no ready tools as auto-exhausted, and
+  safely handles non-dict `gap_followup_summary` input.
+- `backend/tests/test_completion_policy.py` now locks the limited-completion
+  evidence floor against non-waivable official website and evidence/fact-pool
+  gaps.
+
+Verification:
+
+- Focused Task 1 regression tests: 6 tests passed.
+- Completion policy suite after Task 1: 64 tests passed.
+- Full backend unittest discovery after Task 1: 402 tests passed.
+- Focused Task 2 limited evidence-floor tests: 3 tests passed.
+- Completion policy suite after Task 2 test alignment: 67 tests passed.
+
 ## 2026-07-06 - Gap-to-Tool Follow-up Planner
 
 Scope:

@@ -2132,6 +2132,130 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertFalse(policy["strict_completion_ready"])
         self.assertEqual(policy["remaining_blockers"], ["decision_maker"])
 
+    def test_company_can_complete_with_limited_decision_maker_shortfall(self):
+        detail = complete_company_detail()
+        detail["entities"] = [
+            item for item in detail["entities"] if item["type"] != "decision_maker"
+        ]
+        detail["quality_assessment"] = {
+            "score": 84.0,
+            "completion_ready": False,
+            "missing_keys": ["decision_maker"],
+            "blocking_keys": ["decision_maker"],
+            "checks": [],
+        }
+        detail["gap_analysis"] = [{"gap_key": "decision_maker", "severity": "blocking"}]
+        detail["gap_tool_plan"] = [
+            {"gap_key": "decision_maker", "tool_name": "official_site_extractor", "status": "already_attempted"}
+        ]
+        detail["gap_followup_summary"] = {
+            "total_gaps": 1,
+            "blocking_gaps": 1,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 1,
+            "blocked_by_config": 0,
+            "exhausted": 0,
+            "manual_review_required": 0,
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "limited")
+        self.assertEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["strict_completion_ready"])
+        self.assertTrue(policy["limited_completion_ready"])
+        self.assertEqual(policy["remaining_blockers"], ["decision_maker"])
+        self.assertEqual(policy["acceptable_limitations"], ["decision_maker"])
+
+    def test_missing_official_website_cannot_be_limited_completion(self):
+        detail = complete_company_detail()
+        detail["entities"] = [
+            item
+            for item in detail["entities"]
+            if item["type"] not in {"domain", "url", "website", "official_website"}
+        ]
+        detail["facts"] = [
+            fact for fact in detail["facts"] if fact["predicate"] != "official_website"
+        ]
+        detail["evidence_ledger"] = [
+            {
+                **item,
+                "source_url": item["source_url"].replace("https://example-target.test", "https://directory.example.test"),
+                "source_type": "directory_record" if item["id"] == "ev-1" else "contact_record",
+                "source_tool": "directory_lookup",
+            }
+            for item in detail["evidence_ledger"]
+        ]
+        detail["cross_verification_matrix"] = [
+            row for row in detail["cross_verification_matrix"] if row["field_key"] != "official_website"
+        ]
+        detail["quality_assessment"] = {
+            "score": 78.0,
+            "completion_ready": False,
+            "missing_keys": ["official_website"],
+            "blocking_keys": ["official_website"],
+            "checks": [],
+        }
+        detail["gap_analysis"] = [{"gap_key": "official_website", "severity": "blocking"}]
+        detail["gap_tool_plan"] = [
+            {"gap_key": "official_website", "tool_name": "official_site_search", "status": "already_attempted"}
+        ]
+        detail["gap_followup_summary"] = {
+            "total_gaps": 1,
+            "blocking_gaps": 1,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 1,
+            "blocked_by_config": 0,
+            "exhausted": 0,
+            "manual_review_required": 0,
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "ready_for_human_decision")
+        self.assertEqual(policy["recommended_status"], "NEEDS_REVIEW")
+        self.assertFalse(policy["limited_completion_ready"])
+        self.assertFalse(policy["evidence_floor"]["official_website"])
+        self.assertIn("official_website", policy["remaining_blockers"])
+
+    def test_missing_evidence_ledger_cannot_be_limited_completion(self):
+        detail = complete_company_detail()
+        detail["evidence"] = []
+        detail["evidence_ledger"] = []
+        detail["facts"] = []
+        detail["quality_assessment"] = {
+            "score": 76.0,
+            "completion_ready": False,
+            "missing_keys": ["evidence_ledger", "fact_pool"],
+            "blocking_keys": ["evidence_ledger", "fact_pool"],
+            "checks": [],
+        }
+        detail["gap_analysis"] = [
+            {"gap_key": "evidence_ledger", "severity": "blocking"},
+            {"gap_key": "fact_pool", "severity": "blocking"},
+        ]
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 2,
+            "blocking_gaps": 2,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 0,
+            "blocked_by_config": 0,
+            "exhausted": 0,
+            "manual_review_required": 2,
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "ready_for_human_decision")
+        self.assertEqual(policy["recommended_status"], "NEEDS_REVIEW")
+        self.assertFalse(policy["limited_completion_ready"])
+        self.assertFalse(policy["evidence_floor"]["evidence_ledger"])
+        self.assertFalse(policy["evidence_floor"]["fact_pool"])
+
     def test_limited_completion_accepts_padded_supported_cross_verification_status(self):
         detail = complete_company_detail()
         detail["entities"] = [
