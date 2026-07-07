@@ -736,6 +736,163 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertNotEqual(policy["recommended_status"], "COMPLETED")
         self.assertFalse(policy["limited_completion_ready"])
 
+    def test_generic_business_scope_fact_does_not_satisfy_floor_or_strict_completion(self):
+        detail = complete_company_detail()
+        detail["entities"] = [
+            {"type": "business_scope", "value": "business", "confidence": 0.8}
+            if item["type"] == "business_scope"
+            else item
+            for item in detail["entities"]
+        ]
+        detail["evidence_ledger"] = [
+            {
+                **item,
+                "snippet": "Official profile confirms Sample Auto Parts Co. business.",
+            }
+            if item["id"] == "ev-1"
+            else item
+            for item in detail["evidence_ledger"]
+        ]
+        detail["facts"] = [
+            {
+                **fact,
+                "statement": "Business.",
+                "object": "business",
+            }
+            if fact["id"] == "fact-3"
+            else fact
+            for fact in detail["facts"]
+        ]
+        detail["cross_verification_matrix"] = [
+            {
+                **row,
+                "candidate_value": "business",
+            }
+            if row["field_key"] == "business_scope"
+            else row
+            for row in detail["cross_verification_matrix"]
+        ]
+        detail["quality_assessment"] = {
+            "score": 95.0,
+            "completion_ready": True,
+            "missing_keys": [],
+            "blocking_keys": [],
+            "checks": [],
+        }
+        detail["gap_analysis"] = []
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 0,
+            "blocking_gaps": 0,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 0,
+            "blocked_by_config": 0,
+            "exhausted": 0,
+            "manual_review_required": 0,
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertFalse(policy["evidence_floor"]["business_scope"])
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+
+    def test_generic_business_scope_verification_does_not_satisfy_floor(self):
+        detail = complete_company_detail()
+        detail["entities"] = [
+            {"type": "business_scope", "value": "business", "confidence": 0.8}
+            if item["type"] == "business_scope"
+            else item
+            for item in detail["entities"]
+        ]
+        detail["evidence_ledger"] = [
+            {
+                **item,
+                "snippet": "Official profile confirms Sample Auto Parts Co. business.",
+            }
+            if item["id"] == "ev-1"
+            else item
+            for item in detail["evidence_ledger"]
+        ]
+        detail["facts"] = [fact for fact in detail["facts"] if fact["id"] != "fact-3"]
+        detail["cross_verification_matrix"] = [
+            row
+            for row in detail["cross_verification_matrix"]
+            if row["field_key"] != "business_scope"
+        ]
+        detail["cross_verification_matrix"].append(
+            {
+                "field_key": "business_scope",
+                "status": "SUPPORTED",
+                "candidate_value": "business",
+                "linked_evidence_ids": ["ev-1"],
+                "linked_fact_ids": ["fact-1"],
+            }
+        )
+        detail["quality_assessment"] = {
+            "score": 95.0,
+            "completion_ready": True,
+            "missing_keys": [],
+            "blocking_keys": [],
+            "checks": [],
+        }
+        detail["gap_analysis"] = []
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 0,
+            "blocking_gaps": 0,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 0,
+            "blocked_by_config": 0,
+            "exhausted": 0,
+            "manual_review_required": 0,
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertFalse(policy["evidence_floor"]["business_scope"])
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+
+    def test_conflicted_cross_verification_row_prevents_strict_completion(self):
+        detail = complete_company_detail()
+        detail["quality_assessment"] = {
+            "score": 95.0,
+            "completion_ready": True,
+            "missing_keys": [],
+            "blocking_keys": [],
+            "checks": [],
+        }
+        detail["gap_analysis"] = []
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 0,
+            "blocking_gaps": 0,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 0,
+            "blocked_by_config": 0,
+            "exhausted": 0,
+            "manual_review_required": 0,
+        }
+        detail["cross_verification_matrix"] = [
+            *detail["cross_verification_matrix"],
+            {
+                "field_key": "official_website",
+                "status": "CONFLICTED",
+                "candidate_value": "https://conflicting-target.test",
+                "linked_evidence_ids": ["ev-1"],
+            },
+        ]
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["strict_completion_ready"])
+
     def test_generic_business_registry_text_does_not_satisfy_business_scope_floor(self):
         detail = complete_company_detail()
         detail["entities"] = [

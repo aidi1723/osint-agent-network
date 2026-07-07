@@ -14,7 +14,19 @@ CONTACT_EMAIL_RE = re.compile(r"\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b", re.I
 CONTACT_PHONE_RE = re.compile(r"(?:\+?\d[\d\s().-]{5,}\d)")
 CONFLICT_VERIFICATION_STATUSES = {"CONFLICT", "CONFLICTED", "CONTRADICTED", "HIGH_RISK_CONFLICT"}
 BUSINESS_SCOPE_FIELD_KEYS = {"business_scope", "product_scope", "purchase_category"}
-GENERIC_BUSINESS_SCOPE_TERMS = {"business", "product", "products", "scope", "service", "services"}
+GENERIC_BUSINESS_SCOPE_TERMS = {
+    "business",
+    "businesses",
+    "category",
+    "categories",
+    "company",
+    "companies",
+    "product",
+    "products",
+    "scope",
+    "service",
+    "services",
+}
 NON_ACCEPTABLE_BLOCKERS = {
     "company_identity",
     "official_website",
@@ -57,6 +69,7 @@ def build_completion_policy(detail: dict) -> dict:
         bool(assessment.get("completion_ready"))
         and all(evidence_floor.values())
         and not remaining_blockers
+        and not _has_non_acceptable_blocker(remaining_blockers, detail)
     )
     ready_tools = int(gap_summary.get("ready") or 0) + int(gap_summary.get("queued") or 0)
     auto_exhausted = ready_tools == 0 and bool(gap_analysis or remaining_blockers)
@@ -460,7 +473,7 @@ def _concrete_business_scope_values(detail: dict) -> set[str]:
     return {
         value
         for value in _entity_values(detail, {"business_scope", "product_scope", "purchase_category"})
-        if value not in GENERIC_BUSINESS_SCOPE_TERMS
+        if _has_concrete_business_scope_content(value)
     }
 
 
@@ -472,7 +485,9 @@ def _has_source_backed_business_scope_fact(detail: dict, values: set[str]) -> bo
         if not _fact_is_accepted(fact) or not _fact_has_source_backed_evidence(fact, source_backed_evidence_ids):
             continue
         predicate = str(fact.get("predicate") or "").strip().lower()
-        if any(field_key in predicate for field_key in BUSINESS_SCOPE_FIELD_KEYS):
+        has_business_scope_predicate = any(field_key in predicate for field_key in BUSINESS_SCOPE_FIELD_KEYS)
+        content = _business_scope_fact_content(fact) if has_business_scope_predicate else ""
+        if has_business_scope_predicate and _has_concrete_business_scope_content(content):
             return True
         if not values:
             continue
@@ -516,9 +531,27 @@ def _has_source_backed_business_scope_verification(detail: dict, values: set[str
         elif not linked_evidence_ids & source_backed_evidence_ids:
             continue
         candidate_value = str(item.get("candidate_value") or "").strip().lower()
+        if not _has_concrete_business_scope_content(candidate_value):
+            continue
         if not values or any(value in candidate_value for value in values):
             return True
     return False
+
+
+def _business_scope_fact_content(fact: dict) -> str:
+    subject = str(fact.get("subject") or "").strip().lower()
+    parts = []
+    for key in ("statement", "object", "value"):
+        value = str(fact.get(key) or "").strip().lower()
+        if subject:
+            value = value.replace(subject, " ")
+        parts.append(value)
+    return " ".join(parts)
+
+
+def _has_concrete_business_scope_content(value: object) -> bool:
+    tokens = re.findall(r"[a-z0-9]+", str(value or "").lower())
+    return any(token not in GENERIC_BUSINESS_SCOPE_TERMS for token in tokens)
 
 
 def _source_backed_ledger(detail: dict) -> list[dict]:
