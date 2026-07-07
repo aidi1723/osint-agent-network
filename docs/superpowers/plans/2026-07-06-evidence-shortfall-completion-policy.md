@@ -1313,7 +1313,7 @@ Expected: no output.
 Run:
 
 ```bash
-git diff --unified=0 -- . | rg '^\+' | rg -n 'SRR|srrautopartsonline|ZAWIJA|Family Hospitality|Long Way|in19034126503jgqn|JAPAN SRR|Genuine Parts|f1224594|d9bf6c4b|6999088c|a8df5c87|83a1a3a5|22f8ead9|b1767a1a|565694ff|1ac0604c|fa08c83b|266d697c|e9b5e99b|/home/aidi|/Users/aidi|\bn100\b|192\.168\.|10\.[0-9]+\.|172\.(1[6-9]|2[0-9]|3[01])\.|Bearer [A-Za-z0-9._~-]{12,}|sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}'
+git diff --unified=0 -- . | rg '^\+' | rg -n '<private-target-name>|<private-domain>|<private-id>|<private-host>|<personal-home-path>|192\.168\.|10\.[0-9]+\.|172\.(1[6-9]|2[0-9]|3[01])\.|Bearer [A-Za-z0-9._~-]{12,}|sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}'
 ```
 
 Expected: no output.
