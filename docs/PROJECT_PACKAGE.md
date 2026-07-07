@@ -1,7 +1,7 @@
 # 成熟项目包说明
 
 Version: 1.0
-Updated: 2026-07-06
+Updated: 2026-07-07
 
 本文是情报官项目交付、部署、验收和后续扩展的总清单。它面向接手项目的工程师、运维人员和情报 Agent 执行人员。
 
@@ -48,7 +48,8 @@ osint-agent-network/
 - 推荐先用 `scripts/start.sh` 做原生烟测；长期运行使用用户级 systemd。
 - 详细部署、烟测、备份和回滚步骤见 `docs/N100_DEPLOYMENT_RUNBOOK.md`。
 - 最新 <production-host> 实际任务测试、ProjectDiscovery 域名 quick 链路达标、质量闸门修复、阻断状态修复和复测结论见 `docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md`。
-- 当前阶段临时收尾、验证证据和剩余可选工作见 `docs/TEMPORARY_CLOSURE_2026-07-06.md`。
+- 当前阶段收尾、验证证据和剩余可选工作见 `docs/STAGE_CLOSURE_2026-07-07.md`。
+- 2026-07-06 队列/runtime 阶段的历史临时收尾见 `docs/TEMPORARY_CLOSURE_2026-07-06.md`。
 - 真实工具按需启用，不要求常驻后台；接线、剩余缺口和验收命令见 `docs/REAL_TOOL_ENABLEMENT.md`。
 
 ## 3. 启动方式
@@ -223,6 +224,11 @@ npm run build
 - 依赖感知队列、SQLite 可恢复后台 worker 队列、并发保护、递进式推演和 IntelCore 预测分析输出合同。
 - Intelligence Core v3：任务需求层、事实晋级、交叉验证矩阵和专业白皮书结构。
 - 情报循环式工作流：初采、首轮验证、有限定向扩展、深度工具门禁、最终分析。
+- 缺口到工具自动补采计划：`gap_analysis`、`gap_tool_plan` 和
+  `gap_followup_summary` 会解释卡点、缺失证据、可用工具、阻断工具和人工复核动作。
+- 完成策略：区分 strict、limited、continue_collection、
+  ready_for_human_decision、blocked_by_environment 和 failed，避免工具耗尽后无意义循环。
+- 官网 URL/domain 交叉验证归一化：等价官网写法不会产生误冲突，真实冲突会在矩阵理由中列出候选域名和来源族。
 - 管理写接口 Token 保护，Agent 写回接口 Token 保护。
 - 空白 Alibaba/CRM Lead 逆向补全 SOP。
 - 企业与决策人并列图谱模板。
@@ -234,12 +240,19 @@ npm run build
 - 运维增强包：`/api/tools/health` 真实工具就绪检查、固定样本回归库、`BACKUP_KEEP_LAST` 备份保留策略、user-level systemd 定时备份和 `scripts/production_readiness.py` 成熟版本验收脚本。
 - <production-host> 域名 quick 链路已达到当前设计目标：最终任务 `<final-domain-task-id>` 为 `COMPLETED`，质量分 `78.1 / 100`，`subfinder`、`httpx`、`katana`、`official_site_extractor` 全部完成，失败和阻断均为 `0`。
 
+已验证基线：
+
+- `bash scripts/verify.sh` 通过。
+- backend unittest：`411 tests OK`。
+- 回归 smoke：`4` cases / `0` failed。
+- frontend helper checks、Vitest `9` tests 和 Vite production build 通过。
+
 需要后续增强：
 
-- 更丰富的真实工具样本和解析回归测试。
-- 打包式报告下载、导出审计记录和证据附件整理。
 - 用户权限分层和审计日志。
-- 证据 URL、来源等级和人工复核状态字段。
+- 证据来源等级、人工复核状态、复核备注和复核时间字段。
+- 更丰富的公开安全实际任务样本、完成率统计、误冲突率统计和补采命中率统计。
+- 打包式报告下载、导出审计记录和证据附件整理。
 - 多主机 worker 需要时再评估外部队列 broker。
 
 ## 9. 交付验收标准

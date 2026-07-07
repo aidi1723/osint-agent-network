@@ -1,5 +1,35 @@
 # Update Log
 
+## 2026-07-07 - Stage Closure Documentation Alignment
+
+Scope:
+
+- Aligned the stage closure and handoff documents after the completion-policy,
+  gap-planning, report rendering, and cross-verification normalization work.
+- Made `STAGE_CLOSURE_2026-07-07.md` the current closure source of truth.
+
+Changes:
+
+- Added [STAGE_CLOSURE_2026-07-07.md](STAGE_CLOSURE_2026-07-07.md) with the
+  current closure decision, verification evidence, GitHub sync state,
+  document map, and next-stage non-blocking work.
+- Updated [FINAL_HANDOFF.md](FINAL_HANDOFF.md),
+  [TEMPORARY_CLOSURE_2026-07-06.md](TEMPORARY_CLOSURE_2026-07-06.md),
+  [PROJECT_PACKAGE.md](PROJECT_PACKAGE.md), [README.md](../README.md),
+  [DEVELOPMENT_MANUAL.md](DEVELOPMENT_MANUAL.md),
+  [NEXT_PHASE_ROADMAP_2026-07-06.md](NEXT_PHASE_ROADMAP_2026-07-06.md), and
+  [PUBLIC_RELEASE_READINESS.md](PUBLIC_RELEASE_READINESS.md).
+- Updated the recommended next development task from completed P0 work to P3
+  permission tiers/audit logs followed by P4 evidence review fields.
+- Preserved 2026-07-06 temporary closure as historical runtime/queue closure
+  rather than the current status document.
+
+Verification baseline recorded:
+
+- `bash scripts/verify.sh`: backend 411 tests passed, agent governance
+  manifest valid, regression smoke 4 cases / 0 failed, frontend checks passed,
+  Vitest 9 tests passed, and production build passed.
+
 ## 2026-07-07 - Cross Verification URL And Domain Normalization
 
 Scope:
@@ -172,7 +202,9 @@ Scope:
 
 Verification:
 
-- Latest full verification remains `bash scripts/verify.sh`: backend `306 tests OK`, frontend Vitest `2 files / 9 tests`, and frontend production build passed.
+- Historical checkpoint verification passed with the then-current backend and
+  frontend suites. The current verification baseline is recorded in the
+  2026-07-07 stage-closure entries above.
 - Added-line privacy scan produced no output during the persistent queue implementation and final documentation alignment.
 
 ## 2026-07-06 - N100 Actual Task Test Closure And Quality/Blocker Alignment

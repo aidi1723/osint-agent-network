@@ -1,12 +1,15 @@
 # Final Handoff
 
-Updated: 2026-07-06
+Updated: 2026-07-07
 
 This is the closing document for the current OSINT Agent Network / 情报官 delivery.
 
 ## Delivered State
 
-The platform baseline is complete and deployed on <production-host>. The latest temporary closure is recorded in [docs/TEMPORARY_CLOSURE_2026-07-06.md](TEMPORARY_CLOSURE_2026-07-06.md), and the latest actual <production-host> task-test closure is recorded in [docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md](N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md).
+The platform baseline is complete for this stage. The latest stage closure is
+recorded in [docs/STAGE_CLOSURE_2026-07-07.md](STAGE_CLOSURE_2026-07-07.md),
+and the latest actual <production-host> task-test closure is recorded in
+[docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md](N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md).
 
 Stable resident services:
 
@@ -23,14 +26,21 @@ On-demand tools:
 ## What Was Verified
 
 - Full verification passed: `bash scripts/verify.sh`.
-- Backend tests passed: `306 tests OK`.
+- Backend tests passed: `411 tests OK`.
+- Regression smoke passed: `4` cases / `0` failed.
 - Frontend helper checks, Vitest, and Vite production build passed.
 - <production-host> `scripts/healthcheck.sh` passed.
 - <production-host> `scripts/production_readiness.py` returns `ready: true`.
 - <production-host> services are active.
 - Backup timer is enabled.
-- 2026-07-06 actual-task testing, ProjectDiscovery tool-chain closure, quality-gate fixes, and blocked-tool semantics are recorded in [docs/UPDATE_LOG.md](UPDATE_LOG.md).
+- 2026-07-07 completion-policy, gap-planning, report rendering, and
+  cross-verification URL/domain normalization work is recorded in
+  [docs/UPDATE_LOG.md](UPDATE_LOG.md).
 - Background `/run-jobs` execution is now SQLite-backed and recoverable after API process restart.
+- Completion policy now distinguishes strict completion, limited completion,
+  continued collection, human-decision, environment-blocked, and failed states.
+- Official website URL/domain variants no longer create false
+  cross-verification conflicts.
 
 ## Latest Actual Task Findings
 
@@ -62,15 +72,16 @@ Latest <production-host> readiness snapshot:
 
 The next phase task plan is recorded in [docs/NEXT_PHASE_ROADMAP_2026-07-06.md](NEXT_PHASE_ROADMAP_2026-07-06.md).
 
-- More live tool samples and parser regression fixtures.
-- Bundled report download and export audit records.
 - Permission tiers and audit logs.
-- Evidence URL, source rank, and human review state fields.
+- Evidence source rank, human review state fields, reviewer notes, and reviewed timestamps.
+- More public-safe actual-task regression samples and completion-rate tracking.
+- Bundled report download and export audit records if operators need one archive.
 - External queue broker support only if multi-host workers become necessary.
 
 ## Entry Points
 
 - [README.md](../README.md)
+- [docs/STAGE_CLOSURE_2026-07-07.md](STAGE_CLOSURE_2026-07-07.md)
 - [docs/TEMPORARY_CLOSURE_2026-07-06.md](TEMPORARY_CLOSURE_2026-07-06.md)
 - [docs/NEXT_PHASE_ROADMAP_2026-07-06.md](NEXT_PHASE_ROADMAP_2026-07-06.md)
 - [docs/UPDATE_LOG.md](UPDATE_LOG.md)

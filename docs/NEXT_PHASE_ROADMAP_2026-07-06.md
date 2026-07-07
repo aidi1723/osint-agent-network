@@ -3,11 +3,20 @@
 This document defines the next working direction after the temporary closure in
 [TEMPORARY_CLOSURE_2026-07-06.md](TEMPORARY_CLOSURE_2026-07-06.md).
 
-The current platform baseline is closed for now: `/run-jobs` is backed by a
-SQLite recoverable queue, official-site discovery and URL site collection are
-working, and full verification passes. The next phase should focus on product
-quality, evidence usability, and operational governance rather than another
-large orchestration rewrite.
+Current status update, 2026-07-07:
+
+- The latest closure record is
+  [STAGE_CLOSURE_2026-07-07.md](STAGE_CLOSURE_2026-07-07.md).
+- `/run-jobs` is backed by a SQLite recoverable queue.
+- Official-site discovery and URL site collection are working.
+- Gap-to-tool planning, completion policy, report rendering, public-safe parser
+  fixtures, and official website URL/domain cross-verification normalization
+  have been implemented.
+- Full verification passes with backend `411 tests OK`, regression smoke
+  `4` cases / `0` failed, frontend helper checks, Vitest, and production build.
+
+The next phase should focus on product quality, evidence usability, and
+operational governance rather than another large orchestration rewrite.
 
 ## Direction
 
@@ -78,6 +87,7 @@ Progress:
 - Structured reports now include `## 卡点与补采计划`, listing blockers,
   missing evidence, ready tools, attempted tools, unavailable tools, and manual
   review hints.
+- Status: complete for the current backend/report scope.
 
 Verification:
 
@@ -114,6 +124,16 @@ Acceptance:
   paths.
 - `bash scripts/verify.sh` passes.
 - Regression tests fail if a parser drops important official-site evidence.
+
+Progress:
+
+- Public-safe fixtures now cover `official_site_search`, `httpx`, `katana`,
+  `official_site_extractor`, `subfinder`, and role-agent sparse-lead output.
+- Fixture regression tests protect official-site candidate linkage, live URL
+  metadata, relevant business/contact pages, identity/contact/scope extraction,
+  passive subdomain relationships, and public-safe role-agent output shape.
+- Status: complete for the initial fixture pack; continue adding samples as
+  optional regression hardening.
 
 ### P2 - Report Export Package
 
@@ -220,16 +240,17 @@ Acceptance:
 
 ## Recommended First Task
 
-Start with **P0 - Gap-to-Tool Automatic Follow-up Planner**.
+Start with **P3 - Permission Tiers And Audit Logs**, then continue into **P4 -
+Evidence Review Fields**.
 
 Reason:
 
-- It directly addresses the next product goal: automatic progression with clear
-  explanations when the system cannot complete a task.
-- It builds on the existing quality gate, intelligence memory, tool health, and
-  worker queue instead of adding new infrastructure.
-- It makes later real-sample regression work more valuable because fixtures can
-  assert exact gap explanations and follow-up actions.
+- P0/P1/P2 backend/report work is already implemented for the current closure.
+- P3 improves production accountability for management actions, rejected
+  write-back payloads, retries, archive/delete actions, and run enqueue events.
+- P4 improves analyst usability by separating machine confidence from human
+  review status without weakening evidence discipline.
+- Neither P3 nor P4 requires a new queue architecture.
 
 ## Verification Baseline For Every Next-Phase Task
 
@@ -241,7 +262,7 @@ bash scripts/verify.sh
 
 Expected:
 
-- backend tests pass;
+- backend tests pass; the current baseline is `411 tests OK`;
 - frontend helper checks pass;
 - Vitest passes;
 - frontend production build passes.

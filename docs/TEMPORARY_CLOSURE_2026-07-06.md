@@ -1,5 +1,9 @@
 # Temporary Closure - 2026-07-06
 
+> Superseded for current project status by
+> [STAGE_CLOSURE_2026-07-07.md](STAGE_CLOSURE_2026-07-07.md). Keep this file as
+> the historical closure record for the 2026-07-06 queue/runtime phase.
+
 This document is the temporary closure record for the current 情报官 /
 OSINT Agent Network phase. It supersedes earlier handoff summaries for current
 runtime behavior, queue execution, documentation alignment, and verification
@@ -18,6 +22,10 @@ The project now has:
 - URL site-collection priority for `httpx`, `katana`, and
   `official_site_extractor`;
 - SQLite-backed recoverable background `/run-jobs` queue;
+- gap-to-tool follow-up planning for concrete missing evidence;
+- completion-policy decisions for strict, limited, blocked, failed, and
+  continue-collection outcomes;
+- normalized official website URL/domain cross-verification;
 - quality gate, cross-verification, graph output, and whitepaper report flow;
 - system status, healthcheck, backup, and production readiness scripts;
 - public-release privacy rules and GPLv3 license alignment.
@@ -47,7 +55,8 @@ Latest full verification:
 
 ```text
 bash scripts/verify.sh
-backend: 306 tests OK
+backend: 411 tests OK
+regression smoke: 4 cases / 0 failed
 frontend: Vitest 2 files / 9 tests
 frontend build: passed
 ```
@@ -87,6 +96,7 @@ Current source-of-truth entry points:
 
 - [README.md](../README.md)
 - [docs/FINAL_HANDOFF.md](FINAL_HANDOFF.md)
+- [docs/STAGE_CLOSURE_2026-07-07.md](STAGE_CLOSURE_2026-07-07.md)
 - [docs/PROJECT_PACKAGE.md](PROJECT_PACKAGE.md)
 - [docs/UPDATE_LOG.md](UPDATE_LOG.md)
 - [docs/N100_DEPLOYMENT_RUNBOOK.md](N100_DEPLOYMENT_RUNBOOK.md)
@@ -95,6 +105,10 @@ Current source-of-truth entry points:
 
 Design and implementation records:
 
+- [docs/superpowers/specs/2026-07-06-gap-to-tool-followup-planner-design.md](superpowers/specs/2026-07-06-gap-to-tool-followup-planner-design.md)
+- [docs/superpowers/plans/2026-07-06-gap-to-tool-followup-planner.md](superpowers/plans/2026-07-06-gap-to-tool-followup-planner.md)
+- [docs/superpowers/specs/2026-07-06-evidence-shortfall-completion-policy-design.md](superpowers/specs/2026-07-06-evidence-shortfall-completion-policy-design.md)
+- [docs/superpowers/plans/2026-07-06-evidence-shortfall-completion-policy.md](superpowers/plans/2026-07-06-evidence-shortfall-completion-policy.md)
 - [docs/superpowers/specs/2026-07-06-background-job-queue-design.md](superpowers/specs/2026-07-06-background-job-queue-design.md)
 - [docs/superpowers/plans/2026-07-06-background-job-queue.md](superpowers/plans/2026-07-06-background-job-queue.md)
 - [docs/superpowers/specs/2026-07-06-persistent-background-queue-design.md](superpowers/specs/2026-07-06-persistent-background-queue-design.md)

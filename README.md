@@ -17,11 +17,15 @@
 - **智能情报聚合**：自动从多个工具输出中聚合联系方式（邮箱/电话）、社交媒体账号、产品信息，一站式展示。详见 [docs/INTELLIGENCE_AGGREGATION.md](docs/INTELLIGENCE_AGGREGATION.md)
 - 情报工具中枢：按目标类型、策略和运行配置规划工具路线，缺服务或凭证时自动跳过并给出原因。
 - 递进式推演：从官网、邮箱、电话、新闻、社媒主页等高价值线索继续规划下一步工具任务，并保留 `inferred_from` 来源链。
+- SQLite 后台 worker 队列：`/run-jobs` 会入队后台执行，支持重复请求保护、运行状态查询和 API 重启后的队列恢复。
+- 缺口到工具补采计划：`NEEDS_REVIEW` 或 `BLOCKED` 任务会解释缺失证据、可用工具、阻断工具、已尝试工具和人工复核动作。
+- 完成策略：区分严格完成、有限完成、继续采集、人工决策、环境阻断和失败，避免工具耗尽后无意义循环。
 - IntelCore 预测层：用 PIR、Admiralty Code、ACH、I&W 征候矩阵和 BLUF，把成熟情报转成前瞻判断和行动建议。
 - Intelligence Core v3：PIR/EEI 情报需求、事实晋级、交叉验证矩阵、ACH/I&W 白皮书结构。
 - 空白 Lead 逆向补全：针对 Alibaba/CRM 中只有姓名、国家、等级、时间的弱线索，按锚点提取、复姓消歧、公开企业/社媒/海关候选、硬资产卡位和红队剧本补全。
 - 弱线索买家任务使用 `sparse_lead` 类型，先把截图或 CRM 可见字段写成平台锚点，再做候选主体发现、身份匹配评分、ACH 场景判断和 BLUF 报告。系统不会绕过平台隐私设置，也不会把公开公司负责人自动等同为账号操作者。
 - 证据闭环：实体、证据、关系、来源工具、置信度、报告摘要统一写回 API。
+- 官网交叉验证：URL/domain 会按 hostname 归一化，等价官网写法不会产生误冲突，真实冲突会说明候选域名和来源族。
 - 图谱模板：固定 23 个位置，企业信息和决策人画像并列展示，证据以细彩线连接到结论。
 - 前端看板：任务创建、任务列表、Agent 队列、图谱、风险复核、报告展示、**供应链分析面板**、**情报汇总面板**。
 - 本地持久化：默认 SQLite，数据文件在 `data/osint.sqlite`。
@@ -155,7 +159,7 @@ HTTPX_COMMAND=<osint-bin>/httpx
 KATANA_COMMAND=<osint-bin>/katana
 ```
 
-最终域名 quick 实测任务 `<final-domain-task-id>` 已完成：`COMPLETED`，质量分 `78.1 / 100`，`subfinder`、`httpx`、`katana`、`official_site_extractor` 全链路完成，失败和阻断均为 `0`。阶段收尾记录见 [docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md](docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md)。
+最终域名 quick 实测任务 `<final-domain-task-id>` 已完成：`COMPLETED`，质量分 `78.1 / 100`，`subfinder`、`httpx`、`katana`、`official_site_extractor` 全链路完成，失败和阻断均为 `0`。实际任务收尾记录见 [docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md](docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md)，当前阶段收尾记录见 [docs/STAGE_CLOSURE_2026-07-07.md](docs/STAGE_CLOSURE_2026-07-07.md)。
 
 ### 跨境魔方海关 API
 

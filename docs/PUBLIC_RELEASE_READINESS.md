@@ -2,6 +2,16 @@
 
 This repository is prepared for public release under GNU GPL v3.
 
+Latest engineering closure: [STAGE_CLOSURE_2026-07-07.md](STAGE_CLOSURE_2026-07-07.md).
+
+Latest verified baseline:
+
+- `bash scripts/verify.sh` passed.
+- Backend unittest discovery: `411 tests OK`.
+- Regression smoke: `4` cases / `0` failed.
+- Frontend helper checks, Vitest `9` tests, and production build passed.
+- Added-line privacy scan before the latest push produced no matches.
+
 ## GPLv3 release gate
 
 The selected license is `GPL-3.0-only`. Do not publish a release if `LICENSE`,

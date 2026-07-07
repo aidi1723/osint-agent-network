@@ -4,7 +4,16 @@ Version: 0.1
 Date: 2026-05-19
 Deployment target: `/opt/osint-agent-network` on `<production-host>`
 
-> Current implementation note, 2026-05-20: this manual preserves the original architecture plan and target shape. The current running MVP uses a lightweight Python `http.server` API, SQLite store, React + TypeScript + Vite frontend, and role-based external Agent orchestration. For runbooks and current protocol details, use `README.md`, `docs/PROJECT_PACKAGE.md`, `docs/AGENT_PROTOCOL.md`, `docs/ORCHESTRATION_MODEL.md`, and `docs/GRAPH_TEMPLATE.md` as the source of truth.
+> Current implementation note, 2026-07-07: this manual preserves the original
+> architecture plan and target shape. The current running implementation uses a
+> lightweight Python `http.server` API, SQLite store, SQLite-backed recoverable
+> background worker queue, React + TypeScript + Vite frontend, local
+> role-agent orchestration, external Agent write-back, gap-to-tool follow-up
+> planning, completion policy, and source-backed cross-verification. For
+> runbooks and current protocol details, use `README.md`,
+> `docs/STAGE_CLOSURE_2026-07-07.md`, `docs/PROJECT_PACKAGE.md`,
+> `docs/AGENT_PROTOCOL.md`, `docs/ORCHESTRATION_MODEL.md`, and
+> `docs/GRAPH_TEMPLATE.md` as the source of truth.
 
 ## 1. Product Positioning
 
