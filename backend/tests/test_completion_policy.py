@@ -159,6 +159,31 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertTrue(policy["strict_completion_ready"])
         self.assertFalse(policy["manual_decision_required"])
 
+    def test_strict_completion_accepts_padded_positive_cross_verification_statuses(self):
+        detail = complete_company_detail()
+        detail["quality_assessment"] = {
+            "score": 95.0,
+            "completion_ready": True,
+            "missing_keys": [],
+            "blocking_keys": [],
+            "checks": [],
+        }
+        detail["gap_analysis"] = []
+        detail["gap_tool_plan"] = []
+        detail["cross_verification_matrix"] = [
+            {
+                **row,
+                "status": " CONFIRMED " if row["status"] == "CONFIRMED" else " SUPPORTED ",
+            }
+            for row in detail["cross_verification_matrix"]
+        ]
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "strict")
+        self.assertEqual(policy["recommended_status"], "COMPLETED")
+        self.assertTrue(policy["strict_completion_ready"])
+
     def test_source_linked_conflicted_fact_prevents_strict_completion(self):
         detail = complete_company_detail()
         detail["quality_assessment"] = {
@@ -1527,6 +1552,51 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertFalse(policy["strict_completion_ready"])
         self.assertEqual(policy["remaining_blockers"], ["decision_maker"])
 
+    def test_limited_completion_accepts_padded_supported_cross_verification_status(self):
+        detail = complete_company_detail()
+        detail["entities"] = [
+            item
+            for item in detail["entities"]
+            if item["type"] not in {"decision_maker", "email", "phone"}
+        ]
+        detail["facts"] = [
+            fact for fact in detail["facts"] if fact["predicate"] != "has_contact_email"
+        ]
+        detail["quality_assessment"] = {
+            "score": 78.0,
+            "completion_ready": False,
+            "missing_keys": ["decision_maker"],
+            "blocking_keys": ["decision_maker"],
+            "checks": [],
+        }
+        detail["gap_analysis"] = [{"gap_key": "decision_maker", "severity": "blocking"}]
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 1,
+            "blocking_gaps": 1,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 1,
+            "blocked_by_config": 0,
+            "exhausted": 1,
+            "manual_review_required": 0,
+        }
+        detail["cross_verification_matrix"] = [
+            {
+                **row,
+                "status": " SUPPORTED ",
+            }
+            if row["field_key"] == "contact_channel"
+            else row
+            for row in detail["cross_verification_matrix"]
+        ]
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "limited")
+        self.assertEqual(policy["recommended_status"], "COMPLETED")
+        self.assertTrue(policy["limited_completion_ready"])
+
     def test_rejected_or_disproven_fact_does_not_satisfy_fact_pool(self):
         for status in ("REJECTED", "DISPROVEN"):
             with self.subTest(status=status):
@@ -1601,6 +1671,26 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertFalse(policy["strict_completion_ready"])
         self.assertNotEqual(policy["completion_mode"], "strict")
         self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+
+    def test_padded_accepted_fact_promotion_stage_satisfies_fact_pool(self):
+        detail = complete_company_detail()
+        detail["facts"] = [
+            {**fact, "status": "candidate", "promotion_stage": " ACCEPTED_FACT "}
+            for fact in detail["facts"]
+        ]
+        detail["quality_assessment"] = {
+            "score": 95.0,
+            "completion_ready": True,
+            "missing_keys": [],
+            "blocking_keys": [],
+            "checks": [],
+        }
+        detail["gap_analysis"] = []
+        detail["gap_tool_plan"] = []
+
+        policy = build_completion_policy(detail)
+
+        self.assertTrue(policy["evidence_floor"]["fact_pool"])
 
     def test_rejected_or_disproven_facts_do_not_satisfy_source_backed_field_floors(self):
         for status in ("REJECTED", "DISPROVEN"):

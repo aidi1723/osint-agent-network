@@ -263,6 +263,10 @@ def _normalize_blocker_key(value: object) -> str:
     return str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
 
 
+def _normalized_status(value: object) -> str:
+    return str(value or "").strip().upper()
+
+
 def _evidence_floor(detail: dict) -> dict:
     seed_type = str(detail.get("seed_type") or "company")
     if seed_type in {"domain", "url"}:
@@ -315,7 +319,7 @@ def _has_non_acceptable_blocker(remaining_blockers: list[str], detail: dict) -> 
 
 
 def _has_conflict_status(item: dict) -> bool:
-    return str(item.get("status") or "").strip().upper() in CONFLICT_VERIFICATION_STATUSES
+    return _normalized_status(item.get("status")) in CONFLICT_VERIFICATION_STATUSES
 
 
 def _environment_blocked(gap_tool_plan: list[dict], gap_summary: dict) -> bool:
@@ -338,7 +342,7 @@ def _execution_failed_without_evidence(detail: dict) -> bool:
     jobs = detail.get("jobs") or []
     if _has_useful_evidence(detail) or not jobs:
         return False
-    return all(str(job.get("status") or "") in {"FAILED", "PARTIAL_FAILED"} for job in jobs)
+    return all(_normalized_status(job.get("status")) in {"FAILED", "PARTIAL_FAILED"} for job in jobs)
 
 
 def _entity_values(detail: dict, accepted_types: set[str]) -> set[str]:
@@ -516,7 +520,7 @@ def _has_source_backed_business_scope_verification(detail: dict, values: set[str
         and _fact_has_source_backed_evidence(item, source_backed_evidence_ids)
     }
     for item in detail.get("cross_verification_matrix") or []:
-        if str(item.get("status") or "").upper() not in SUPPORTED_VERIFICATION_STATUSES:
+        if _normalized_status(item.get("status")) not in SUPPORTED_VERIFICATION_STATUSES:
             continue
         field_key = str(item.get("field_key") or "").strip().lower()
         if field_key not in BUSINESS_SCOPE_FIELD_KEYS:
@@ -588,10 +592,10 @@ def _fact_has_source_backed_evidence(fact: dict, source_backed_evidence_ids: set
 
 
 def _fact_is_accepted(fact: dict) -> bool:
-    status = str(fact.get("status") or "").strip().upper()
+    status = _normalized_status(fact.get("status"))
     if status in NEGATIVE_FACT_STATUSES:
         return False
-    promotion_stage = str(fact.get("promotion_stage") or "").upper()
+    promotion_stage = _normalized_status(fact.get("promotion_stage"))
     return status in SUPPORTED_VERIFICATION_STATUSES or promotion_stage == "ACCEPTED_FACT"
 
 
@@ -629,7 +633,7 @@ def _has_source_backed_contact_verification(detail: dict) -> bool:
     fact_by_id = {str(item.get("id") or "").strip(): item for item in source_backed_facts}
     contact_fields = {"contact_channel", "contact_phone", "contact_email", "phone", "email", "whatsapp"}
     for item in detail.get("cross_verification_matrix") or []:
-        if str(item.get("status") or "").upper() not in SUPPORTED_VERIFICATION_STATUSES:
+        if _normalized_status(item.get("status")) not in SUPPORTED_VERIFICATION_STATUSES:
             continue
         field_key = str(item.get("field_key") or "").strip().lower()
         if field_key not in contact_fields:
@@ -772,7 +776,7 @@ def _has_source_backed_verification(detail: dict) -> bool:
         }
     }
     for item in detail.get("cross_verification_matrix") or []:
-        if str(item.get("status") or "").upper() not in SUPPORTED_VERIFICATION_STATUSES:
+        if _normalized_status(item.get("status")) not in SUPPORTED_VERIFICATION_STATUSES:
             continue
         linked_evidence_ids = {
             str(evidence_id).strip()
