@@ -308,8 +308,14 @@ def _acceptable_limitations(detail: dict, remaining_blockers: list[str], evidenc
 def _has_non_acceptable_blocker(remaining_blockers: list[str], detail: dict) -> bool:
     if set(remaining_blockers) & NON_ACCEPTABLE_BLOCKERS:
         return True
+    if any(_has_conflict_status(fact) for fact in detail.get("facts") or []):
+        return True
     matrix = detail.get("cross_verification_matrix") or []
-    return any(str(row.get("status") or "").strip().upper() in CONFLICT_VERIFICATION_STATUSES for row in matrix)
+    return any(_has_conflict_status(row) for row in matrix)
+
+
+def _has_conflict_status(item: dict) -> bool:
+    return str(item.get("status") or "").strip().upper() in CONFLICT_VERIFICATION_STATUSES
 
 
 def _environment_blocked(gap_tool_plan: list[dict], gap_summary: dict) -> bool:

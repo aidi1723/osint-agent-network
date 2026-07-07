@@ -159,6 +159,47 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertTrue(policy["strict_completion_ready"])
         self.assertFalse(policy["manual_decision_required"])
 
+    def test_source_linked_conflicted_fact_prevents_strict_completion(self):
+        detail = complete_company_detail()
+        detail["quality_assessment"] = {
+            "score": 95.0,
+            "completion_ready": True,
+            "missing_keys": [],
+            "blocking_keys": [],
+            "checks": [],
+        }
+        detail["gap_analysis"] = []
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 0,
+            "blocking_gaps": 0,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 0,
+            "blocked_by_config": 0,
+            "exhausted": 0,
+            "manual_review_required": 0,
+        }
+        detail["facts"].append(
+            {
+                "id": "fact-conflict",
+                "statement": "A second source contradicts the official website.",
+                "predicate": "official_website",
+                "subject": "Sample Auto Parts Co.",
+                "object": "https://conflicting-target.test",
+                "status": "CONFLICTED",
+                "promotion_stage": "ACCEPTED_FACT",
+                "confidence": 0.74,
+                "evidence_ids": ["ev-1"],
+            }
+        )
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["strict_completion_ready"])
+
     def test_conflicted_accepted_facts_do_not_satisfy_strict_floor(self):
         detail = complete_company_detail()
         detail["quality_assessment"] = {
@@ -789,6 +830,47 @@ class CompletionPolicyTests(unittest.TestCase):
                 "linked_evidence_ids": ["ev-1"],
             },
         ]
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "limited")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["limited_completion_ready"])
+
+    def test_source_linked_conflicted_fact_prevents_limited_completion(self):
+        detail = complete_company_detail()
+        detail["quality_assessment"] = {
+            "score": 78.0,
+            "completion_ready": False,
+            "missing_keys": ["decision_maker"],
+            "blocking_keys": ["decision_maker"],
+            "checks": [],
+        }
+        detail["gap_analysis"] = [{"gap_key": "decision_maker", "severity": "blocking"}]
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 1,
+            "blocking_gaps": 1,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 1,
+            "blocked_by_config": 0,
+            "exhausted": 1,
+            "manual_review_required": 0,
+        }
+        detail["facts"].append(
+            {
+                "id": "fact-conflict",
+                "statement": "A second source contradicts the official website.",
+                "predicate": "official_website",
+                "subject": "Sample Auto Parts Co.",
+                "object": "https://conflicting-target.test",
+                "status": " CONFLICTED ",
+                "promotion_stage": "ACCEPTED_FACT",
+                "confidence": 0.74,
+                "evidence_ids": ["ev-1"],
+            }
+        )
 
         policy = build_completion_policy(detail)
 
