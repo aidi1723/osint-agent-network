@@ -2065,6 +2065,146 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertNotEqual(policy["completion_mode"], "strict")
         self.assertNotEqual(policy["recommended_status"], "COMPLETED")
 
+    def test_username_strict_quality_ready_requires_fact_pool(self):
+        detail = {
+            "seed_type": "username",
+            "seed_value": "sample_user",
+            "entities": [
+                {"type": "username", "value": "sample_user", "confidence": 0.92},
+                {"type": "profile_url", "value": "https://profiles.example-target.test/sample_user", "confidence": 0.84},
+            ],
+            "evidence": [
+                {
+                    "entity_value": "sample_user",
+                    "evidence_kind": "profile_observation",
+                    "source_tool": "profile_lookup",
+                }
+            ],
+            "evidence_ledger": [
+                {
+                    "id": "ev-profile-1",
+                    "source_url": "https://profiles.example-target.test/sample_user",
+                    "source_type": "public_profile",
+                    "source_tool": "profile_lookup",
+                    "snippet": "Public profile uses sample_user.",
+                }
+            ],
+            "facts": [],
+            "relationships": [{"from_value": "sample_user", "to_value": "https://profiles.example-target.test/sample_user"}],
+            "hypotheses": [],
+            "report_markdown": "## BLUF\nsample_user has source-backed profile evidence.",
+            "risk_report": {"overall_risk_level": "low", "review_required": False},
+            "quality_assessment": {
+                "score": 95.0,
+                "completion_ready": True,
+                "missing_keys": [],
+                "blocking_keys": [],
+                "checks": [],
+            },
+            "gap_analysis": [],
+            "gap_tool_plan": [],
+            "gap_followup_summary": {
+                "total_gaps": 0,
+                "blocking_gaps": 0,
+                "ready": 0,
+                "queued": 0,
+                "already_attempted": 0,
+                "blocked_by_config": 0,
+                "exhausted": 0,
+                "manual_review_required": 0,
+            },
+            "cross_verification_matrix": [
+                {
+                    "field_key": "profile_identity",
+                    "status": "SUPPORTED",
+                    "candidate_value": "sample_user",
+                    "linked_evidence_ids": ["ev-profile-1"],
+                }
+            ],
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["evidence_floor"]["fact_pool"])
+
+    def test_username_strict_quality_ready_requires_bluf_report(self):
+        detail = {
+            "seed_type": "username",
+            "seed_value": "sample_user",
+            "entities": [
+                {"type": "username", "value": "sample_user", "confidence": 0.92},
+                {"type": "profile_url", "value": "https://profiles.example-target.test/sample_user", "confidence": 0.84},
+            ],
+            "evidence": [
+                {
+                    "entity_value": "sample_user",
+                    "evidence_kind": "profile_observation",
+                    "source_tool": "profile_lookup",
+                }
+            ],
+            "evidence_ledger": [
+                {
+                    "id": "ev-profile-1",
+                    "source_url": "https://profiles.example-target.test/sample_user",
+                    "source_type": "public_profile",
+                    "source_tool": "profile_lookup",
+                    "snippet": "Public profile uses sample_user.",
+                }
+            ],
+            "facts": [
+                {
+                    "id": "fact-profile-1",
+                    "statement": "sample_user has a source-backed public profile.",
+                    "predicate": "profile_identity",
+                    "subject": "sample_user",
+                    "object": "https://profiles.example-target.test/sample_user",
+                    "status": "CONFIRMED",
+                    "promotion_stage": "ACCEPTED_FACT",
+                    "evidence_ids": ["ev-profile-1"],
+                }
+            ],
+            "relationships": [{"from_value": "sample_user", "to_value": "https://profiles.example-target.test/sample_user"}],
+            "hypotheses": [],
+            "report_markdown": "Profile evidence summary without the required heading.",
+            "risk_report": {"overall_risk_level": "low", "review_required": False},
+            "quality_assessment": {
+                "score": 95.0,
+                "completion_ready": True,
+                "missing_keys": [],
+                "blocking_keys": [],
+                "checks": [],
+            },
+            "gap_analysis": [],
+            "gap_tool_plan": [],
+            "gap_followup_summary": {
+                "total_gaps": 0,
+                "blocking_gaps": 0,
+                "ready": 0,
+                "queued": 0,
+                "already_attempted": 0,
+                "blocked_by_config": 0,
+                "exhausted": 0,
+                "manual_review_required": 0,
+            },
+            "cross_verification_matrix": [
+                {
+                    "field_key": "profile_identity",
+                    "status": "SUPPORTED",
+                    "candidate_value": "sample_user",
+                    "linked_evidence_ids": ["ev-profile-1"],
+                    "linked_fact_ids": ["fact-profile-1"],
+                }
+            ],
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["evidence_floor"]["bluf_report"])
+
     def test_username_strict_quality_ready_rejects_bare_identity_floor(self):
         detail = {
             "seed_type": "username",

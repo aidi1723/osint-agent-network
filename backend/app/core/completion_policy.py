@@ -297,8 +297,10 @@ def _evidence_floor(detail: dict) -> dict:
             "identity": source_backed_identity,
             "source_record": source_backed_identity,
             "evidence_ledger": _has_evidence_ledger(detail),
+            "fact_pool": _has_linked_fact(detail),
             "risk_summary": bool(detail.get("risk_report") or detail.get("summary") or detail.get("report_markdown")),
             "cross_verification": _has_source_backed_verification(detail),
+            "bluf_report": _has_bluf_report(detail),
         }
     return {
         "identity": _has_source_backed_identity(detail),
