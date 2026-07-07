@@ -1419,6 +1419,190 @@ class WorkerTests(unittest.TestCase):
         self.assertNotIn("完整度评分：1.0 / 100", detail["report_markdown"])
         self.assertIn(f"完整度评分：{result['quality_assessment']['score']} / 100", detail["report_markdown"])
 
+    def test_worker_marks_limited_completion_completed_with_policy_summary(self):
+        store = MemoryStore()
+        investigation = store.create_investigation(
+            name="limited completion company",
+            seed_type="company",
+            seed_value="Sample Auto Parts Co.",
+            strategy_name="quick",
+        )
+        store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": "job-analysis",
+                    "investigation_id": investigation.id,
+                    "tool_name": "analysis_judgement",
+                    "target_type": "company",
+                    "target_value": "Sample Auto Parts Co.",
+                    "depth": 0,
+                    "status": "COMPLETED",
+                    "agent_role": "analysis_judgement_agent",
+                    "output_contract": "claims,graph_slots,report",
+                    "depends_on": "",
+                },
+                {
+                    "id": "job-social",
+                    "investigation_id": investigation.id,
+                    "tool_name": "social_profile_search",
+                    "target_type": "company",
+                    "target_value": "Sample Auto Parts Co.",
+                    "depth": 1,
+                    "status": "COMPLETED",
+                    "agent_role": "social_intel_agent",
+                    "output_contract": "entities,evidence,relationships",
+                    "depends_on": "completed:analysis_judgement;gap:decision_maker",
+                },
+                {
+                    "id": "job-news",
+                    "investigation_id": investigation.id,
+                    "tool_name": "company_news",
+                    "target_type": "company",
+                    "target_value": "Sample Auto Parts Co.",
+                    "depth": 1,
+                    "status": "COMPLETED",
+                    "agent_role": "tool_agent",
+                    "output_contract": "entities,evidence,relationships",
+                    "depends_on": "completed:analysis_judgement;gap:decision_maker",
+                },
+            ],
+        )
+        store.add_entity(investigation.id, "company", "Sample Auto Parts Co.", "company_osint", 0.9)
+        store.add_entity(investigation.id, "email", "sales@example-target.test", "official_site_extractor", 0.8)
+        store.add_entity(investigation.id, "phone", "+1-555-0100", "official_site_extractor", 0.76)
+        store.add_entity(investigation.id, "address", "Chicago, IL", "company_osint", 0.72)
+        store.add_entity(investigation.id, "business_scope", "auto parts distribution", "official_site_extractor", 0.8)
+        identity_evidence = store.add_evidence_record(
+            investigation.id,
+            source_url="https://example-target.test/about",
+            source_type="official_site_profile",
+            source_tool="official_site_extractor",
+            snippet="Official profile confirms Sample Auto Parts Co. identity and auto parts distribution.",
+            credibility=0.86,
+        )
+        contact_evidence = store.add_evidence_record(
+            investigation.id,
+            source_url="https://example-target.test/contact",
+            source_type="official_site_contact",
+            source_tool="official_site_extractor",
+            snippet="Official contact page lists sales@example-target.test.",
+            credibility=0.82,
+        )
+        store.add_fact(
+            investigation.id,
+            statement="Sample Auto Parts Co. is the company identity on the official website.",
+            subject="Sample Auto Parts Co.",
+            predicate="company_identity",
+            object_value="Sample Auto Parts Co.",
+            status="CONFIRMED",
+            confidence=0.86,
+            admiralty_code="A-2",
+            evidence_ids=[identity_evidence["id"]],
+        )
+        store.add_fact(
+            investigation.id,
+            statement="Sample Auto Parts Co. official website is https://example-target.test.",
+            subject="Sample Auto Parts Co.",
+            predicate="official_website",
+            object_value="https://example-target.test",
+            status="CONFIRMED",
+            confidence=0.84,
+            admiralty_code="A-2",
+            evidence_ids=[identity_evidence["id"]],
+        )
+        store.add_fact(
+            investigation.id,
+            statement="Sample Auto Parts Co. business scope is auto parts distribution.",
+            subject="Sample Auto Parts Co.",
+            predicate="business_scope",
+            object_value="auto parts distribution",
+            status="CONFIRMED",
+            confidence=0.82,
+            admiralty_code="A-2",
+            evidence_ids=[identity_evidence["id"]],
+        )
+        store.add_fact(
+            investigation.id,
+            statement="Sample Auto Parts Co. lists a source-backed contact channel.",
+            subject="Sample Auto Parts Co.",
+            predicate="has_contact_email",
+            object_value="sales@example-target.test",
+            status="CONFIRMED",
+            confidence=0.82,
+            admiralty_code="A-2",
+            evidence_ids=[contact_evidence["id"]],
+        )
+        store.add_relationship(investigation.id, "Sample Auto Parts Co.", "sales@example-target.test", "has_contact", 0.82)
+        store.add_hypothesis(investigation.id, "h1", "Sample Auto Parts Co. is the target company.")
+        store.score_hypotheses(
+            investigation.id,
+            [
+                {
+                    "id": identity_evidence["id"],
+                    "summary": "Official site evidence supports target identity and business scope.",
+                    "kinds": ["official_site_profile"],
+                    "supports": ["h1"],
+                    "contradicts": [],
+                    "source_reliability": "A",
+                    "credibility": 0.86,
+                    "keywords": ["sample", "auto parts"],
+                }
+            ],
+        )
+        store.complete_task(
+            investigation.id,
+            "local-analysis-agent",
+            "NEEDS_REVIEW",
+            "Initial BLUF",
+            "## BLUF\nSample Auto Parts Co. has source-backed contact and scope evidence.",
+            0.86,
+        )
+
+        limited_policy = {
+            "recommended_status": "COMPLETED",
+            "completion_mode": "limited",
+            "strict_completion_ready": False,
+            "limited_completion_ready": True,
+            "auto_exhausted": True,
+            "manual_decision_required": False,
+            "environment_blocked": False,
+            "reason": "Core evidence floor is satisfied; only acceptable limitations remain: decision_maker.",
+            "remaining_blockers": ["decision_maker"],
+            "acceptable_limitations": ["decision_maker"],
+            "operator_next_actions": ["Manually verify decision-maker from an official team page, public profile, or trusted directory."],
+            "evidence_floor": {
+                "identity": True,
+                "official_website": True,
+                "business_scope": True,
+                "contact_channel": True,
+                "evidence_ledger": True,
+                "fact_pool": True,
+                "cross_verification": True,
+                "bluf_report": True,
+            },
+        }
+
+        with (
+            patch("app.services.worker.build_completion_policy", return_value=limited_policy),
+            patch("app.services.store.build_completion_policy", return_value=limited_policy),
+            TemporaryDirectory() as tmpdir,
+        ):
+            summary = run_investigation_jobs(
+                store,
+                investigation.id,
+                max_jobs=0,
+                artifact_root=Path(tmpdir),
+                adapter_factory=lambda name: MinimalCompleteAdapter(name),
+            )
+            detail = store.get_investigation(investigation.id)
+
+        self.assertEqual(summary["completion_mode"], "limited")
+        self.assertEqual(summary["completion_policy"]["recommended_status"], "COMPLETED")
+        self.assertFalse(summary["quality_assessment"]["completion_ready"])
+        self.assertEqual(detail["status"], "COMPLETED")
+        self.assertEqual(detail["completion_policy"]["completion_mode"], "limited")
+
     def test_worker_refreshes_stale_report_and_records_gap_followups(self):
         store = MemoryStore()
         investigation = store.create_investigation(

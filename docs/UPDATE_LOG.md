@@ -13,6 +13,8 @@ Scope:
   and missing evidence ledger / fact pool blockers.
 - Started Task 3 store integration and exposed completion policy on both
   in-memory and SQLite investigation detail views.
+- Started Task 4 worker integration and exposed completion policy in worker
+  summaries while applying policy-backed final status decisions.
 
 Changes:
 
@@ -26,6 +28,9 @@ Changes:
 - `backend/app/services/store.py` now computes `completion_policy` in store
   detail payloads and uses policy-backed status selection when completing
   tasks.
+- `backend/app/services/worker.py` now computes final `completion_policy`,
+  returns `completion_mode` in summaries, and lets limited completion persist
+  as `COMPLETED` when the policy recommends it.
 
 Verification:
 
@@ -37,6 +42,9 @@ Verification:
 - Focused Task 3 store detail tests: 2 tests passed.
 - Completion policy suite after Task 3 store integration: 69 tests passed.
 - Full backend unittest discovery after Task 3: 407 tests passed.
+- Focused Task 4 worker limited-completion regression: 1 test passed.
+- Worker suite after Task 4: 27 tests passed.
+- Full backend unittest discovery after Task 4: 408 tests passed.
 
 ## 2026-07-06 - Gap-to-Tool Follow-up Planner
 

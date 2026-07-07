@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from shutil import which
 
+from app.core.completion_policy import build_completion_policy
 from app.core.gap_followups import (
     build_gap_analysis,
     build_gap_followup_summary,
@@ -82,12 +83,16 @@ def run_investigation_jobs(
         "role_completed": 0,
         "busy": False,
         "risk_report": {},
+        "completion_policy": {},
+        "completion_mode": "",
         "gap_followup_summary": _empty_gap_followup_summary(),
     }
 
     if any(job.get("status") == "RUNNING" for job in detail.get("jobs", [])):
         summary["busy"] = True
         summary["quality_assessment"] = build_quality_assessment(detail)
+        summary["completion_policy"] = build_completion_policy({**detail, "quality_assessment": summary["quality_assessment"]})
+        summary["completion_mode"] = summary["completion_policy"]["completion_mode"]
         return summary
 
     if (
@@ -97,6 +102,8 @@ def run_investigation_jobs(
     ):
         summary["blocked"] = 1
         summary["quality_assessment"] = build_quality_assessment(detail)
+        summary["completion_policy"] = build_completion_policy({**detail, "quality_assessment": summary["quality_assessment"]})
+        summary["completion_mode"] = summary["completion_policy"]["completion_mode"]
         return summary
 
     if _has_completed_analysis_judgement(detail):
@@ -145,8 +152,10 @@ def run_investigation_jobs(
     store.save_risk_report(investigation_id, risk_report)
     detail = store.get_investigation(investigation_id)
     quality_assessment = build_quality_assessment(detail)
+    policy_detail = {**detail, "quality_assessment": quality_assessment}
+    completion_policy = build_completion_policy(policy_detail)
     requested_status = _final_status(detail, risk_report)
-    final_status = completion_status_for_detail(detail, requested_status)
+    final_status = _final_status_from_completion_policy(requested_status, risk_report, completion_policy)
     summary_text = _summary_text(risk_report, summary, quality_assessment)
     report_markdown = str(detail.get("report_markdown") or "")
     should_refresh_report = (
@@ -155,7 +164,7 @@ def run_investigation_jobs(
         or (final_status == "NEEDS_REVIEW" and not report_markdown.strip())
     )
     if should_refresh_report:
-        report_markdown = render_structured_report({**detail, "summary": summary_text}, quality_assessment)
+        report_markdown = render_structured_report({**detail, "summary": summary_text, "completion_policy": completion_policy}, quality_assessment)
     if should_refresh_report and hasattr(store, "complete_task"):
         store.complete_task(
             investigation_id=investigation_id,
@@ -173,6 +182,8 @@ def run_investigation_jobs(
             confidence=_confidence_from_risk(risk_report),
         )
     summary["risk_report"] = risk_report
+    summary["completion_policy"] = completion_policy
+    summary["completion_mode"] = completion_policy["completion_mode"]
     summary["quality_assessment"] = quality_assessment
     return summary
 
@@ -817,6 +828,19 @@ def _final_status(detail: dict, risk_report: dict) -> str:
     if blocked:
         return "BLOCKED"
     return "OPEN"
+
+
+def _final_status_from_completion_policy(requested_status: str, risk_report: dict, completion_policy: dict) -> str:
+    if risk_report.get("review_required"):
+        return "NEEDS_REVIEW"
+    if requested_status in {"FAILED", "PARTIAL_FAILED"}:
+        return requested_status
+    if requested_status == "BLOCKED" and completion_policy.get("completion_mode") != "blocked_by_environment":
+        return "BLOCKED"
+    recommended = str(completion_policy.get("recommended_status") or "")
+    if recommended in {"COMPLETED", "NEEDS_REVIEW", "BLOCKED", "FAILED"}:
+        return recommended
+    return completion_status_for_detail({}, requested_status)
 
 
 def _summary_text(risk_report: dict, summary: dict, quality_assessment: dict | None = None) -> str:
