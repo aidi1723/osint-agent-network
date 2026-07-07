@@ -5,6 +5,9 @@
 Scope:
 
 - Continued the evidence-shortfall completion-policy implementation plan.
+- Added deterministic `completion_policy` rules for strict, limited,
+  continue-collection, human-decision, environment-blocked, and failed
+  outcomes.
 - Completed Task 1 core policy contract review after fixing terminal blocker
   explanations for unresolved contradictions and exhausted human-decision
   states.
@@ -20,6 +23,9 @@ Scope:
 
 Changes:
 
+- Kept the strict quality gate as the strict completion authority; limited
+  completion is represented by `completion_policy.completion_mode = "limited"`
+  and persisted status `COMPLETED` only when the policy recommends it.
 - `backend/app/core/completion_policy.py` now reports unresolved
   contradictions in `remaining_blockers` and `operator_next_actions`, treats
   ready-for-human-decision states with no ready tools as auto-exhausted, and
@@ -53,6 +59,13 @@ Verification:
 - Focused Task 5 report rendering regression: 1 test passed.
 - Quality gate suite after Task 5: 15 tests passed.
 - Full backend unittest discovery after Task 5: 409 tests passed.
+- Final targeted Task 6 suites: completion policy 69 tests passed, worker 27
+  tests passed, quality gate 15 tests passed.
+- Final `bash scripts/verify.sh`: backend 409 tests passed, agent governance
+  manifest valid, regression smoke 4 cases / 0 failed, frontend checks passed,
+  Vitest 9 tests passed, and production build passed.
+- Final `git diff --check`: passed.
+- Final added-diff privacy scan: no matches.
 
 ## 2026-07-06 - Gap-to-Tool Follow-up Planner
 
