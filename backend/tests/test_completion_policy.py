@@ -159,6 +159,66 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertTrue(policy["strict_completion_ready"])
         self.assertFalse(policy["manual_decision_required"])
 
+    def test_conflicted_accepted_facts_do_not_satisfy_strict_floor(self):
+        detail = complete_company_detail()
+        detail["quality_assessment"] = {
+            "score": 95.0,
+            "completion_ready": True,
+            "missing_keys": [],
+            "blocking_keys": [],
+            "checks": [],
+        }
+        detail["gap_analysis"] = []
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 0,
+            "blocking_gaps": 0,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 0,
+            "blocked_by_config": 0,
+            "exhausted": 0,
+            "manual_review_required": 0,
+        }
+        detail["evidence_ledger"] = [
+            {
+                "id": item["id"],
+                "source_url": f"https://evidence.example.test/{item['id']}",
+                "source_type": "source_record",
+                "source_tool": item.get("source_tool"),
+                "snippet": "Source record.",
+            }
+            for item in detail["evidence_ledger"]
+        ]
+        detail["facts"] = [
+            {
+                **fact,
+                "status": "CONFLICTED",
+                "promotion_stage": "ACCEPTED_FACT",
+            }
+            for fact in detail["facts"]
+        ]
+        detail["cross_verification_matrix"] = [
+            {
+                key: value
+                for key, value in row.items()
+                if key != "linked_evidence_ids"
+            }
+            for row in detail["cross_verification_matrix"]
+        ]
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["strict_completion_ready"])
+        self.assertFalse(policy["evidence_floor"]["fact_pool"])
+        self.assertFalse(policy["evidence_floor"]["identity"])
+        self.assertFalse(policy["evidence_floor"]["official_website"])
+        self.assertFalse(policy["evidence_floor"]["business_scope"])
+        self.assertFalse(policy["evidence_floor"]["contact_channel"])
+        self.assertFalse(policy["evidence_floor"]["cross_verification"])
+
     def test_strict_completion_rejects_explicit_blocking_gap(self):
         detail = complete_company_detail()
         detail["quality_assessment"] = {

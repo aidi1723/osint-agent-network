@@ -6,7 +6,7 @@ from app.core.gap_followups import build_gap_analysis, build_gap_followup_summar
 
 
 SUPPORTED_VERIFICATION_STATUSES = {"CONFIRMED", "LIKELY", "SUPPORTED"}
-NEGATIVE_FACT_STATUSES = {"REJECTED", "DISPROVEN", "CONTRADICTED", "FALSE", "INVALID"}
+NEGATIVE_FACT_STATUSES = {"REJECTED", "DISPROVEN", "CONTRADICTED", "CONFLICTED", "FALSE", "INVALID"}
 BLOCKED_TOOL_STATUSES = {"missing_config", "missing_executable", "credential_blocked", "disabled"}
 PROFILE_IDENTITY_TYPES = {"email", "username", "identity", "profile_url", "platform_account"}
 CONTACT_CHANNEL_TYPES = {"email", "phone", "whatsapp"}
