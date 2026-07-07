@@ -191,6 +191,39 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertIn("bluf_report", policy["remaining_blockers"])
         self.assertTrue(policy["operator_next_actions"])
 
+    def test_strict_completion_rejects_negated_bluf_text_without_heading(self):
+        detail = complete_company_detail()
+        detail["quality_assessment"] = {
+            "score": 95.0,
+            "completion_ready": True,
+            "missing_keys": [],
+            "blocking_keys": [],
+            "checks": [],
+        }
+        detail["gap_analysis"] = []
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 0,
+            "blocking_gaps": 0,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 0,
+            "blocked_by_config": 0,
+            "exhausted": 0,
+            "manual_review_required": 0,
+        }
+        detail["report_markdown"] = "No BLUF available yet. Evidence is still being collected."
+
+        policy = build_completion_policy(detail)
+
+        self.assertNotEqual(policy["completion_mode"], "strict")
+        self.assertNotEqual(policy["recommended_status"], "COMPLETED")
+        self.assertFalse(policy["strict_completion_ready"])
+        self.assertFalse(policy["evidence_floor"]["bluf_report"])
+        self.assertIn("bluf_report", policy["remaining_blockers"])
+        self.assertIn("bluf_report", policy["remaining_blockers"])
+        self.assertTrue(policy["operator_next_actions"])
+
     def test_strict_completion_rejects_non_bluf_report_text(self):
         detail = complete_company_detail()
         detail["quality_assessment"] = {
@@ -455,6 +488,94 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertEqual(policy["recommended_status"], "NEEDS_REVIEW")
         self.assertFalse(policy["auto_exhausted"])
         self.assertIn("official_website", policy["remaining_blockers"])
+
+    def test_ready_gap_tool_status_is_normalized_without_explicit_summary(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Example Manufacturing LLC",
+            "entities": [{"type": "company", "value": "Example Manufacturing LLC", "confidence": 0.72}],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "relationships": [],
+            "hypotheses": [],
+            "report_markdown": "",
+            "quality_assessment": {
+                "score": 20.0,
+                "completion_ready": False,
+                "missing_keys": ["official_website"],
+                "blocking_keys": ["official_website"],
+                "checks": [],
+            },
+            "gap_analysis": [{"gap_key": "official_website", "severity": "blocking"}],
+            "gap_tool_plan": [
+                {"gap_key": "official_website", "tool_name": "official_site_search", "status": " READY "}
+            ],
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "continue_collection")
+        self.assertEqual(policy["recommended_status"], "NEEDS_REVIEW")
+        self.assertFalse(policy["auto_exhausted"])
+
+    def test_queued_gap_tool_status_is_normalized_without_explicit_summary(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Example Manufacturing LLC",
+            "entities": [{"type": "company", "value": "Example Manufacturing LLC", "confidence": 0.72}],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "relationships": [],
+            "hypotheses": [],
+            "report_markdown": "",
+            "quality_assessment": {
+                "score": 20.0,
+                "completion_ready": False,
+                "missing_keys": ["official_website"],
+                "blocking_keys": ["official_website"],
+                "checks": [],
+            },
+            "gap_analysis": [{"gap_key": "official_website", "severity": "blocking"}],
+            "gap_tool_plan": [
+                {"gap_key": "official_website", "tool_name": "official_site_search", "status": "Queued"}
+            ],
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "continue_collection")
+        self.assertEqual(policy["recommended_status"], "NEEDS_REVIEW")
+        self.assertFalse(policy["auto_exhausted"])
+
+    def test_malformed_gap_followup_summary_counts_do_not_crash(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Example Manufacturing LLC",
+            "entities": [{"type": "company", "value": "Example Manufacturing LLC", "confidence": 0.72}],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "relationships": [],
+            "hypotheses": [],
+            "report_markdown": "",
+            "quality_assessment": {
+                "score": 20.0,
+                "completion_ready": False,
+                "missing_keys": ["official_website"],
+                "blocking_keys": ["official_website"],
+                "checks": [],
+            },
+            "gap_analysis": [{"gap_key": "official_website", "severity": "blocking"}],
+            "gap_tool_plan": [],
+            "gap_followup_summary": {"ready": "n/a", "queued": None, "blocked_by_config": "bad"},
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(set(policy), REQUIRED_POLICY_KEYS)
+        self.assertEqual(policy["recommended_status"], "NEEDS_REVIEW")
 
     def test_explicit_empty_gap_analysis_without_tool_plan_does_not_rebuild_ready_tools(self):
         detail = complete_company_detail()

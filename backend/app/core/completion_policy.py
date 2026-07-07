@@ -14,6 +14,7 @@ CONTACT_EMAIL_RE = re.compile(r"\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b", re.I
 CONTACT_PHONE_RE = re.compile(r"(?:\+?\d[\d\s().-]{5,}\d)")
 URL_RE = re.compile(r"https?://[^\s)>\]]+", re.IGNORECASE)
 DOMAIN_RE = re.compile(r"\b(?![\w.%+-]+@)(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.IGNORECASE)
+BLUF_HEADING_RE = re.compile(r"(?im)^#{1,6}\s+BLUF\b")
 CONFLICT_VERIFICATION_STATUSES = {"CONFLICT", "CONFLICTED", "CONTRADICTED", "HIGH_RISK_CONFLICT"}
 BUSINESS_SCOPE_FIELD_KEYS = {"business_scope", "product_scope", "purchase_category"}
 LIST_DETAIL_KEYS = {
@@ -64,18 +65,16 @@ def build_completion_policy(detail: dict) -> dict:
         if "gap_analysis" in detail and detail["gap_analysis"] is not None
         else build_gap_analysis(planner_detail)
     )
-    explicit_gap_tool_plan = "gap_tool_plan" in detail and detail["gap_tool_plan"] is not None
-    explicit_gap_summary = "gap_followup_summary" in detail and detail["gap_followup_summary"] is not None
     if "gap_tool_plan" in detail and detail["gap_tool_plan"] is not None:
-        gap_tool_plan = list(detail["gap_tool_plan"])
+        gap_tool_plan = _normalized_gap_tool_plan(detail["gap_tool_plan"])
     elif "gap_analysis" in detail:
         gap_tool_plan = (
-            build_gap_tool_plan(_planner_detail_for_explicit_gaps(planner_detail, gap_analysis))
+            _normalized_gap_tool_plan(build_gap_tool_plan(_planner_detail_for_explicit_gaps(planner_detail, gap_analysis)))
             if gap_analysis
             else []
         )
     else:
-        gap_tool_plan = build_gap_tool_plan({**planner_detail, "gap_analysis": gap_analysis})
+        gap_tool_plan = _normalized_gap_tool_plan(build_gap_tool_plan({**planner_detail, "gap_analysis": gap_analysis}))
     gap_summary = (
         dict(detail["gap_followup_summary"])
         if "gap_followup_summary" in detail and detail["gap_followup_summary"] is not None
@@ -92,14 +91,13 @@ def build_completion_policy(detail: dict) -> dict:
         and not remaining_blockers
         and not _has_non_acceptable_blocker(remaining_blockers, detail)
     )
-    ready_tools = int(gap_summary.get("ready") or 0) + int(gap_summary.get("queued") or 0)
+    ready_tools = _summary_count(gap_summary, "ready") + _summary_count(gap_summary, "queued")
     environment_blocked = _environment_blocked(
         gap_tool_plan,
         gap_summary,
         detail,
-        explicit_gap_health=explicit_gap_tool_plan or explicit_gap_summary,
     )
-    if environment_blocked and not (explicit_gap_tool_plan or explicit_gap_summary):
+    if environment_blocked:
         ready_tools = 0
     auto_exhausted = ready_tools == 0 and bool(gap_analysis or remaining_blockers)
     useful_evidence = _has_useful_evidence(detail)
@@ -228,6 +226,22 @@ def _clean_detail(detail: dict) -> dict:
 
 def _dict_items(value: object) -> list[dict]:
     return [item for item in (value or []) if isinstance(item, dict)]
+
+
+def _normalized_gap_tool_plan(value: object) -> list[dict]:
+    plan = []
+    for item in _dict_items(value):
+        normalized = dict(item)
+        normalized["status"] = str(normalized.get("status") or "").strip().lower()
+        plan.append(normalized)
+    return plan
+
+
+def _summary_count(summary: dict, key: str) -> int:
+    try:
+        return int(summary.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _policy(
@@ -398,12 +412,10 @@ def _environment_blocked(
     gap_tool_plan: list[dict],
     gap_summary: dict,
     detail: dict,
-    *,
-    explicit_gap_health: bool,
 ) -> bool:
-    if int(gap_summary.get("ready") or 0) + int(gap_summary.get("queued") or 0) > 0:
+    if _summary_count(gap_summary, "ready") + _summary_count(gap_summary, "queued") > 0:
         return False
-    if int(gap_summary.get("blocked_by_config") or 0) > 0:
+    if _summary_count(gap_summary, "blocked_by_config") > 0:
         return True
     return any(str(item.get("status") or "").strip().lower() in BLOCKED_TOOL_STATUSES for item in gap_tool_plan) or _jobs_environment_blocked(detail)
 
@@ -933,7 +945,7 @@ def _has_evidence_ledger(detail: dict) -> bool:
 
 def _has_bluf_report(detail: dict) -> bool:
     report_markdown = str(detail.get("report_markdown") or "")
-    return "bluf" in report_markdown.lower() and len(report_markdown.strip()) >= 20
+    return bool(BLUF_HEADING_RE.search(report_markdown)) and len(report_markdown.strip()) >= 20
 
 
 def _has_linked_fact(detail: dict) -> bool:
