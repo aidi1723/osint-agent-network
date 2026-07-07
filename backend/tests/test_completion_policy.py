@@ -519,6 +519,46 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertEqual(policy["recommended_status"], "NEEDS_REVIEW")
         self.assertFalse(policy["auto_exhausted"])
 
+    def test_ready_gap_tool_plan_takes_precedence_over_stale_zero_summary(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Example Manufacturing LLC",
+            "entities": [{"type": "company", "value": "Example Manufacturing LLC", "confidence": 0.72}],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "relationships": [],
+            "hypotheses": [],
+            "report_markdown": "",
+            "quality_assessment": {
+                "score": 20.0,
+                "completion_ready": False,
+                "missing_keys": ["official_website"],
+                "blocking_keys": ["official_website"],
+                "checks": [],
+            },
+            "gap_analysis": [{"gap_key": "official_website", "severity": "blocking"}],
+            "gap_tool_plan": [
+                {"gap_key": "official_website", "tool_name": "official_site_search", "status": " READY "}
+            ],
+            "gap_followup_summary": {
+                "total_gaps": 1,
+                "blocking_gaps": 1,
+                "ready": 0,
+                "queued": 0,
+                "already_attempted": 0,
+                "blocked_by_config": 0,
+                "exhausted": 1,
+                "manual_review_required": 0,
+            },
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "continue_collection")
+        self.assertEqual(policy["recommended_status"], "NEEDS_REVIEW")
+        self.assertFalse(policy["auto_exhausted"])
+
     def test_queued_gap_tool_status_is_normalized_without_explicit_summary(self):
         detail = {
             "seed_type": "company",

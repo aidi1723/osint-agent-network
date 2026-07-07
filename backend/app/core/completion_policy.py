@@ -91,7 +91,7 @@ def build_completion_policy(detail: dict) -> dict:
         and not remaining_blockers
         and not _has_non_acceptable_blocker(remaining_blockers, detail)
     )
-    ready_tools = _summary_count(gap_summary, "ready") + _summary_count(gap_summary, "queued")
+    ready_tools = _ready_tool_count(gap_tool_plan, gap_summary)
     environment_blocked = _environment_blocked(
         gap_tool_plan,
         gap_summary,
@@ -242,6 +242,16 @@ def _summary_count(summary: dict, key: str) -> int:
         return int(summary.get(key) or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _ready_tool_count(gap_tool_plan: list[dict], gap_summary: dict) -> int:
+    summary_ready = _summary_count(gap_summary, "ready") + _summary_count(gap_summary, "queued")
+    plan_ready = sum(
+        1
+        for item in gap_tool_plan
+        if str(item.get("status") or "").strip().lower() in {"ready", "queued"}
+    )
+    return max(summary_ready, plan_ready)
 
 
 def _policy(
