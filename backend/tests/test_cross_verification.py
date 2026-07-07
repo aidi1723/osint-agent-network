@@ -54,6 +54,68 @@ class CrossVerificationTests(unittest.TestCase):
         self.assertEqual(email["status"], "CONFLICTED")
         self.assertIn("directory", email["contradicting_sources"])
 
+    def test_equivalent_official_website_url_and_domain_do_not_conflict(self):
+        detail = {
+            "entities": [
+                {"id": "e-domain", "type": "domain", "value": "example-target.test", "source_tool": "official_site_search", "confidence": 0.74},
+                {"id": "e-url", "type": "url", "value": "https://www.example-target.test/", "source_tool": "httpx", "confidence": 0.72},
+            ],
+            "facts": [
+                {
+                    "id": "fact-site",
+                    "subject": "Sample Auto Parts Co.",
+                    "predicate": "official_website",
+                    "object": "https://example-target.test",
+                    "status": "CONFIRMED",
+                    "promotion_stage": "ACCEPTED_FACT",
+                    "confidence": 0.84,
+                    "evidence_ids": ["ev-site"],
+                }
+            ],
+            "evidence_ledger": [
+                {
+                    "id": "ev-site",
+                    "source_type": "official_site_profile",
+                    "source_tool": "official_site_extractor",
+                    "source_url": "https://example-target.test/about",
+                    "admiralty_code": "A-2",
+                    "snippet": "Official profile confirms https://example-target.test as the website.",
+                }
+            ],
+            "evidence": [],
+            "relationships": [],
+        }
+
+        rows = build_cross_verification_matrix(detail)
+        website = next(row for row in rows if row["field_key"] == "official_website")
+
+        self.assertNotEqual(website["status"], "CONFLICTED")
+        self.assertEqual(website["contradicting_sources"], [])
+        self.assertIn("official", website["supporting_sources"])
+        self.assertIn("tool", website["supporting_sources"])
+        self.assertIn("ev-site", website["linked_evidence_ids"])
+        self.assertIn("fact-site", website["linked_fact_ids"])
+
+    def test_distinct_official_website_domains_explain_conflict_sources(self):
+        detail = {
+            "entities": [
+                {"id": "e-official", "type": "url", "value": "https://example-target.test", "source_tool": "official_site_search", "confidence": 0.84},
+                {"id": "e-directory", "type": "url", "value": "https://conflicting-target.test", "source_tool": "directory_site", "confidence": 0.62},
+            ],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "relationships": [],
+        }
+
+        rows = build_cross_verification_matrix(detail)
+        website = next(row for row in rows if row["field_key"] == "official_website")
+
+        self.assertEqual(website["status"], "CONFLICTED")
+        self.assertIn("directory", website["contradicting_sources"])
+        self.assertIn("conflicting-target.test", website["rationale"])
+        self.assertIn("directory", website["rationale"])
+
     def test_privacy_state_does_not_satisfy_email_or_phone_fields(self):
         detail = {
             "entities": [

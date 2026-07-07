@@ -1,5 +1,50 @@
 # Update Log
 
+## 2026-07-07 - Cross Verification URL And Domain Normalization
+
+Scope:
+
+- Optimized `cross_verification` handling for official website URL/domain
+  variants and candidate-source explanations.
+- Targeted the false split where `example-target.test`,
+  `https://example-target.test`, and `https://www.example-target.test/` could
+  be treated as separate support/linkage keys.
+
+Changes:
+
+- Official website comparison now canonicalizes values to the hostname for
+  matrix support lookup, evidence linkage, fact linkage, and conflict checks.
+- Cross-verification rows now aggregate supporting source families and linked
+  evidence/fact ids across equivalent normalized values while preserving the
+  selected raw `candidate_value` for display.
+- Fact `evidence_ids` now contribute to `linked_evidence_ids`, so accepted
+  facts keep their ledger evidence visible in the matrix.
+- Conflict rationales now include the conflicting candidate value and source
+  family, for example `conflicting-target.test (directory)`.
+- `httpx` output is classified as the `tool` source family.
+
+Verification:
+
+- New regression tests first failed on the old behavior:
+  - equivalent official website URL/domain variants did not aggregate tool
+    support;
+  - conflicting official website candidates did not name the conflicting
+    domain in the rationale.
+- Focused new regression tests now pass: 2 tests passed.
+- Full `test_cross_verification.py`: 7 tests passed.
+- Related completion-policy suite: 69 tests passed.
+- Related worker suite: 27 tests passed.
+- Full backend unittest discovery: 411 tests passed.
+- Final `bash scripts/verify.sh`: backend 411 tests passed, agent
+  governance manifest valid, regression smoke 4 cases / 0 failed, frontend
+  checks passed, Vitest 9 tests passed, and production build passed.
+
+Result:
+
+- The official website row is less likely to create false conflicts from URL
+  formatting differences, and when a real domain conflict remains, the operator
+  can see which candidate domain and source family caused it.
+
 ## 2026-07-07 - Completion Policy Contract And Limited Evidence Floor
 
 Scope:

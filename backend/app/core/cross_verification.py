@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections import Counter, defaultdict
 from typing import Any
+from urllib.parse import urlsplit
 
 
 FIELD_DEFINITIONS = [
@@ -24,7 +25,7 @@ SOURCE_HINTS = {
     "news": ("news", "gnews", "rss", "newspaper"),
     "directory": ("directory", "dnb", "bbb", "empresite", "einforma", "map"),
     "social": ("social", "linkedin", "facebook", "twitter", "instagram", "profile"),
-    "tool": ("tool", "sherlock", "maigret", "theharvester", "amass", "spiderfoot", "ghunt", "phoneinfoga", "recon"),
+    "tool": ("tool", "sherlock", "maigret", "theharvester", "amass", "spiderfoot", "ghunt", "phoneinfoga", "recon", "httpx"),
     "operator": ("operator", "manual", "crm", "alibaba", "screenshot"),
 }
 
@@ -58,7 +59,7 @@ def build_cross_verification_matrix(detail: dict[str, Any]) -> list[dict[str, An
     facts = detail.get("facts") or []
     ledger_by_id = {item.get("id"): item for item in ledger}
     source_families_by_value = _source_families_by_value(entities, evidence, ledger, facts)
-    linked_evidence_by_value = _linked_evidence_by_value(evidence, ledger)
+    linked_evidence_by_value = _linked_evidence_by_value(evidence, ledger, facts)
     fact_ids_by_value = _fact_ids_by_value(facts)
 
     rows = []
@@ -78,11 +79,12 @@ def build_cross_verification_matrix(detail: dict[str, Any]) -> list[dict[str, An
             if item.get("object") or item.get("object_value")
         )
         candidate_value = _best_value(values, candidates, facts_for_field)
-        support = sorted(source_families_by_value.get(candidate_value, set()))
-        linked_evidence_ids = sorted(linked_evidence_by_value.get(candidate_value, set()))
-        linked_fact_ids = sorted(fact_ids_by_value.get(candidate_value, set()))
+        support = sorted(_lookup_by_comparison_value(source_families_by_value, candidate_value, field_key))
+        linked_evidence_ids = sorted(_lookup_by_comparison_value(linked_evidence_by_value, candidate_value, field_key))
+        linked_fact_ids = sorted(_lookup_by_comparison_value(fact_ids_by_value, candidate_value, field_key))
         best_admiralty = _best_admiralty(linked_evidence_ids, ledger_by_id)
         contradiction_sources = _contradiction_sources(values, candidate_value, candidates, field_key)
+        contradiction_details = _contradiction_details(candidate_value, candidates, field_key)
         status = _row_status(candidate_value, support, contradiction_sources, facts_for_field, best_admiralty)
         confidence = _row_confidence(status, support, best_admiralty)
         rows.append(
@@ -99,7 +101,7 @@ def build_cross_verification_matrix(detail: dict[str, Any]) -> list[dict[str, An
                 "confidence": confidence,
                 "linked_evidence_ids": linked_evidence_ids,
                 "linked_fact_ids": linked_fact_ids,
-                "rationale": _rationale(label, candidate_value, support, contradiction_sources, status),
+                "rationale": _rationale(label, candidate_value, support, contradiction_sources, status, contradiction_details),
             }
         )
     return rows
@@ -137,13 +139,20 @@ def _source_families_by_value(entities: list[dict], evidence: list[dict], ledger
     return result
 
 
-def _linked_evidence_by_value(evidence: list[dict], ledger: list[dict]) -> dict[str, set[str]]:
+def _linked_evidence_by_value(evidence: list[dict], ledger: list[dict], facts: list[dict]) -> dict[str, set[str]]:
     result: dict[str, set[str]] = defaultdict(set)
     known_values = set()
     for item in evidence:
         value = str(item.get("entity_value") or "")
         if value and item.get("id"):
             result[value].add(str(item["id"]))
+            known_values.add(value)
+    for fact in facts:
+        value = str(fact.get("object") or fact.get("object_value") or "")
+        if not value:
+            continue
+        for evidence_id in fact.get("evidence_ids") or []:
+            result[value].add(str(evidence_id))
             known_values.add(value)
     for item in ledger:
         snippet = str(item.get("snippet") or "")
@@ -163,6 +172,17 @@ def _fact_ids_by_value(facts: list[dict]) -> dict[str, set[str]]:
         value = str(fact.get("object") or fact.get("object_value") or "")
         if value and fact.get("id"):
             result[value].add(str(fact["id"]))
+    return result
+
+
+def _lookup_by_comparison_value(mapping: dict[str, set[str]], value: str, field_key: str) -> set[str]:
+    if not value:
+        return set()
+    norm_value = _normalize_for_comparison(value, field_key)
+    result: set[str] = set()
+    for candidate, items in mapping.items():
+        if _normalize_for_comparison(candidate, field_key) == norm_value:
+            result.update(items)
     return result
 
 
@@ -214,19 +234,24 @@ def _normalize_for_comparison(value: str, field_key: str) -> str:
     if not value:
         return ""
     if field_key == "official_website":
-        v = value.lower().strip().rstrip("/")
-        if v.startswith("http://"):
-            v = v[7:]
-        elif v.startswith("https://"):
-            v = v[8:]
-        if v.startswith("www."):
-            v = v[4:]
-        return v
+        return _normalize_official_website(value)
     if field_key == "contact_phone":
         return re.sub(r'[\s\-\(\)\.]+', '', value).strip()
     if field_key == "contact_email":
         return value.strip().lower()
     return value.strip().lower()
+
+
+def _normalize_official_website(value: str) -> str:
+    v = value.lower().strip()
+    if not v:
+        return ""
+    parsed = urlsplit(v if "://" in v else f"//{v}")
+    host = parsed.hostname or v.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    host = host.rstrip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    return host
 
 
 def _contradiction_sources(values: list[str], candidate_value: str, candidates: list[dict], field_key: str = "") -> set[str]:
@@ -243,6 +268,26 @@ def _contradiction_sources(values: list[str], candidate_value: str, candidates: 
         for item in candidates
         if str(item.get("value") or "") in distinct
     }
+
+
+def _contradiction_details(candidate_value: str, candidates: list[dict], field_key: str) -> list[str]:
+    if not candidate_value:
+        return []
+    norm_candidate = _normalize_for_comparison(candidate_value, field_key)
+    details = []
+    seen = set()
+    for item in candidates:
+        value = str(item.get("value") or "")
+        norm_value = _normalize_for_comparison(value, field_key)
+        if not value or norm_value == norm_candidate:
+            continue
+        family = classify_source_family("", item.get("source_tool"))
+        display_value = norm_value if field_key == "official_website" else value
+        detail = f"{display_value} ({family})"
+        if detail not in seen:
+            details.append(detail)
+            seen.add(detail)
+    return sorted(details)
 
 
 def _row_status(
@@ -284,10 +329,19 @@ def _row_confidence(status: str, support: list[str], admiralty: str) -> float:
     return min(1.0, round(base, 2))
 
 
-def _rationale(label: str, value: str, support: list[str], contradictions: set[str], status: str) -> str:
+def _rationale(
+    label: str,
+    value: str,
+    support: list[str],
+    contradictions: set[str],
+    status: str,
+    contradiction_details: list[str] | None = None,
+) -> str:
     if status == "MISSING":
         return f"{label} has not been collected."
     if contradictions:
+        if contradiction_details:
+            return f"{label} has conflicting candidate values: {', '.join(contradiction_details)}."
         return f"{label} has conflicting candidate values across {', '.join(sorted(contradictions))} sources."
     if support:
         return f"{label} is supported by {', '.join(support)} source family evidence."
