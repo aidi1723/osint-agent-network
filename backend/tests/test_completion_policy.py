@@ -221,7 +221,6 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertFalse(policy["strict_completion_ready"])
         self.assertFalse(policy["evidence_floor"]["bluf_report"])
         self.assertIn("bluf_report", policy["remaining_blockers"])
-        self.assertIn("bluf_report", policy["remaining_blockers"])
         self.assertTrue(policy["operator_next_actions"])
 
     def test_strict_completion_rejects_non_bluf_report_text(self):
@@ -359,6 +358,10 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertNotEqual(policy["completion_mode"], "strict")
         self.assertNotEqual(policy["recommended_status"], "COMPLETED")
         self.assertFalse(policy["strict_completion_ready"])
+        self.assertIn("unresolved_contradiction", policy["remaining_blockers"])
+        self.assertTrue(
+            any("contradictory facts" in action for action in policy["operator_next_actions"])
+        )
 
     def test_conflicted_accepted_facts_do_not_satisfy_strict_floor(self):
         detail = complete_company_detail()
@@ -413,6 +416,10 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertNotEqual(policy["completion_mode"], "strict")
         self.assertNotEqual(policy["recommended_status"], "COMPLETED")
         self.assertFalse(policy["strict_completion_ready"])
+        self.assertIn("unresolved_contradiction", policy["remaining_blockers"])
+        self.assertTrue(
+            any("contradictory facts" in action for action in policy["operator_next_actions"])
+        )
         self.assertFalse(policy["evidence_floor"]["fact_pool"])
         self.assertFalse(policy["evidence_floor"]["identity"])
         self.assertFalse(policy["evidence_floor"]["official_website"])
@@ -658,6 +665,34 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertEqual(set(policy), REQUIRED_POLICY_KEYS)
         self.assertEqual(policy["recommended_status"], "NEEDS_REVIEW")
 
+    def test_non_dict_gap_followup_summary_does_not_crash(self):
+        detail = {
+            "seed_type": "company",
+            "seed_value": "Example Manufacturing LLC",
+            "entities": [{"type": "company", "value": "Example Manufacturing LLC", "confidence": 0.72}],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "relationships": [],
+            "hypotheses": [],
+            "report_markdown": "",
+            "quality_assessment": {
+                "score": 20.0,
+                "completion_ready": False,
+                "missing_keys": ["official_website"],
+                "blocking_keys": ["official_website"],
+                "checks": [],
+            },
+            "gap_analysis": [{"gap_key": "official_website", "severity": "blocking"}],
+            "gap_tool_plan": [],
+            "gap_followup_summary": "not-a-summary",
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(set(policy), REQUIRED_POLICY_KEYS)
+        self.assertEqual(policy["recommended_status"], "NEEDS_REVIEW")
+
     def test_explicit_empty_gap_analysis_without_tool_plan_does_not_rebuild_ready_tools(self):
         detail = complete_company_detail()
         detail["quality_assessment"] = {
@@ -676,6 +711,34 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertNotEqual(policy["completion_mode"], "continue_collection")
         self.assertTrue(policy["auto_exhausted"])
         self.assertIn("official_website", policy["remaining_blockers"])
+
+    def test_ready_for_human_decision_without_ready_tools_is_auto_exhausted(self):
+        detail = complete_company_detail()
+        detail["quality_assessment"] = {
+            "score": 84.0,
+            "completion_ready": False,
+            "missing_keys": [],
+            "blocking_keys": [],
+            "checks": [],
+        }
+        detail["gap_analysis"] = []
+        detail["gap_tool_plan"] = []
+        detail["gap_followup_summary"] = {
+            "total_gaps": 0,
+            "blocking_gaps": 0,
+            "ready": 0,
+            "queued": 0,
+            "already_attempted": 0,
+            "blocked_by_config": 0,
+            "exhausted": 0,
+            "manual_review_required": 0,
+        }
+
+        policy = build_completion_policy(detail)
+
+        self.assertEqual(policy["completion_mode"], "ready_for_human_decision")
+        self.assertEqual(policy["recommended_status"], "NEEDS_REVIEW")
+        self.assertTrue(policy["auto_exhausted"])
 
     def test_raw_unlinked_strict_quality_ready_does_not_complete_when_evidence_floor_false(self):
         detail = {
@@ -1483,6 +1546,10 @@ class CompletionPolicyTests(unittest.TestCase):
         self.assertNotEqual(policy["completion_mode"], "strict")
         self.assertNotEqual(policy["recommended_status"], "COMPLETED")
         self.assertFalse(policy["strict_completion_ready"])
+        self.assertIn("unresolved_contradiction", policy["remaining_blockers"])
+        self.assertTrue(
+            any("contradictory facts" in action for action in policy["operator_next_actions"])
+        )
 
     def test_generic_business_registry_text_does_not_satisfy_business_scope_floor(self):
         detail = complete_company_detail()

@@ -76,7 +76,7 @@ def build_completion_policy(detail: dict) -> dict:
     else:
         gap_tool_plan = _normalized_gap_tool_plan(build_gap_tool_plan({**planner_detail, "gap_analysis": gap_analysis}))
     gap_summary = (
-        dict(detail["gap_followup_summary"])
+        _summary_dict(detail["gap_followup_summary"])
         if "gap_followup_summary" in detail and detail["gap_followup_summary"] is not None
         else build_gap_followup_summary(gap_tool_plan, gap_analysis)
     )
@@ -97,7 +97,7 @@ def build_completion_policy(detail: dict) -> dict:
         gap_summary,
         detail,
     )
-    auto_exhausted = ready_tools == 0 and bool(gap_analysis or remaining_blockers)
+    auto_exhausted = ready_tools == 0
     useful_evidence = _has_useful_evidence(detail)
     acceptable_limitations = _acceptable_limitations(detail, remaining_blockers, evidence_floor)
     limited_ready = (
@@ -226,6 +226,10 @@ def _dict_items(value: object) -> list[dict]:
     return [item for item in (value or []) if isinstance(item, dict)]
 
 
+def _summary_dict(value: object) -> dict:
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _normalized_gap_tool_plan(value: object) -> list[dict]:
     plan = []
     for item in _dict_items(value):
@@ -320,6 +324,8 @@ def _remaining_blockers(assessment: dict, gap_analysis: list[dict], detail: dict
                 blockers.add(gap_key)
     if _has_high_risk_review(detail):
         blockers.add("risk_review")
+    if _has_unresolved_contradiction(detail):
+        blockers.add("unresolved_contradiction")
     return sorted(blockers)
 
 
@@ -394,6 +400,13 @@ def _has_non_acceptable_blocker(remaining_blockers: list[str], detail: dict) -> 
         return True
     matrix = detail.get("cross_verification_matrix") or []
     return any(_has_conflict_status(row) for row in matrix)
+
+
+def _has_unresolved_contradiction(detail: dict) -> bool:
+    return any(_has_conflict_status(fact) for fact in detail.get("facts") or []) or any(
+        _has_conflict_status(row)
+        for row in detail.get("cross_verification_matrix") or []
+    )
 
 
 def _has_conflict_status(item: dict) -> bool:
@@ -1037,6 +1050,7 @@ def _operator_actions(remaining_blockers: list[str]) -> list[str]:
         "bluf_report": "Prepare a BLUF report section before closure.",
         "risk_summary": "Generate or review risk summary before accepting profile conclusions.",
         "risk_review": "Resolve high-risk or review-required signals before accepting conclusions.",
+        "unresolved_contradiction": "Resolve contradictory facts or verification rows before accepting conclusions.",
     }
     if not remaining_blockers:
         return []
