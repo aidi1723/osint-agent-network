@@ -8,6 +8,8 @@ This is the closing document for the current OSINT Agent Network / 情报官 del
 
 The platform baseline is complete for this stage. The latest stage closure is
 recorded in [docs/STAGE_CLOSURE_2026-07-07.md](STAGE_CLOSURE_2026-07-07.md),
+the current capability baseline is recorded in
+[docs/CAPABILITY_BASELINE_2026-07-07.md](CAPABILITY_BASELINE_2026-07-07.md),
 and the latest actual <production-host> task-test closure is recorded in
 [docs/N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md](N100_ACTUAL_TEST_CLOSURE_REPORT_2026-07-06.md).
 
@@ -82,6 +84,7 @@ The next phase task plan is recorded in [docs/NEXT_PHASE_ROADMAP_2026-07-06.md](
 
 - [README.md](../README.md)
 - [docs/STAGE_CLOSURE_2026-07-07.md](STAGE_CLOSURE_2026-07-07.md)
+- [docs/CAPABILITY_BASELINE_2026-07-07.md](CAPABILITY_BASELINE_2026-07-07.md)
 - [docs/TEMPORARY_CLOSURE_2026-07-06.md](TEMPORARY_CLOSURE_2026-07-06.md)
 - [docs/NEXT_PHASE_ROADMAP_2026-07-06.md](NEXT_PHASE_ROADMAP_2026-07-06.md)
 - [docs/UPDATE_LOG.md](UPDATE_LOG.md)

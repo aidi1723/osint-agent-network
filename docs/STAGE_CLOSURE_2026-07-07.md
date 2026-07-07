@@ -28,6 +28,9 @@ optimization:
   role-agent output.
 - Markdown, HTML, and PDF reports are available from the API.
 
+The detailed capability map is recorded in
+[CAPABILITY_BASELINE_2026-07-07.md](CAPABILITY_BASELINE_2026-07-07.md).
+
 ## Verification Evidence
 
 Latest local verification:
@@ -73,6 +76,7 @@ Current source-of-truth entry points:
 - [README.md](../README.md)
 - [docs/FINAL_HANDOFF.md](FINAL_HANDOFF.md)
 - [docs/STAGE_CLOSURE_2026-07-07.md](STAGE_CLOSURE_2026-07-07.md)
+- [docs/CAPABILITY_BASELINE_2026-07-07.md](CAPABILITY_BASELINE_2026-07-07.md)
 - [docs/PROJECT_PACKAGE.md](PROJECT_PACKAGE.md)
 - [docs/UPDATE_LOG.md](UPDATE_LOG.md)
 - [docs/NEXT_PHASE_ROADMAP_2026-07-06.md](NEXT_PHASE_ROADMAP_2026-07-06.md)

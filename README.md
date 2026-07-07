@@ -10,6 +10,8 @@
 
 ## 当前能力
 
+完整能力基线见 [docs/CAPABILITY_BASELINE_2026-07-07.md](docs/CAPABILITY_BASELINE_2026-07-07.md)，当前阶段收尾见 [docs/STAGE_CLOSURE_2026-07-07.md](docs/STAGE_CLOSURE_2026-07-07.md)。
+
 - 多目标类型：`company`、`sparse_lead`、`domain`、`subdomain`、`email`、`username`、`phone`、`ip`、`url`、`profile_url`。
 - 多 Agent 编排：企业情报、社媒情报、联系方式发现、上下游映射、采购意图、交叉验证、分析评价。
 - 工具适配器：Sherlock、Maigret、Socialscan、theHarvester、Amass、Subfinder、httpx、Katana、SpiderFoot、Recon-ng、GHunt、PhoneInfoga、Profile Parser、Company News、Official Site Extractor、**海关供应链分析**。

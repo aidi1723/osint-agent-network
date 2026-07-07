@@ -5,6 +5,10 @@ Updated: 2026-07-07
 
 本文是情报官项目交付、部署、验收和后续扩展的总清单。它面向接手项目的工程师、运维人员和情报 Agent 执行人员。
 
+当前完整能力基线见
+[CAPABILITY_BASELINE_2026-07-07.md](CAPABILITY_BASELINE_2026-07-07.md)，当前阶段收尾见
+[STAGE_CLOSURE_2026-07-07.md](STAGE_CLOSURE_2026-07-07.md)。
+
 ## 1. 包内容
 
 ```text

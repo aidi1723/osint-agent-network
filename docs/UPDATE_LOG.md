@@ -1,5 +1,30 @@
 # Update Log
 
+## 2026-07-07 - Formal Capability Baseline And Stage Closure
+
+Scope:
+
+- Recorded the current project capabilities as a formal closure baseline.
+- Linked the capability baseline from the main handoff and package entry
+  points.
+
+Changes:
+
+- Added [CAPABILITY_BASELINE_2026-07-07.md](CAPABILITY_BASELINE_2026-07-07.md)
+  covering task/Agent orchestration, background execution, tool planning,
+  gap-to-tool follow-up, completion policy, evidence/cross-verification,
+  reports, frontend, deployment, public-release posture, current limits, and
+  next-stage work.
+- Linked the capability baseline from [README.md](../README.md),
+  [FINAL_HANDOFF.md](FINAL_HANDOFF.md),
+  [STAGE_CLOSURE_2026-07-07.md](STAGE_CLOSURE_2026-07-07.md), and
+  [PROJECT_PACKAGE.md](PROJECT_PACKAGE.md).
+
+Closure decision:
+
+- This stage is formally closed. Future work should begin from P3 permission
+  tiers/audit logs and P4 evidence review fields in the roadmap.
+
 ## 2026-07-07 - Stage Closure Documentation Alignment
 
 Scope:
