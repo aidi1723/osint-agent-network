@@ -51,20 +51,48 @@ tooling that writes files there.
 
 ## Pre-Publish Check
 
-Run these checks before pushing a public release branch:
+The automated checker reports stable rule IDs with repository-relative paths and
+line numbers. It never includes a matched credential value in its output:
+
+| Rule ID | Blocks |
+| --- | --- |
+| `LICENSE_FILE` | Missing or incomplete GNU GPL v3 license text. |
+| `LICENSE_FRONTEND` | Frontend metadata other than `GPL-3.0-only`. |
+| `LICENSE_BACKEND` | Backend metadata other than `GPL-3.0-only`. |
+| `PUBLIC_PERSONAL_PATH` | Personal `/Users/<name>/` or `/home/<name>/` paths. |
+| `PUBLIC_PRIVATE_NETWORK` | Addresses in `10/8`, `172.16/12`, or `192.168/16`. |
+| `PUBLIC_CREDENTIAL_VALUE` | Credential assignments with non-placeholder values. |
+| `PUBLIC_RUNTIME_ARTIFACT` | Tracked databases, environment files, or runtime-output paths. |
+
+The scanner reads the NUL-delimited Git index when available. For non-Git fixture
+directories it uses a sorted filesystem walk that excludes `.git`, virtual
+environments, dependency directories, and cache directories. It scans only
+strict UTF-8 text and skips binary data and symlinks.
+
+Run these commands before pushing a public release branch:
 
 ```bash
 git status --short
+PYTHONPATH=backend backend/.venv/bin/python -m unittest \
+  backend.tests.test_public_release_check backend.tests.test_production_readiness -v
 python3 scripts/public_release_check.py
-rg -n --hidden -S '/Users/|/home/[^ /]+|10\.0\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|<real-host>|password|secret|api[_-]?key|authorization|cookie|token' \
-  -g '!.git' \
-  -g '!frontend/node_modules' \
-  -g '!frontend/dist'
 ```
 
-Review matches manually. Variable names such as `ADMIN_API_TOKEN` are acceptable
-when no value is present. Example placeholders such as `<token>`, `<your-token>`,
-and `<production-host>` are acceptable.
+Variable names such as `ADMIN_API_TOKEN` are acceptable when no value is present.
+Explicit placeholders such as `<token>`, `<your-token>`, `${READ_API_TOKEN}`,
+`placeholder`, and `<production-host>` are acceptable. Shell-generated values in
+documentation are also allowed because they do not publish a credential.
+
+Reserved documentation addresses such as `192.0.2.10`, generic `/opt`, `/var`,
+and `/path/to` paths, and the non-personal `/home/osint` service-account path are
+allowed. An ellipsized path such as `/home/aidi/...` is treated as a documented
+placeholder; a concrete path below that home directory is still blocked.
+
+Intentional security-test fixtures and historical audit evidence use exact path,
+rule ID, and full-line SHA-256 signatures in `SELF_SCAN_ALLOWLIST` inside
+`scripts/public_release_check.py`. Do not add directory-wide, file-wide, or
+rule-wide exceptions. Moving an unchanged line keeps the exception valid; any
+content change invalidates it, and new adjacent matches remain blocking.
 
 For stronger confidence, run the project verification suite:
 

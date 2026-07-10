@@ -60,7 +60,15 @@ class ProductionReadinessTests(unittest.TestCase):
             tool_health={"summary": {"total": 12, "ready": 5, "attention_required": 0}},
             web_ok=True,
             backup_timer_status="enabled",
-            auth_config={"required": True, "missing": ["READ_API_TOKEN"]},
+            auth_config=auth_config_status(
+                {
+                    "APP_ENV": "production",
+                    "ADMIN_API_TOKEN": "admin",
+                    "READ_API_TOKEN": "",
+                    "OSINT_COOKIE_SECURE": "true",
+                    "OSINT_ALLOW_LEGACY_AGENT_TOKEN": "false",
+                }
+            ),
         )
 
         self.assertFalse(result["ready"])
@@ -72,13 +80,132 @@ class ProductionReadinessTests(unittest.TestCase):
             {
                 "APP_ENV": "production",
                 "ADMIN_API_TOKEN": "admin",
-                "AGENT_API_TOKEN": "agent",
                 "READ_API_TOKEN": "",
+                "OSINT_COOKIE_SECURE": "true",
+                "OSINT_ALLOW_LEGACY_AGENT_TOKEN": "false",
             }
         )
 
         self.assertTrue(status["required"])
         self.assertEqual(status["missing"], ["READ_API_TOKEN"])
+
+    def test_secure_production_auth_does_not_require_global_agent_token(self):
+        status = auth_config_status(
+            {
+                "APP_ENV": "production",
+                "ADMIN_API_TOKEN": "admin",
+                "READ_API_TOKEN": "read",
+                "OSINT_COOKIE_SECURE": "true",
+                "OSINT_ALLOW_LEGACY_AGENT_TOKEN": "false",
+            }
+        )
+
+        self.assertEqual(status["missing"], [])
+        self.assertTrue(status["required"])
+        self.assertTrue(status["cookie_secure"])
+        self.assertFalse(status["legacy_agent_token"])
+        self.assertFalse(status["auth_disabled"])
+
+    def test_production_blocks_explicitly_disabled_auth(self):
+        status = auth_config_status(
+            {
+                "APP_ENV": "production",
+                "OSINT_REQUIRE_AUTH": "false",
+                "ADMIN_API_TOKEN": "admin",
+                "READ_API_TOKEN": "read",
+                "OSINT_COOKIE_SECURE": "true",
+                "OSINT_ALLOW_LEGACY_AGENT_TOKEN": "false",
+            }
+        )
+
+        self.assertTrue(status["production"])
+        self.assertTrue(status["auth_disabled"])
+        self.assertEqual(status["checks"]["auth_required"], "fail")
+
+    def test_production_blocks_missing_or_false_secure_cookie(self):
+        missing = auth_config_status(
+            {
+                "APP_ENV": "production",
+                "ADMIN_API_TOKEN": "admin",
+                "READ_API_TOKEN": "read",
+            }
+        )
+        false = auth_config_status(
+            {
+                "APP_ENV": "production",
+                "ADMIN_API_TOKEN": "admin",
+                "READ_API_TOKEN": "read",
+                "OSINT_COOKIE_SECURE": "false",
+            }
+        )
+
+        self.assertEqual(missing["checks"]["cookie_secure"], "fail")
+        self.assertEqual(false["checks"]["cookie_secure"], "fail")
+
+    def test_production_blocks_legacy_shared_agent_token_mode(self):
+        status = auth_config_status(
+            {
+                "APP_ENV": "production",
+                "ADMIN_API_TOKEN": "admin",
+                "READ_API_TOKEN": "read",
+                "OSINT_COOKIE_SECURE": "true",
+                "OSINT_ALLOW_LEGACY_AGENT_TOKEN": "true",
+            }
+        )
+
+        self.assertEqual(status["checks"]["legacy_agent_token"], "fail")
+
+    def test_evaluate_readiness_exposes_stable_production_auth_checks(self):
+        result = evaluate_readiness(
+            api_health={"status": "ok"},
+            system_status={
+                "database": {"status": "ok"},
+                "scripts": {
+                    "backup": {"present": True},
+                    "healthcheck": {"present": True},
+                    "verify": {"present": True},
+                },
+            },
+            tool_health={"summary": {"total": 1, "ready": 1, "attention_required": 0}},
+            web_ok=True,
+            backup_timer_status="enabled",
+            auth_config=auth_config_status(
+                {
+                    "APP_ENV": "production",
+                    "OSINT_REQUIRE_AUTH": "false",
+                    "ADMIN_API_TOKEN": "admin",
+                    "READ_API_TOKEN": "read",
+                    "OSINT_COOKIE_SECURE": "false",
+                    "OSINT_ALLOW_LEGACY_AGENT_TOKEN": "true",
+                }
+            ),
+        )
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["checks"]["auth_required"], "fail")
+        self.assertEqual(result["checks"]["cookie_secure"], "fail")
+        self.assertEqual(result["checks"]["legacy_agent_token"], "fail")
+        self.assertIn("production_auth_explicitly_disabled", result["warnings"])
+        self.assertIn("secure_cookie_required", result["warnings"])
+        self.assertIn("legacy_agent_token_forbidden", result["warnings"])
+
+    def test_nonproduction_defaults_remain_usable(self):
+        status = auth_config_status({})
+
+        self.assertFalse(status["production"])
+        self.assertFalse(status["required"])
+        self.assertEqual(status["missing"], [])
+        self.assertEqual(status["checks"], {
+            "auth_required": "ok",
+            "cookie_secure": "ok",
+            "legacy_agent_token": "ok",
+        })
+
+    def test_nonproduction_explicit_auth_still_validates_admin_and_read_tokens(self):
+        status = auth_config_status({"OSINT_REQUIRE_AUTH": "true"})
+
+        self.assertTrue(status["required"])
+        self.assertEqual(status["missing"], ["ADMIN_API_TOKEN", "READ_API_TOKEN"])
 
     def test_get_json_sends_read_token_when_provided(self):
         captured = {}

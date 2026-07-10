@@ -20,12 +20,16 @@ def evaluate_readiness(
     auth_config: dict | None = None,
 ) -> dict:
     tool_summary = tool_health.get("summary") or system_status.get("tools", {}).get("health", {})
-    auth_config = auth_config or {"required": False, "missing": []}
+    auth_config = auth_config if auth_config is not None else {"required": False, "missing": []}
+    auth_checks = auth_config.get("checks", {})
     checks = {
         "api": "ok" if api_health.get("status") == "ok" else "fail",
         "database": "ok" if system_status.get("database", {}).get("status") == "ok" else "fail",
         "web": "ok" if web_ok else "fail",
-        "auth_tokens": "ok" if not auth_config.get("required") or not auth_config.get("missing") else "fail",
+        "auth_tokens": "ok" if not auth_config.get("missing") else "fail",
+        "auth_required": auth_checks.get("auth_required", "ok"),
+        "cookie_secure": auth_checks.get("cookie_secure", "ok"),
+        "legacy_agent_token": auth_checks.get("legacy_agent_token", "ok"),
         "backup_script": "ok" if system_status.get("scripts", {}).get("backup", {}).get("present") else "fail",
         "healthcheck_script": "ok" if system_status.get("scripts", {}).get("healthcheck", {}).get("present") else "fail",
         "verify_script": "ok" if system_status.get("scripts", {}).get("verify", {}).get("present") else "fail",
@@ -33,8 +37,14 @@ def evaluate_readiness(
         "backup_timer": "ok" if backup_timer_status in {"enabled", "active", "unknown-local"} else "fail",
     }
     warnings = []
-    if auth_config.get("required") and auth_config.get("missing"):
+    if auth_config.get("missing"):
         warnings.append(f"missing_auth_tokens={','.join(auth_config['missing'])}")
+    if checks["auth_required"] != "ok":
+        warnings.append("production_auth_explicitly_disabled")
+    if checks["cookie_secure"] != "ok":
+        warnings.append("secure_cookie_required")
+    if checks["legacy_agent_token"] != "ok":
+        warnings.append("legacy_agent_token_forbidden")
     info = []
     attention = int(tool_summary.get("attention_required") or 0)
     ready_tools = int(tool_summary.get("ready") or 0)
@@ -85,16 +95,41 @@ def main() -> int:
 
 def auth_config_status(env: dict | None = None) -> dict:
     values = env if env is not None else os.environ
+    production = str(values.get("APP_ENV", "")).strip().lower() in {"prod", "production"}
     explicit = str(values.get("OSINT_REQUIRE_AUTH", "")).strip().lower()
     if explicit in {"1", "true", "yes", "on"}:
         required = True
     elif explicit in {"0", "false", "no", "off"}:
         required = False
     else:
-        required = str(values.get("APP_ENV", "")).strip().lower() in {"prod", "production"}
-    required_tokens = ["ADMIN_API_TOKEN", "AGENT_API_TOKEN", "READ_API_TOKEN"]
-    missing = [name for name in required_tokens if required and not str(values.get(name, "")).strip()]
-    return {"required": required, "missing": missing}
+        required = production
+    required_tokens = ["ADMIN_API_TOKEN", "READ_API_TOKEN"]
+    missing = [
+        name
+        for name in required_tokens
+        if (production or required) and not str(values.get(name, "")).strip()
+    ]
+    cookie_secure = _env_true(values.get("OSINT_COOKIE_SECURE", ""))
+    legacy_agent_token = _env_true(values.get("OSINT_ALLOW_LEGACY_AGENT_TOKEN", ""))
+    auth_disabled = production and explicit in {"0", "false", "no", "off"}
+    checks = {
+        "auth_required": "ok" if not production or (required and not auth_disabled) else "fail",
+        "cookie_secure": "ok" if not production or cookie_secure else "fail",
+        "legacy_agent_token": "ok" if not production or not legacy_agent_token else "fail",
+    }
+    return {
+        "production": production,
+        "required": required,
+        "missing": missing,
+        "cookie_secure": cookie_secure,
+        "legacy_agent_token": legacy_agent_token,
+        "auth_disabled": auth_disabled,
+        "checks": checks,
+    }
+
+
+def _env_true(value: object) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _load_env(path: Path) -> None:
