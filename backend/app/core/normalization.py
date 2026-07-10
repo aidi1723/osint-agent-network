@@ -1,4 +1,6 @@
+import ipaddress
 import re
+import socket
 from urllib.parse import urlsplit, urlunsplit
 
 
@@ -63,6 +65,12 @@ def normalize_target(target_type: str, value: str) -> str:
         hostname = (parsed.hostname or "").lower()
         if hostname in _PRIVATE_HOSTS or hostname.endswith(".local"):
             raise NormalizationError(f"private {target_type}: {value}")
+        try:
+            literal_address = ipaddress.ip_address(hostname)
+        except ValueError:
+            literal_address = _legacy_ipv4_address(hostname)
+        if literal_address is not None and not _is_public_address(literal_address):
+            raise NormalizationError(f"private {target_type}: {value}")
         return urlunsplit(
             (
                 parsed.scheme.lower(),
@@ -74,3 +82,27 @@ def normalize_target(target_type: str, value: str) -> str:
         )
 
     raise NormalizationError(f"unsupported target type: {target_type}")
+
+
+def _legacy_ipv4_address(hostname: str) -> ipaddress.IPv4Address | None:
+    if not hostname or any(char not in "0123456789." for char in hostname):
+        return None
+    try:
+        return ipaddress.IPv4Address(socket.inet_aton(hostname))
+    except OSError:
+        return None
+
+
+def _is_public_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return _is_public_address(address.ipv4_mapped)
+    return address.is_global and not any(
+        (
+            address.is_private,
+            address.is_loopback,
+            address.is_link_local,
+            address.is_multicast,
+            address.is_reserved,
+            address.is_unspecified,
+        )
+    )

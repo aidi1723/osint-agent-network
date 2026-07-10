@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from app.core.safe_http import SafeHttpError, SafeHttpResponse
+
 from app.tools.sherlock import SherlockAdapter
 from app.tools.theharvester import TheHarvesterAdapter
 from app.tools.amass import AmassAdapter
@@ -623,22 +625,10 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
         </body></html>
         """
 
-        class Response:
-            status = 200
-            headers = {"Content-Encoding": "gzip"}
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, traceback):
-                return False
-
-            def read(self, limit):
-                return gzip.compress(html)[:limit]
-
         url = "https://example.com/contact"
         adapter = OfficialSiteExtractorAdapter()
-        with patch("app.tools.official_site_extractor.request.urlopen", return_value=Response()):
+        fetched = SafeHttpResponse(200, {"Content-Encoding": "gzip"}, gzip.compress(html), url)
+        with patch("app.tools.official_site_extractor.safe_fetch", return_value=fetched):
             with tempfile.TemporaryDirectory() as tmpdir:
                 result = adapter.run("url", url, Path(tmpdir), timeout_seconds=5)
                 artifact_exists = result.command.expected_artifact.exists()
@@ -647,6 +637,18 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertTrue(artifact_exists)
         self.assertIn(("email", "sales@example.com"), {(item.type, item.value) for item in parsed.entities})
+
+    def test_run_maps_safe_http_failure_without_leaking_url(self):
+        adapter = OfficialSiteExtractorAdapter()
+        target = "https://example.com/private-token"
+
+        with patch("app.tools.official_site_extractor.safe_fetch", side_effect=SafeHttpError("sensitive details")):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                result = adapter.run("url", target, Path(tmpdir), timeout_seconds=5)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr_excerpt, "official site fetch failed")
+        self.assertNotIn("private-token", result.stderr_excerpt)
 
     def test_parser_extracts_srr_style_identity_scope_and_filters_script_phone_noise(self):
         adapter = OfficialSiteExtractorAdapter()

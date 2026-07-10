@@ -6,9 +6,9 @@ import json
 import os
 from pathlib import Path
 import re
-from urllib import error, request
 
 from app.core.normalization import normalize_target
+from app.core.safe_http import SafeHttpError, safe_fetch
 from app.tools.base import (
     NormalizedEntity,
     NormalizedEvidence,
@@ -97,17 +97,17 @@ class OfficialSiteExtractorAdapter:
         command = self.build_command(target_type, url, workdir, timeout_seconds)
         command.expected_artifact.parent.mkdir(parents=True, exist_ok=True)
         try:
-            req = request.Request(
+            response = safe_fetch(
                 url,
+                timeout_seconds=min(timeout_seconds, 15),
+                max_bytes=MAX_HTML_BYTES,
                 headers={
                     "User-Agent": "osint-agent-network/1.0 (+official-site-extractor)",
                     "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
                 },
             )
-            with request.urlopen(req, timeout=min(timeout_seconds, 15)) as response:
-                body = response.read(MAX_HTML_BYTES + 1)
-                status = int(getattr(response, "status", 200) or 200)
-                body = _decode_http_body(body, response)
+            body = _decode_http_body(response.body, response)
+            status = response.status
             truncated = len(body) > MAX_HTML_BYTES
             command.expected_artifact.write_bytes(body[:MAX_HTML_BYTES])
             return ToolRunResult(
@@ -116,13 +116,13 @@ class OfficialSiteExtractorAdapter:
                 stdout_excerpt=f"fetched official site html status={status} bytes={len(body[:MAX_HTML_BYTES])} truncated={truncated}",
                 stderr_excerpt="",
             )
-        except (OSError, error.URLError, TimeoutError) as exc:
+        except SafeHttpError:
             command.expected_artifact.write_text("", encoding="utf-8")
             return ToolRunResult(
                 command=command,
                 returncode=1,
                 stdout_excerpt="",
-                stderr_excerpt=str(exc),
+                stderr_excerpt="official site fetch failed",
             )
 
     def parse_artifact(self, artifact_path: Path, target_value: str) -> ParsedToolOutput:
