@@ -1063,6 +1063,130 @@ class AgentIdentityStoreContract:
         self.assertEqual(after["events"], [])
         self.assertEqual(self.store.list_jobs(investigation.id)[0]["status"], "CLAIMED")
 
+    def create_scoped_mutation_claim(self, suffix):
+        registration = self.register(
+            name=f"scoped-upsert-{suffix}",
+            role_tier="reader",
+            capabilities=["domain"],
+        )
+        investigation = self.store.create_investigation(
+            name=f"Scoped upsert {suffix}",
+            seed_type="domain",
+            seed_value=f"scoped-upsert-{suffix}.example",
+            strategy_name="quick",
+        )
+        claimed = self.store.claim_task(registration["id"], ["domain"])
+        self.assertEqual(claimed["id"], investigation.id)
+        return registration, investigation
+
+    def test_scoped_entities_upsert_returns_the_persisted_record(self):
+        registration, investigation = self.create_scoped_mutation_claim("entities")
+        results = []
+        submissions = (
+            ("2026-07-11T01:00:00+00:00", 0.4),
+            ("2026-07-11T01:01:00+00:00", 0.9),
+            ("2026-07-11T01:02:00+00:00", 0.2),
+        )
+        for now, confidence in submissions:
+            with patch("app.services.store._now", return_value=now):
+                result = self.store.agent_add_entities(
+                    agent_id=registration["id"],
+                    required_tier="reader",
+                    investigation_id=investigation.id,
+                    job_id=None,
+                    entities=[
+                        {
+                            "type": "domain",
+                            "value": "repeat.scoped-upsert-entities.example",
+                            "source_tool": "agent",
+                            "confidence": confidence,
+                        }
+                    ],
+                )
+            self.assertIsNotNone(result)
+            results.append(result[0])
+
+        detail = self.store.get_investigation(investigation.id)
+        self.assertEqual(len(detail["entities"]), 1)
+        stored = detail["entities"][0]
+        self.assertEqual({item["id"] for item in results}, {stored["id"]})
+        self.assertEqual(stored["confidence"], 0.9)
+        self.assertEqual(stored["created_at"], submissions[0][0])
+        self.assertEqual(results[-1], stored)
+
+    def test_scoped_evidence_upsert_returns_the_persisted_record(self):
+        registration, investigation = self.create_scoped_mutation_claim("evidence")
+        with patch(
+            "app.services.store._now",
+            return_value="2026-07-11T02:00:00+00:00",
+        ):
+            first = self.store.agent_add_evidence(
+                agent_id=registration["id"],
+                required_tier="reader",
+                investigation_id=investigation.id,
+                job_id=None,
+                entity_value="repeat.scoped-upsert-evidence.example",
+                evidence_kind="dns_resolution",
+                source_tool="agent",
+                snippet="first observation",
+            )
+        with patch(
+            "app.services.store._now",
+            return_value="2026-07-11T02:01:00+00:00",
+        ):
+            second = self.store.agent_add_evidence(
+                agent_id=registration["id"],
+                required_tier="reader",
+                investigation_id=investigation.id,
+                job_id=None,
+                entity_value="repeat.scoped-upsert-evidence.example",
+                evidence_kind="dns_resolution",
+                source_tool="agent",
+                snippet="latest observation",
+            )
+
+        detail = self.store.get_investigation(investigation.id)
+        self.assertEqual(len(detail["evidence"]), 1)
+        stored = detail["evidence"][0]
+        self.assertEqual(first["id"], stored["id"])
+        self.assertEqual(second["id"], stored["id"])
+        self.assertEqual(stored["snippet"], "latest observation")
+        self.assertEqual(stored["created_at"], "2026-07-11T02:01:00+00:00")
+        self.assertEqual(second, stored)
+
+    def test_scoped_relationship_upsert_returns_the_persisted_record(self):
+        registration, investigation = self.create_scoped_mutation_claim(
+            "relationships"
+        )
+        results = []
+        submissions = (
+            ("2026-07-11T03:00:00+00:00", 0.4),
+            ("2026-07-11T03:01:00+00:00", 0.9),
+            ("2026-07-11T03:02:00+00:00", 0.2),
+        )
+        for now, confidence in submissions:
+            with patch("app.services.store._now", return_value=now):
+                result = self.store.agent_add_relationship(
+                    agent_id=registration["id"],
+                    required_tier="reader",
+                    investigation_id=investigation.id,
+                    job_id=None,
+                    from_value="scoped-upsert-relationships.example",
+                    to_value="repeat.scoped-upsert-relationships.example",
+                    relationship_type="domain_has_subdomain",
+                    confidence=confidence,
+                )
+            self.assertIsNotNone(result)
+            results.append(result)
+
+        detail = self.store.get_investigation(investigation.id)
+        self.assertEqual(len(detail["relationships"]), 1)
+        stored = detail["relationships"][0]
+        self.assertEqual({item["id"] for item in results}, {stored["id"]})
+        self.assertEqual(stored["confidence"], 0.9)
+        self.assertEqual(stored["created_at"], submissions[0][0])
+        self.assertEqual(results[-1], stored)
+
     def test_scoped_entity_mutation_rechecks_lifecycle_role_and_job_state(self):
         mutate = getattr(self.store, "agent_add_entities", None)
         self.assertTrue(callable(mutate), "scoped entity mutation API is required")
@@ -2016,6 +2140,117 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                     "/api/agent/entities", payload, reader["agent_token"]
                 )
                 self.assertEqual(status, 409)
+
+    def test_http_repeated_entity_submission_returns_one_persisted_record(self):
+        reader = self.register("reader")
+        investigation = self.claimed_task(reader)
+        payload = {
+            "task_id": investigation.id,
+            "entities": [
+                {
+                    "type": "domain",
+                    "value": "repeat-http-entity.example",
+                    "source_tool": "agent",
+                    "confidence": 0.9,
+                }
+            ],
+        }
+        with patch(
+            "app.services.store._now",
+            return_value="2026-07-11T04:00:00+00:00",
+        ):
+            first_status, first_body = self.post(
+                "/api/agent/entities", payload, reader["agent_token"]
+            )
+        payload["entities"][0]["confidence"] = 0.2
+        with patch(
+            "app.services.store._now",
+            return_value="2026-07-11T04:01:00+00:00",
+        ):
+            second_status, second_body = self.post(
+                "/api/agent/entities", payload, reader["agent_token"]
+            )
+
+        self.assertEqual((first_status, second_status), (201, 201))
+        first = first_body["entities"][0]
+        second = second_body["entities"][0]
+        detail = self.store.get_investigation(investigation.id)
+        self.assertEqual(len(detail["entities"]), 1)
+        stored = detail["entities"][0]
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(second, stored)
+        self.assertEqual(stored["confidence"], 0.9)
+        self.assertEqual(stored["created_at"], "2026-07-11T04:00:00+00:00")
+
+    def test_http_repeated_evidence_submission_returns_one_persisted_record(self):
+        reader = self.register("reader")
+        investigation = self.claimed_task(reader)
+        payload = {
+            "task_id": investigation.id,
+            "entity_value": "repeat-http-evidence.example",
+            "evidence_kind": "dns_resolution",
+            "source_tool": "agent",
+            "snippet": "first observation",
+        }
+        with patch(
+            "app.services.store._now",
+            return_value="2026-07-11T05:00:00+00:00",
+        ):
+            first_status, first = self.post(
+                "/api/agent/evidence", payload, reader["agent_token"]
+            )
+        payload["snippet"] = "latest observation"
+        with patch(
+            "app.services.store._now",
+            return_value="2026-07-11T05:01:00+00:00",
+        ):
+            second_status, second = self.post(
+                "/api/agent/evidence", payload, reader["agent_token"]
+            )
+
+        self.assertEqual((first_status, second_status), (201, 201))
+        detail = self.store.get_investigation(investigation.id)
+        self.assertEqual(len(detail["evidence"]), 1)
+        stored = detail["evidence"][0]
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(second, stored)
+        self.assertEqual(stored["snippet"], "latest observation")
+        self.assertEqual(stored["created_at"], "2026-07-11T05:01:00+00:00")
+
+    def test_http_repeated_relationship_submission_returns_one_persisted_record(self):
+        reader = self.register("reader")
+        investigation = self.claimed_task(reader)
+        payload = {
+            "task_id": investigation.id,
+            "from": "repeat-http-relationship.example",
+            "to": "child.repeat-http-relationship.example",
+            "relationship_type": "domain_has_subdomain",
+            "confidence": 0.9,
+        }
+        with patch(
+            "app.services.store._now",
+            return_value="2026-07-11T06:00:00+00:00",
+        ):
+            first_status, first = self.post(
+                "/api/agent/relationships", payload, reader["agent_token"]
+            )
+        payload["confidence"] = 0.2
+        with patch(
+            "app.services.store._now",
+            return_value="2026-07-11T06:01:00+00:00",
+        ):
+            second_status, second = self.post(
+                "/api/agent/relationships", payload, reader["agent_token"]
+            )
+
+        self.assertEqual((first_status, second_status), (201, 201))
+        detail = self.store.get_investigation(investigation.id)
+        self.assertEqual(len(detail["relationships"]), 1)
+        stored = detail["relationships"][0]
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(second, stored)
+        self.assertEqual(stored["confidence"], 0.9)
+        self.assertEqual(stored["created_at"], "2026-07-11T06:00:00+00:00")
 
     def test_matching_active_job_owner_can_write_and_event_scope_rejects_other_agent(self):
         reader = self.register("reader", ["reader_task"])

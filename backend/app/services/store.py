@@ -433,6 +433,7 @@ class MemoryStore:
             )
             for item in entities
         ]
+        records, _, _ = _coalesce_tool_output_records(records, [], [])
         with self.lock:
             if not self._agent_has_investigation_access_locked(
                 agent_id,
@@ -442,10 +443,12 @@ class MemoryStore:
                 action="entities",
             ):
                 return None
+            persisted = []
             for entity in records:
-                self.entities[entity.id] = entity
+                stored, _, _ = _memory_upsert_entity(self.entities, entity)
+                persisted.append(asdict(stored))
             self._touch_investigation(investigation_id, status="RUNNING")
-            return [asdict(entity) for entity in records]
+            return persisted
 
     def agent_add_evidence(
         self,
@@ -479,9 +482,9 @@ class MemoryStore:
                 action="evidence",
             ):
                 return None
-            self.evidence[evidence.id] = evidence
+            stored, _, _ = _memory_upsert_evidence(self.evidence, evidence)
             self._touch_investigation(investigation_id, status="RUNNING")
-            return asdict(evidence)
+            return asdict(stored)
 
     def agent_add_evidence_record(
         self,
@@ -676,9 +679,11 @@ class MemoryStore:
                 action="relationships",
             ):
                 return None
-            self.relationships[relationship.id] = relationship
+            stored, _, _ = _memory_upsert_relationship(
+                self.relationships, relationship
+            )
             self._touch_investigation(investigation_id, status="RUNNING")
-            return asdict(relationship)
+            return asdict(stored)
 
     def agent_complete_task(
         self,
@@ -855,60 +860,32 @@ class MemoryStore:
                     self.events[event.id] = event
                     inserted.append((self.events, event.id))
                 for entity in entities:
-                    existing = next(
-                        (
-                            item
-                            for item in self.entities.values()
-                            if _entity_signal_key(item) == _entity_signal_key(entity)
-                        ),
-                        None,
+                    stored, was_created, original = _memory_upsert_entity(
+                        self.entities, entity
                     )
-                    if existing is None:
-                        self.entities[entity.id] = entity
+                    if was_created:
                         inserted.append((self.entities, entity.id))
                         created["entities"] += 1
                     else:
-                        updated.append((existing, asdict(existing)))
-                        existing.confidence = max(
-                            existing.confidence, entity.confidence
-                        )
+                        updated.append((stored, original))
                 for item in evidence:
-                    existing = next(
-                        (
-                            stored
-                            for stored in self.evidence.values()
-                            if _evidence_signal_key(stored)
-                            == _evidence_signal_key(item)
-                        ),
-                        None,
+                    stored, was_created, original = _memory_upsert_evidence(
+                        self.evidence, item
                     )
-                    if existing is None:
-                        self.evidence[item.id] = item
+                    if was_created:
                         inserted.append((self.evidence, item.id))
                         created["evidence"] += 1
                     else:
-                        updated.append((existing, asdict(existing)))
-                        existing.snippet = item.snippet
-                        existing.created_at = item.created_at
+                        updated.append((stored, original))
                 for relationship in relationships:
-                    existing = next(
-                        (
-                            item
-                            for item in self.relationships.values()
-                            if _relationship_signal_key(item)
-                            == _relationship_signal_key(relationship)
-                        ),
-                        None,
+                    stored, was_created, original = _memory_upsert_relationship(
+                        self.relationships, relationship
                     )
-                    if existing is None:
-                        self.relationships[relationship.id] = relationship
+                    if was_created:
                         inserted.append((self.relationships, relationship.id))
                         created["relationships"] += 1
                     else:
-                        updated.append((existing, asdict(existing)))
-                        existing.confidence = max(
-                            existing.confidence, relationship.confidence
-                        )
+                        updated.append((stored, original))
                 job.status = "COMPLETED"
                 self._touch_investigation(investigation_id, status="RUNNING")
             except Exception:
@@ -2157,6 +2134,7 @@ class SQLiteStore:
             )
             for item in entities
         ]
+        records, _, _ = _coalesce_tool_output_records(records, [], [])
         with self.lock, closing(self._connect()) as conn, conn:
             conn.execute("BEGIN IMMEDIATE")
             if not self._agent_has_investigation_access_conn(
@@ -2168,10 +2146,12 @@ class SQLiteStore:
                 action="entities",
             ):
                 return None
+            persisted = []
             for entity in records:
-                _sqlite_upsert_entity(conn, entity)
+                stored, _ = _sqlite_upsert_entity(conn, entity)
+                persisted.append(stored)
             self._touch_investigation(conn, investigation_id, status="RUNNING")
-        return [asdict(entity) for entity in records]
+        return persisted
 
     def agent_add_evidence(
         self,
@@ -2207,9 +2187,9 @@ class SQLiteStore:
                 action="evidence",
             ):
                 return None
-            _sqlite_upsert_evidence(conn, evidence)
+            stored, _ = _sqlite_upsert_evidence(conn, evidence)
             self._touch_investigation(conn, investigation_id, status="RUNNING")
-        return asdict(evidence)
+        return stored
 
     def agent_add_evidence_record(
         self,
@@ -2470,9 +2450,9 @@ class SQLiteStore:
                 action="relationships",
             ):
                 return None
-            _sqlite_upsert_relationship(conn, relationship)
+            stored, _ = _sqlite_upsert_relationship(conn, relationship)
             self._touch_investigation(conn, investigation_id, status="RUNNING")
-        return asdict(relationship)
+        return stored
 
     def agent_complete_task(
         self,
@@ -4365,15 +4345,23 @@ def _sqlite_insert_event(conn: sqlite3.Connection, event: AgentEvent) -> None:
     )
 
 
-def _sqlite_upsert_entity(conn: sqlite3.Connection, entity: Entity) -> None:
+def _sqlite_upsert_entity(
+    conn: sqlite3.Connection, entity: Entity
+) -> tuple[dict, bool]:
+    existing = conn.execute(
+        """
+        SELECT id FROM entities
+        WHERE investigation_id = ? AND type = ? AND value = ? AND source_tool = ?
+        """,
+        _entity_signal_key(entity),
+    ).fetchone()
     conn.execute(
         """
         INSERT INTO entities (
             id, investigation_id, type, value, source_tool, confidence, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(investigation_id, type, value, source_tool) DO UPDATE SET
-            confidence = MAX(confidence, excluded.confidence),
-            created_at = excluded.created_at
+            confidence = MAX(confidence, excluded.confidence)
         """,
         (
             entity.id,
@@ -4385,9 +4373,27 @@ def _sqlite_upsert_entity(conn: sqlite3.Connection, entity: Entity) -> None:
             entity.created_at,
         ),
     )
+    row = conn.execute(
+        """
+        SELECT * FROM entities
+        WHERE investigation_id = ? AND type = ? AND value = ? AND source_tool = ?
+        """,
+        _entity_signal_key(entity),
+    ).fetchone()
+    return _entity_from_row(row), existing is None
 
 
-def _sqlite_upsert_evidence(conn: sqlite3.Connection, evidence: Evidence) -> None:
+def _sqlite_upsert_evidence(
+    conn: sqlite3.Connection, evidence: Evidence
+) -> tuple[dict, bool]:
+    existing = conn.execute(
+        """
+        SELECT id FROM evidence
+        WHERE investigation_id = ? AND entity_value = ?
+          AND evidence_kind = ? AND source_tool = ?
+        """,
+        _evidence_signal_key(evidence),
+    ).fetchone()
     conn.execute(
         """
         INSERT INTO evidence (
@@ -4407,6 +4413,15 @@ def _sqlite_upsert_evidence(conn: sqlite3.Connection, evidence: Evidence) -> Non
             evidence.created_at,
         ),
     )
+    row = conn.execute(
+        """
+        SELECT * FROM evidence
+        WHERE investigation_id = ? AND entity_value = ?
+          AND evidence_kind = ? AND source_tool = ?
+        """,
+        _evidence_signal_key(evidence),
+    ).fetchone()
+    return _evidence_from_row(row), existing is None
 
 
 def _sqlite_upsert_evidence_record(conn: sqlite3.Connection, record) -> None:
@@ -4445,15 +4460,22 @@ def _sqlite_upsert_evidence_record(conn: sqlite3.Connection, record) -> None:
 
 def _sqlite_upsert_relationship(
     conn: sqlite3.Connection, relationship: Relationship
-) -> None:
+) -> tuple[dict, bool]:
+    existing = conn.execute(
+        """
+        SELECT id FROM relationships
+        WHERE investigation_id = ? AND from_value = ?
+          AND to_value = ? AND relationship_type = ?
+        """,
+        _relationship_signal_key(relationship),
+    ).fetchone()
     conn.execute(
         """
         INSERT INTO relationships (
             id, investigation_id, from_value, to_value, relationship_type, confidence, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(investigation_id, from_value, to_value, relationship_type) DO UPDATE SET
-            confidence = MAX(confidence, excluded.confidence),
-            created_at = excluded.created_at
+            confidence = MAX(confidence, excluded.confidence)
         """,
         (
             relationship.id,
@@ -4465,6 +4487,15 @@ def _sqlite_upsert_relationship(
             relationship.created_at,
         ),
     )
+    row = conn.execute(
+        """
+        SELECT * FROM relationships
+        WHERE investigation_id = ? AND from_value = ?
+          AND to_value = ? AND relationship_type = ?
+        """,
+        _relationship_signal_key(relationship),
+    ).fetchone()
+    return _relationship_from_row(row), existing is None
 
 
 def _build_tool_output_records(
@@ -4563,6 +4594,64 @@ def _relationship_signal_key(
     )
 
 
+def _memory_upsert_entity(
+    records: dict[str, Entity], candidate: Entity
+) -> tuple[Entity, bool, dict]:
+    existing = next(
+        (
+            item
+            for item in records.values()
+            if _entity_signal_key(item) == _entity_signal_key(candidate)
+        ),
+        None,
+    )
+    if existing is None:
+        records[candidate.id] = candidate
+        return candidate, True, asdict(candidate)
+    original = asdict(existing)
+    existing.confidence = max(existing.confidence, candidate.confidence)
+    return existing, False, original
+
+
+def _memory_upsert_evidence(
+    records: dict[str, Evidence], candidate: Evidence
+) -> tuple[Evidence, bool, dict]:
+    existing = next(
+        (
+            item
+            for item in records.values()
+            if _evidence_signal_key(item) == _evidence_signal_key(candidate)
+        ),
+        None,
+    )
+    if existing is None:
+        records[candidate.id] = candidate
+        return candidate, True, asdict(candidate)
+    original = asdict(existing)
+    existing.snippet = candidate.snippet
+    existing.created_at = candidate.created_at
+    return existing, False, original
+
+
+def _memory_upsert_relationship(
+    records: dict[str, Relationship], candidate: Relationship
+) -> tuple[Relationship, bool, dict]:
+    existing = next(
+        (
+            item
+            for item in records.values()
+            if _relationship_signal_key(item) == _relationship_signal_key(candidate)
+        ),
+        None,
+    )
+    if existing is None:
+        records[candidate.id] = candidate
+        return candidate, True, asdict(candidate)
+    original = asdict(existing)
+    existing.confidence = max(existing.confidence, candidate.confidence)
+    return existing, False, original
+
+
 def _coalesce_tool_output_records(
     entities: list[Entity],
     evidence: list[Evidence],
@@ -4628,92 +4717,17 @@ def _insert_tool_output_records(
             ),
         )
     for entity in entities:
-        existing = conn.execute(
-            """
-            SELECT 1 FROM entities
-            WHERE investigation_id = ? AND type = ? AND value = ? AND source_tool = ?
-            """,
-            _entity_signal_key(entity),
-        ).fetchone()
-        if existing is None:
+        _, was_created = _sqlite_upsert_entity(conn, entity)
+        if was_created:
             created["entities"] += 1
-        conn.execute(
-            """
-            INSERT INTO entities (
-                id, investigation_id, type, value, source_tool, confidence, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(investigation_id, type, value, source_tool) DO UPDATE SET
-                confidence = MAX(confidence, excluded.confidence)
-            """,
-            (
-                entity.id,
-                entity.investigation_id,
-                entity.type,
-                entity.value,
-                entity.source_tool,
-                entity.confidence,
-                entity.created_at,
-            ),
-        )
     for item in evidence:
-        existing = conn.execute(
-            """
-            SELECT 1 FROM evidence
-            WHERE investigation_id = ? AND entity_value = ?
-              AND evidence_kind = ? AND source_tool = ?
-            """,
-            _evidence_signal_key(item),
-        ).fetchone()
-        if existing is None:
+        _, was_created = _sqlite_upsert_evidence(conn, item)
+        if was_created:
             created["evidence"] += 1
-        conn.execute(
-            """
-            INSERT INTO evidence (
-                id, investigation_id, entity_value, evidence_kind, source_tool, snippet, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(investigation_id, entity_value, evidence_kind, source_tool) DO UPDATE SET
-                snippet = excluded.snippet,
-                created_at = excluded.created_at
-            """,
-            (
-                item.id,
-                item.investigation_id,
-                item.entity_value,
-                item.evidence_kind,
-                item.source_tool,
-                item.snippet,
-                item.created_at,
-            ),
-        )
     for relationship in relationships:
-        existing = conn.execute(
-            """
-            SELECT 1 FROM relationships
-            WHERE investigation_id = ? AND from_value = ?
-              AND to_value = ? AND relationship_type = ?
-            """,
-            _relationship_signal_key(relationship),
-        ).fetchone()
-        if existing is None:
+        _, was_created = _sqlite_upsert_relationship(conn, relationship)
+        if was_created:
             created["relationships"] += 1
-        conn.execute(
-            """
-            INSERT INTO relationships (
-                id, investigation_id, from_value, to_value, relationship_type, confidence, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(investigation_id, from_value, to_value, relationship_type) DO UPDATE SET
-                confidence = MAX(confidence, excluded.confidence)
-            """,
-            (
-                relationship.id,
-                relationship.investigation_id,
-                relationship.from_value,
-                relationship.to_value,
-                relationship.relationship_type,
-                relationship.confidence,
-                relationship.created_at,
-            ),
-        )
     return created
 
 
