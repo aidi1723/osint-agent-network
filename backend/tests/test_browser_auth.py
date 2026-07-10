@@ -1,5 +1,7 @@
 import dataclasses
+import threading
 import unittest
+from email.message import Message
 from http.cookies import SimpleCookie
 
 from app.core.browser_auth import BrowserPrincipal, BrowserSessionManager, LoginResult
@@ -21,6 +23,16 @@ class TokenGenerator:
     def __call__(self, size: int) -> str:
         self.sizes.append(size)
         return self.values.pop(0)
+
+
+class ThreadSafeTokenGenerator(TokenGenerator):
+    def __init__(self, *values: str):
+        super().__init__(*values)
+        self.lock = threading.Lock()
+
+    def __call__(self, size: int) -> str:
+        with self.lock:
+            return super().__call__(size)
 
 
 def cookie_header(set_cookie: str) -> str:
@@ -45,6 +57,24 @@ def logged_in_manager(
     result = manager.login("admin-secret")
     assert result is not None
     return manager, clock, result, cookie_header(result.set_cookie)
+
+
+def mutation_headers(cookie: str, csrf_token: str) -> dict[str, str]:
+    return {
+        "Cookie": cookie,
+        "Origin": "https://hcs.test",
+        "X-CSRF-Token": csrf_token,
+    }
+
+
+def authorize_mutation(
+    manager: BrowserSessionManager, cookie: str, csrf_token: str
+) -> BrowserPrincipal | None:
+    return manager.authorize_session(
+        mutation_headers(cookie, csrf_token),
+        ["https://hcs.test"],
+        mutation=True,
+    )
 
 
 class BrowserSessionManagerTests(unittest.TestCase):
@@ -91,6 +121,18 @@ class BrowserSessionManagerTests(unittest.TestCase):
         )
 
         self.assertIsNone(manager.login("wrong-secret"))
+        self.assertEqual(tokens.sizes, [])
+
+    def test_empty_configured_and_supplied_login_tokens_fail_closed(self):
+        tokens = TokenGenerator("unused-session", "unused-csrf")
+        manager = BrowserSessionManager(
+            admin_token="",
+            secure_cookie=True,
+            now=lambda: 1_000.0,
+            token_urlsafe=tokens,
+        )
+
+        self.assertIsNone(manager.login(""))
         self.assertEqual(tokens.sizes, [])
 
     def test_unicode_wrong_login_is_rejected_without_generating_tokens(self):
@@ -141,64 +183,100 @@ class BrowserSessionManagerTests(unittest.TestCase):
         login = manager.login("admin-secret")
         assert login is not None
         cookie = cookie_header(login.set_cookie)
-        origin = "https://hcs.test"
 
         first = manager.session_payload({"cookie": cookie})
 
         self.assertEqual(first["csrf_token"], "csrf-rotated-first")
         self.assertNotEqual(first["csrf_token"], login.csrf_token)
         self.assertNotIn("session_id", first)
-        self.assertIsNone(
-            manager.authorize_session(
-                {
-                    "Cookie": cookie,
-                    "Origin": origin,
-                    "X-CSRF-Token": login.csrf_token,
-                },
-                [origin],
-                mutation=True,
-            )
+        self.assertIsNotNone(
+            authorize_mutation(manager, cookie, login.csrf_token)
         )
         self.assertIsNotNone(
-            manager.authorize_session(
-                {
-                    "Cookie": cookie,
-                    "Origin": origin,
-                    "X-CSRF-Token": first["csrf_token"],
-                },
-                [origin],
-                mutation=True,
-            )
+            authorize_mutation(manager, cookie, first["csrf_token"])
         )
 
         second = manager.session_payload({"Cookie": cookie})
 
         self.assertEqual(second["csrf_token"], "csrf-rotated-second")
         self.assertNotEqual(second["csrf_token"], first["csrf_token"])
-        self.assertIsNone(
-            manager.authorize_session(
-                {
-                    "Cookie": cookie,
-                    "Origin": origin,
-                    "X-CSRF-Token": first["csrf_token"],
-                },
-                [origin],
-                mutation=True,
-            )
+        self.assertIsNotNone(
+            authorize_mutation(manager, cookie, login.csrf_token)
         )
         self.assertIsNotNone(
-            manager.authorize_session(
-                {
-                    "Cookie": cookie,
-                    "Origin": origin,
-                    "X-CSRF-Token": second["csrf_token"],
-                },
-                [origin],
-                mutation=True,
-            )
+            authorize_mutation(manager, cookie, first["csrf_token"])
+        )
+        self.assertIsNotNone(
+            authorize_mutation(manager, cookie, second["csrf_token"])
         )
         self.assertEqual(manager.session_payload({}), {"authenticated": False})
         self.assertEqual(tokens.sizes, [32, 32, 32, 32])
+
+    def test_concurrent_session_payload_tokens_remain_valid(self):
+        tokens = ThreadSafeTokenGenerator(
+            "session-secret",
+            "csrf-login",
+            "csrf-refresh-one",
+            "csrf-refresh-two",
+        )
+        manager = BrowserSessionManager(
+            admin_token="admin-secret",
+            secure_cookie=True,
+            now=lambda: 1_000.0,
+            token_urlsafe=tokens,
+        )
+        login = manager.login("admin-secret")
+        assert login is not None
+        cookie = cookie_header(login.set_cookie)
+        barrier = threading.Barrier(3)
+        payloads: list[dict[str, object]] = []
+
+        def refresh() -> None:
+            barrier.wait()
+            payloads.append(manager.session_payload({"Cookie": cookie}))
+
+        threads = [threading.Thread(target=refresh) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(timeout=2)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        csrf_tokens = {payload["csrf_token"] for payload in payloads}
+        self.assertEqual(csrf_tokens, {"csrf-refresh-one", "csrf-refresh-two"})
+        for csrf_token in csrf_tokens:
+            self.assertIsNotNone(authorize_mutation(manager, cookie, csrf_token))
+
+    def test_csrf_window_evicts_only_tokens_beyond_bound(self):
+        tokens = TokenGenerator(
+            "session-secret",
+            "csrf-login",
+            "csrf-refresh-one",
+            "csrf-refresh-two",
+            "csrf-refresh-three",
+            "csrf-refresh-four",
+            "csrf-refresh-five",
+        )
+        manager = BrowserSessionManager(
+            admin_token="admin-secret",
+            secure_cookie=True,
+            now=lambda: 1_000.0,
+            token_urlsafe=tokens,
+        )
+        login = manager.login("admin-secret")
+        assert login is not None
+        cookie = cookie_header(login.set_cookie)
+        refreshes = [
+            manager.session_payload({"Cookie": cookie})["csrf_token"]
+            for _ in range(5)
+        ]
+
+        self.assertEqual(manager.MAX_CSRF_TOKENS, 4)
+        self.assertIsNone(authorize_mutation(manager, cookie, login.csrf_token))
+        self.assertIsNone(authorize_mutation(manager, cookie, refreshes[0]))
+        for csrf_token in refreshes[-4:]:
+            self.assertIsNotNone(authorize_mutation(manager, cookie, csrf_token))
 
     def test_non_mutating_authorization_needs_no_csrf_or_origin(self):
         manager, _clock, _result, cookie = logged_in_manager()
@@ -283,6 +361,56 @@ class BrowserSessionManagerTests(unittest.TestCase):
 
         self.assertEqual(principal.role, "administrator")
 
+    def test_mutation_rejects_scalar_and_one_shot_allowed_origins(self):
+        manager, _clock, result, cookie = logged_in_manager()
+        headers = mutation_headers(cookie, result.csrf_token)
+
+        invalid_allowed_origins = [
+            "prefix-https://hcs.test-suffix",
+            b"prefix-https://hcs.test-suffix",
+            iter(["https://hcs.test"]),
+        ]
+        for allowed_origins in invalid_allowed_origins:
+            with self.subTest(allowed_origins=allowed_origins):
+                self.assertIsNone(
+                    manager.authorize_session(
+                        headers, allowed_origins, mutation=True
+                    )
+                )
+
+    def test_duplicate_security_headers_never_authorize(self):
+        manager, _clock, result, cookie = logged_in_manager()
+
+        repeated_cookie = Message()
+        repeated_cookie["Cookie"] = cookie
+        repeated_cookie["Cookie"] = "osint_admin_session=unknown"
+
+        repeated_origin = Message()
+        repeated_origin["Cookie"] = cookie
+        repeated_origin["Origin"] = "https://hcs.test"
+        repeated_origin["Origin"] = "https://other.test"
+        repeated_origin["X-CSRF-Token"] = result.csrf_token
+
+        repeated_csrf = Message()
+        repeated_csrf["Cookie"] = cookie
+        repeated_csrf["Origin"] = "https://hcs.test"
+        repeated_csrf["X-CSRF-Token"] = result.csrf_token
+        repeated_csrf["X-CSRF-Token"] = "wrong"
+
+        self.assertIsNone(
+            manager.authorize_session(repeated_cookie, [], mutation=False)
+        )
+        self.assertIsNone(
+            manager.authorize_session(
+                repeated_origin, ["https://hcs.test"], mutation=True
+            )
+        )
+        self.assertIsNone(
+            manager.authorize_session(
+                repeated_csrf, ["https://hcs.test"], mutation=True
+            )
+        )
+
     def test_malformed_and_ambiguous_cookies_are_rejected(self):
         manager, _clock, _result, cookie = logged_in_manager()
 
@@ -329,6 +457,147 @@ class BrowserSessionManagerTests(unittest.TestCase):
 
         self.assertIsNone(
             manager.authorize_session({"Cookie": cookie}, [], mutation=False)
+        )
+
+    def test_logout_rejects_ambiguous_cookie_headers_without_revoking(self):
+        manager, _clock, _result, cookie = logged_in_manager()
+        headers = Message()
+        headers["Cookie"] = cookie
+        headers["Cookie"] = "osint_admin_session=unknown"
+
+        manager.logout(headers)
+
+        self.assertIsNotNone(
+            manager.authorize_session({"Cookie": cookie}, [], mutation=False)
+        )
+        manager.logout(
+            {"Cookie": f"{cookie}; osint_admin_session=unknown"}
+        )
+        self.assertIsNotNone(
+            manager.authorize_session({"Cookie": cookie}, [], mutation=False)
+        )
+        manager.logout({"Cookie": cookie})
+        self.assertIsNone(
+            manager.authorize_session({"Cookie": cookie}, [], mutation=False)
+        )
+
+    def test_login_retries_session_id_and_global_csrf_collisions(self):
+        tokens = TokenGenerator(
+            "session-one",
+            "csrf-one",
+            "session-one",
+            "session-two",
+            "csrf-one",
+            "csrf-two",
+        )
+        manager = BrowserSessionManager(
+            admin_token="admin-secret",
+            secure_cookie=True,
+            now=lambda: 1_000.0,
+            token_urlsafe=tokens,
+        )
+
+        first = manager.login("admin-secret")
+        second = manager.login("admin-secret")
+
+        assert first is not None and second is not None
+        first_cookie = cookie_header(first.set_cookie)
+        second_cookie = cookie_header(second.set_cookie)
+        self.assertEqual(first_cookie, "osint_admin_session=session-one")
+        self.assertEqual(second_cookie, "osint_admin_session=session-two")
+        self.assertIsNotNone(authorize_mutation(manager, first_cookie, "csrf-one"))
+        self.assertIsNotNone(authorize_mutation(manager, second_cookie, "csrf-two"))
+        self.assertEqual(tokens.sizes, [32] * 6)
+
+    def test_refresh_retries_session_id_and_valid_csrf_collisions(self):
+        tokens = TokenGenerator(
+            "session-secret",
+            "csrf-login",
+            "session-secret",
+            "csrf-login",
+            "csrf-refresh",
+        )
+        manager = BrowserSessionManager(
+            admin_token="admin-secret",
+            secure_cookie=True,
+            now=lambda: 1_000.0,
+            token_urlsafe=tokens,
+        )
+        login = manager.login("admin-secret")
+        assert login is not None
+        cookie = cookie_header(login.set_cookie)
+
+        payload = manager.session_payload({"Cookie": cookie})
+
+        self.assertEqual(payload["csrf_token"], "csrf-refresh")
+        self.assertIsNotNone(authorize_mutation(manager, cookie, "csrf-login"))
+        self.assertIsNotNone(authorize_mutation(manager, cookie, "csrf-refresh"))
+        self.assertEqual(tokens.sizes, [32] * 5)
+
+    def test_generation_fails_stably_after_bounded_collisions(self):
+        manager = BrowserSessionManager(
+            admin_token="admin-secret",
+            secure_cookie=True,
+            now=lambda: 1_000.0,
+            token_urlsafe=lambda _size: "collision",
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError, "^unable to generate unique session credentials$"
+        ) as raised:
+            manager.login("admin-secret")
+
+        self.assertNotIn("admin-secret", str(raised.exception))
+
+    def test_login_purges_expired_sessions(self):
+        clock = MutableClock(1_000.0)
+        tokens = TokenGenerator("session-one", "csrf-one", "session-two", "csrf-two")
+        manager = BrowserSessionManager(
+            admin_token="admin-secret",
+            secure_cookie=True,
+            session_ttl_seconds=10,
+            now=clock,
+            token_urlsafe=tokens,
+        )
+        manager.login("admin-secret")
+
+        clock.value = 1_010.0
+        manager.login("admin-secret")
+
+        self.assertEqual(set(manager._sessions), {"session-two"})
+
+    def test_login_evicts_oldest_session_at_live_session_bound(self):
+        limit = 128
+        values = [
+            value
+            for index in range(limit + 1)
+            for value in (f"session-{index}", f"csrf-{index}")
+        ]
+        tokens = TokenGenerator(*values)
+        clock = MutableClock(1_000.0)
+        manager = BrowserSessionManager(
+            admin_token="admin-secret",
+            secure_cookie=True,
+            now=clock,
+            token_urlsafe=tokens,
+        )
+        cookies: list[str] = []
+        for index in range(limit + 1):
+            clock.value = 1_000.0 + index
+            login = manager.login("admin-secret")
+            assert login is not None
+            cookies.append(cookie_header(login.set_cookie))
+
+        self.assertEqual(len(manager._sessions), limit)
+        self.assertEqual(manager.MAX_LIVE_SESSIONS, limit)
+        self.assertIsNone(
+            manager.authorize_session({"Cookie": cookies[0]}, [], mutation=False)
+        )
+        self.assertIsNotNone(
+            manager.authorize_session({"Cookie": cookies[1]}, [], mutation=False)
+        )
+        self.assertIsNotNone(
+            manager.authorize_session({"Cookie": cookies[-1]}, [], mutation=False)
         )
 
     def test_development_cookie_omits_secure_attribute(self):
