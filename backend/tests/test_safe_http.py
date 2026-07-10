@@ -1,4 +1,6 @@
 import socket
+import threading
+import time
 import traceback
 import unittest
 from unittest.mock import patch
@@ -11,6 +13,7 @@ from app.core.safe_http import (
     RedirectLimitExceeded,
     ResponseTooLarge,
     SafeHttpError,
+    ValidatedTarget,
     connect_pinned,
     safe_fetch,
     validate_public_url,
@@ -181,6 +184,27 @@ class SafeHttpValidationTests(unittest.TestCase):
         with self.assertRaises(BlockedNetworkTarget):
             validate_public_url("https://example.com", resolver=resolver_for(PUBLIC_IP, "10.0.0.2"))
 
+    def test_rejects_excessive_unique_answers_before_connector(self):
+        addresses = tuple(f"8.8.8.{index}" for index in range(1, 10))
+        connector_calls = []
+
+        with self.assertRaises(InvalidHttpTarget):
+            safe_fetch(
+                "https://example.com/",
+                timeout_seconds=1,
+                max_bytes=10,
+                resolver=resolver_for(*addresses),
+                connector=lambda *args: connector_calls.append(args),
+            )
+
+        self.assertEqual(connector_calls, [])
+
+    def test_excessive_answers_with_private_member_remain_blocked(self):
+        addresses = tuple(f"8.8.8.{index}" for index in range(1, 10)) + ("10.0.0.1",)
+
+        with self.assertRaises(BlockedNetworkTarget):
+            validate_public_url("https://example.com/", resolver=resolver_for(*addresses))
+
     def test_rejects_invalid_url_forms(self):
         invalid = [
             "ftp://example.com/file",
@@ -197,6 +221,139 @@ class SafeHttpValidationTests(unittest.TestCase):
 
 
 class SafeFetchTests(unittest.TestCase):
+    def test_address_attempts_share_decreasing_timeout_budget(self):
+        target = ValidatedTarget(
+            "http",
+            "example.com",
+            ("1.1.1.1", "8.8.8.8", "9.9.9.9"),
+            80,
+            "/",
+        )
+        budgets = []
+
+        class Connection:
+            def __init__(self, *args, **kwargs):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        def slow_failure(address, timeout):
+            budgets.append(timeout)
+            time.sleep(0.018)
+            raise OSError("late address")
+
+        started = time.monotonic()
+        with patch.object(safe_http_module.socket, "create_connection", side_effect=slow_failure), patch.object(
+            safe_http_module.http.client, "HTTPConnection", side_effect=Connection
+        ):
+            with self.assertRaisesRegex(SafeHttpError, "^HTTP fetch timed out$"):
+                connect_pinned(target, timeout_seconds=0.03, headers={"Host": "example.com"})
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 0.08)
+        self.assertGreaterEqual(len(budgets), 1)
+        self.assertLess(len(budgets), len(target.validated_ips) + 1)
+        self.assertTrue(all(later < earlier for earlier, later in zip(budgets, budgets[1:])))
+
+    def test_connect_pinned_rejects_excessive_addresses_without_attempting_any(self):
+        target = ValidatedTarget(
+            "http",
+            "example.com",
+            tuple(f"8.8.8.{index}" for index in range(1, 10)),
+            80,
+            "/",
+        )
+        attempts = []
+
+        with patch.object(
+            safe_http_module.socket,
+            "create_connection",
+            side_effect=lambda *args, **kwargs: attempts.append(args) or (_ for _ in ()).throw(OSError()),
+        ):
+            with self.assertRaises(InvalidHttpTarget):
+                connect_pinned(target, timeout_seconds=1, headers={"Host": "example.com"})
+
+        self.assertEqual(attempts, [])
+
+    def test_redirects_share_deadline_and_cleanup_late_response(self):
+        budgets = []
+        resources = []
+
+        def connector(target, timeout_seconds, headers):
+            budgets.append(timeout_seconds)
+            response = FakeResponse(302, headers={"Location": "/next"})
+            connection = FakeConnection()
+            resources.append((response, connection))
+            time.sleep(0.025)
+            return response, connection
+
+        started = time.monotonic()
+        with self.assertRaisesRegex(SafeHttpError, "^HTTP fetch timed out$"):
+            safe_fetch(
+                "https://example.com/start",
+                timeout_seconds=0.04,
+                max_bytes=10,
+                resolver=resolver_for(PUBLIC_IP),
+                connector=connector,
+            )
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 0.09)
+        self.assertGreaterEqual(len(budgets), 1)
+        self.assertTrue(all(later < earlier for earlier, later in zip(budgets, budgets[1:])))
+        self.assertTrue(all(response.closed and connection.closed for response, connection in resources))
+
+    def test_blocking_lazy_resolver_is_bounded_by_total_deadline(self):
+        release = threading.Event()
+
+        def resolver(host, port, *args, **kwargs):
+            def answers():
+                release.wait(0.2)
+                yield (socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC_IP, port))
+
+            return answers()
+
+        started = time.monotonic()
+        try:
+            with self.assertRaisesRegex(SafeHttpError, "^HTTP fetch timed out$") as caught:
+                safe_fetch(
+                    "https://example.com/",
+                    timeout_seconds=0.03,
+                    max_bytes=10,
+                    resolver=resolver,
+                    connector=lambda *args: self.fail("connector must not run"),
+                )
+        finally:
+            release.set()
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 0.12)
+        self.assertNotIn("example.com", "".join(traceback.format_exception(caught.exception)))
+
+    def test_late_read_exhausts_deadline_and_cleans_resources(self):
+        class LateResponse(FakeResponse):
+            def read(self, limit):
+                time.sleep(0.04)
+                return b"ok"
+
+        response = LateResponse()
+        connection = FakeConnection()
+        started = time.monotonic()
+
+        with self.assertRaisesRegex(SafeHttpError, "^HTTP fetch timed out$"):
+            safe_fetch(
+                "https://example.com/",
+                timeout_seconds=0.02,
+                max_bytes=10,
+                resolver=resolver_for(PUBLIC_IP),
+                connector=lambda *args: (response, connection),
+            )
+
+        self.assertLess(time.monotonic() - started, 0.08)
+        self.assertTrue(response.closed)
+        self.assertTrue(connection.closed)
+
     def test_fetches_public_target_with_original_host_and_pinned_ips(self):
         seen = []
         response = FakeResponse(headers={"Content-Type": "text/plain"})

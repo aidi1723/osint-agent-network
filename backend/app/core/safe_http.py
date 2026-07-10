@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from concurrent.futures import Future
 from dataclasses import dataclass
 import http.client
 import ipaddress
+import queue
 import re
 import socket
 import ssl
+import threading
+import time
 from typing import Callable, Mapping
 from urllib.parse import urljoin, urlsplit
 
@@ -55,9 +59,37 @@ Resolver = Callable[..., list[tuple]]
 Connector = Callable[[ValidatedTarget, float, Mapping[str, str]], tuple[object, object]]
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+MAX_VALIDATED_ADDRESSES = 8  # Bound DNS fan-out and sequential connection failover.
+_RESOLVER_WORKERS = 4
+_RESOLVER_QUEUE: queue.Queue = queue.Queue(maxsize=32)
 
 
-def validate_public_url(url: str, resolver: Resolver = socket.getaddrinfo) -> ValidatedTarget:
+def _resolver_worker() -> None:
+    while True:
+        future, resolver, hostname, port = _RESOLVER_QUEUE.get()
+        if future.set_running_or_notify_cancel():
+            try:
+                answers = resolver(hostname, port, type=socket.SOCK_STREAM)
+                future.set_result(list(answers))
+            except BaseException as exc:
+                future.set_exception(exc)
+        _RESOLVER_QUEUE.task_done()
+
+
+for _worker_index in range(_RESOLVER_WORKERS):
+    threading.Thread(
+        target=_resolver_worker,
+        name=f"safe-http-resolver-{_worker_index}",
+        daemon=True,
+    ).start()
+
+
+def validate_public_url(
+    url: str,
+    resolver: Resolver = socket.getaddrinfo,
+    *,
+    deadline: float | None = None,
+) -> ValidatedTarget:
     if not isinstance(url, str) or not url or any(ord(char) <= 32 or ord(char) == 127 for char in url):
         raise InvalidHttpTarget("invalid HTTP target")
     try:
@@ -94,15 +126,21 @@ def validate_public_url(url: str, resolver: Resolver = socket.getaddrinfo) -> Va
     else:
         addresses: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
         try:
-            answers = resolver(ascii_hostname, port, type=socket.SOCK_STREAM)
+            answers = _resolve_answers(resolver, ascii_hostname, port, deadline)
             for answer in answers:
                 addresses.add(ipaddress.ip_address(answer[4][0]))
+            if deadline is not None:
+                _remaining(deadline)
+        except SafeHttpError:
+            raise
         except (IndexError, KeyError, OSError, TypeError, ValueError):
             raise InvalidHttpTarget("target resolution failed") from None
     if not addresses:
         raise InvalidHttpTarget("target resolution failed")
     if any(not _is_global_address(address) for address in addresses):
         raise BlockedNetworkTarget("network target is blocked")
+    if len(addresses) > MAX_VALIDATED_ADDRESSES:
+        raise InvalidHttpTarget("too many resolved addresses")
 
     ordered = tuple(str(address) for address in sorted(addresses, key=lambda item: (item.version, int(item))))
     request_path = parsed.path or "/"
@@ -122,25 +160,30 @@ def safe_fetch(
 ) -> SafeHttpResponse:
     if max_bytes < 0 or max_redirects < 0 or timeout_seconds <= 0:
         raise ValueError("safe_fetch limits must be positive")
+    deadline = time.monotonic() + timeout_seconds
     connector = connector or connect_pinned
     base_headers = _validated_headers(headers)
     current_url = url
     redirects = 0
 
     while True:
-        target = validate_public_url(current_url, resolver=resolver)
+        _remaining(deadline)
+        target = validate_public_url(current_url, resolver=resolver, deadline=deadline)
         request_headers = dict(base_headers)
         request_headers["Host"] = _host_header(target)
         response = None
         connection = None
         try:
             try:
-                response, connection = connector(target, timeout_seconds, request_headers)
+                response, connection = connector(target, _remaining(deadline), request_headers)
             except SafeHttpError:
                 raise
             except (OSError, TimeoutError, ValueError, http.client.HTTPException):
+                if time.monotonic() >= deadline:
+                    raise SafeHttpError("HTTP fetch timed out") from None
                 raise SafeHttpError("HTTP fetch failed") from None
 
+            _remaining(deadline)
             status = int(getattr(response, "status", 0) or 0)
             response_headers = _copy_headers(getattr(response, "headers", {}))
             if status in _REDIRECT_STATUSES:
@@ -155,9 +198,13 @@ def safe_fetch(
                 continue
 
             try:
+                _set_connection_timeout(connection, _remaining(deadline))
                 body = response.read(max_bytes + 1)
             except (OSError, TimeoutError, http.client.HTTPException):
+                if time.monotonic() >= deadline:
+                    raise SafeHttpError("HTTP fetch timed out") from None
                 raise SafeHttpError("HTTP fetch failed") from None
+            _remaining(deadline)
             if len(body) > max_bytes:
                 raise ResponseTooLarge("HTTP response exceeded size limit")
             return SafeHttpResponse(status, response_headers, body, _canonical_url(target))
@@ -172,33 +219,79 @@ def connect_pinned(
     timeout_seconds: float,
     headers: Mapping[str, str],
 ) -> tuple[http.client.HTTPResponse, http.client.HTTPConnection]:
+    if len(target.validated_ips) > MAX_VALIDATED_ADDRESSES:
+        raise InvalidHttpTarget("too many resolved addresses")
+    deadline = time.monotonic() + timeout_seconds
     last_error: BaseException | None = None
     for address in target.validated_ips:
         raw_socket = None
         connection = None
         succeeded = False
         try:
-            connection = http.client.HTTPConnection(target.original_hostname, target.port, timeout=timeout_seconds)
-            raw_socket = socket.create_connection((address, target.port), timeout=timeout_seconds)
+            remaining = _remaining(deadline)
+            connection = http.client.HTTPConnection(target.original_hostname, target.port, timeout=remaining)
+            raw_socket = socket.create_connection((address, target.port), timeout=remaining)
+            _set_socket_timeout(raw_socket, _remaining(deadline))
             if target.scheme == "https":
                 raw_socket = ssl.create_default_context().wrap_socket(
                     raw_socket,
                     server_hostname=target.original_hostname,
                 )
+                _set_socket_timeout(raw_socket, _remaining(deadline))
             connection.sock = raw_socket
+            _set_socket_timeout(raw_socket, _remaining(deadline))
             connection.request("GET", target.request_path, headers=dict(headers))
+            _set_socket_timeout(raw_socket, _remaining(deadline))
             response = connection.getresponse()
+            _remaining(deadline)
             succeeded = True
             return response, connection
+        except SafeHttpError:
+            raise
         except (OSError, TimeoutError, ValueError, http.client.HTTPException) as exc:
             last_error = exc
         finally:
             if not succeeded:
                 _close(connection)
                 _close(raw_socket)
+        if time.monotonic() >= deadline:
+            raise SafeHttpError("HTTP fetch timed out") from None
     if last_error is None:
         raise OSError("no validated address available")
     raise SafeHttpError("HTTP fetch failed") from None
+
+
+def _resolve_answers(resolver: Resolver, hostname: str, port: int, deadline: float | None) -> list[tuple]:
+    if deadline is None:
+        return list(resolver(hostname, port, type=socket.SOCK_STREAM))
+
+    future: Future = Future()
+    try:
+        _RESOLVER_QUEUE.put_nowait((future, resolver, hostname, port))
+    except queue.Full:
+        raise SafeHttpError("HTTP fetch timed out") from None
+    try:
+        return future.result(timeout=_remaining(deadline))
+    except TimeoutError:
+        future.cancel()
+        raise SafeHttpError("HTTP fetch timed out") from None
+
+
+def _remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise SafeHttpError("HTTP fetch timed out") from None
+    return remaining
+
+
+def _set_socket_timeout(sock: object, timeout_seconds: float) -> None:
+    settimeout = getattr(sock, "settimeout", None)
+    if callable(settimeout):
+        settimeout(timeout_seconds)
+
+
+def _set_connection_timeout(connection: object | None, timeout_seconds: float) -> None:
+    _set_socket_timeout(getattr(connection, "sock", None), timeout_seconds)
 
 
 def _is_global_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
