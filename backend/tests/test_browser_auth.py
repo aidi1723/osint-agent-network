@@ -1,6 +1,7 @@
 import dataclasses
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from email.message import Message
 from http.cookies import SimpleCookie
 
@@ -33,6 +34,26 @@ class ThreadSafeTokenGenerator(TokenGenerator):
     def __call__(self, size: int) -> str:
         with self.lock:
             return super().__call__(size)
+
+
+class ObservableLock:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.waiting = threading.Event()
+
+    def acquire(self) -> None:
+        self._lock.acquire()
+
+    def release(self) -> None:
+        self._lock.release()
+
+    def __enter__(self) -> "ObservableLock":
+        self.waiting.set()
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
+        self._lock.release()
 
 
 def cookie_header(set_cookie: str) -> str:
@@ -75,6 +96,26 @@ def authorize_mutation(
         ["https://hcs.test"],
         mutation=True,
     )
+
+
+def run_after_clock_advance_while_lock_waits(
+    manager: BrowserSessionManager,
+    clock: MutableClock,
+    advanced_time: float,
+    operation,
+):
+    observable_lock = ObservableLock()
+    manager._lock = observable_lock
+    observable_lock.acquire()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(operation)
+        try:
+            if not observable_lock.waiting.wait(timeout=2):
+                raise AssertionError("operation did not attempt the session lock")
+            clock.value = advanced_time
+        finally:
+            observable_lock.release()
+        return future.result(timeout=2)
 
 
 class BrowserSessionManagerTests(unittest.TestCase):
@@ -166,6 +207,81 @@ class BrowserSessionManagerTests(unittest.TestCase):
         self.assertIsNotNone(manager.authorize_session(headers, [], mutation=False))
         clock.value = 1_010.0
         self.assertIsNone(manager.authorize_session(headers, [], mutation=False))
+
+    def test_authorize_rechecks_time_after_waiting_for_session_lock(self):
+        manager, clock, _result, cookie = logged_in_manager(
+            session_ttl_seconds=10
+        )
+
+        principal = run_after_clock_advance_while_lock_waits(
+            manager,
+            clock,
+            1_010.0,
+            lambda: manager.authorize_session(
+                {"Cookie": cookie}, [], mutation=False
+            ),
+        )
+
+        self.assertIsNone(principal)
+
+    def test_session_payload_rechecks_time_after_waiting_for_session_lock(self):
+        clock = MutableClock(1_000.0)
+        tokens = TokenGenerator(
+            "session-secret", "csrf-login", "csrf-refresh"
+        )
+        manager = BrowserSessionManager(
+            admin_token="admin-secret",
+            secure_cookie=True,
+            session_ttl_seconds=10,
+            now=clock,
+            token_urlsafe=tokens,
+        )
+        login = manager.login("admin-secret")
+        assert login is not None
+        cookie = cookie_header(login.set_cookie)
+
+        payload = run_after_clock_advance_while_lock_waits(
+            manager,
+            clock,
+            1_010.0,
+            lambda: manager.session_payload({"Cookie": cookie}),
+        )
+
+        self.assertEqual(payload, {"authenticated": False})
+        self.assertEqual(tokens.sizes, [32, 32])
+
+    def test_login_samples_creation_and_purge_time_inside_session_lock(self):
+        clock = MutableClock(1_000.0)
+        tokens = TokenGenerator(
+            "session-old", "csrf-old", "session-new", "csrf-new"
+        )
+        manager = BrowserSessionManager(
+            admin_token="admin-secret",
+            secure_cookie=True,
+            session_ttl_seconds=10,
+            now=clock,
+            token_urlsafe=tokens,
+        )
+        old_login = manager.login("admin-secret")
+        assert old_login is not None
+
+        new_login = run_after_clock_advance_while_lock_waits(
+            manager,
+            clock,
+            1_010.0,
+            lambda: manager.login("admin-secret"),
+        )
+
+        assert new_login is not None
+        new_cookie = cookie_header(new_login.set_cookie)
+        with self.subTest("expired session purged at lock acquisition time"):
+            self.assertEqual(set(manager._sessions), {"session-new"})
+        with self.subTest("new session lifetime starts at lock acquisition time"):
+            self.assertIsNotNone(
+                manager.authorize_session(
+                    {"Cookie": new_cookie}, [], mutation=False
+                )
+            )
 
     def test_session_payload_rotates_and_persists_fresh_csrf_tokens(self):
         tokens = TokenGenerator(

@@ -65,8 +65,8 @@ class BrowserSessionManager:
         ):
             return None
 
-        timestamp = self._now()
         with self._lock:
+            timestamp = self._now()
             self._purge_expired_sessions_locked(timestamp)
             forbidden = self._active_tokens_locked()
             session_id = self._generate_unique_token(forbidden)
@@ -92,8 +92,8 @@ class BrowserSessionManager:
         if session_id is None:
             return {"authenticated": False}
 
-        timestamp = self._now()
         with self._lock:
+            timestamp = self._now()
             session = self._live_session_locked(session_id, timestamp)
             if session is None:
                 return {"authenticated": False}
@@ -125,8 +125,8 @@ class BrowserSessionManager:
             if origin is None or origin not in allowed_origins:
                 return None
 
-        timestamp = self._now()
         with self._lock:
+            timestamp = self._now()
             session = self._live_session_locked(session_id, timestamp)
             if session is None:
                 return None
