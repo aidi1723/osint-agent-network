@@ -14,7 +14,7 @@ from app.tools.ghunt import GHuntAdapter
 from app.tools.maigret import MaigretAdapter
 from app.tools.phoneinfoga import PhoneInfogaAdapter
 from app.tools.profile_parser import ProfileParserAdapter
-from app.tools.official_site_extractor import OfficialSiteExtractorAdapter
+from app.tools.official_site_extractor import MAX_HTML_BYTES, OfficialSiteExtractorAdapter
 from app.tools.official_site_search import OfficialSiteSearchAdapter
 from app.tools.spiderfoot import SpiderFootAdapter
 from app.tools.socialscan import SocialScanAdapter
@@ -637,6 +637,68 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertTrue(artifact_exists)
         self.assertIn(("email", "sales@example.com"), {(item.type, item.value) for item in parsed.entities})
+
+    def test_run_bounds_high_ratio_gzip_expansion(self):
+        expanded = b"A" * (32 * 1024 * 1024)
+        fetched = SafeHttpResponse(
+            200,
+            {"Content-Encoding": "gzip"},
+            gzip.compress(expanded),
+            "https://example.com/",
+        )
+
+        with patch("app.tools.official_site_extractor.safe_fetch", return_value=fetched), patch(
+            "app.tools.official_site_extractor.gzip.decompress",
+            side_effect=AssertionError("unbounded gzip decode used"),
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                result = OfficialSiteExtractorAdapter().run("url", "https://example.com/", Path(tmpdir), 5)
+                artifact = result.command.expected_artifact.read_bytes()
+
+        self.assertLess(len(fetched.body), 64 * 1024)
+        self.assertEqual(len(artifact), MAX_HTML_BYTES)
+        self.assertEqual(artifact, b"A" * MAX_HTML_BYTES)
+        self.assertIn("truncated=True", result.stdout_excerpt)
+
+    def test_run_bounds_concatenated_gzip_members(self):
+        compressed = gzip.compress(b"A" * MAX_HTML_BYTES) + gzip.compress(b"B" * MAX_HTML_BYTES)
+        fetched = SafeHttpResponse(200, {"Content-Encoding": "gzip"}, compressed, "https://example.com/")
+
+        with patch("app.tools.official_site_extractor.safe_fetch", return_value=fetched):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                result = OfficialSiteExtractorAdapter().run("url", "https://example.com/", Path(tmpdir), 5)
+                artifact = result.command.expected_artifact.read_bytes()
+
+        self.assertEqual(len(artifact), MAX_HTML_BYTES)
+        self.assertEqual(artifact, b"A" * MAX_HTML_BYTES)
+        self.assertIn("truncated=True", result.stdout_excerpt)
+
+    def test_run_preserves_invalid_gzip_fallback_within_cap(self):
+        invalid = b"\x1f\x8bnot-a-valid-stream"
+        fetched = SafeHttpResponse(200, {"Content-Encoding": "gzip"}, invalid, "https://example.com/")
+
+        with patch("app.tools.official_site_extractor.safe_fetch", return_value=fetched):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                result = OfficialSiteExtractorAdapter().run("url", "https://example.com/", Path(tmpdir), 5)
+                artifact = result.command.expected_artifact.read_bytes()
+
+        self.assertEqual(artifact, invalid)
+        self.assertIn("truncated=False", result.stdout_excerpt)
+
+    def test_run_returns_sanitized_failure_for_private_credentialed_url(self):
+        target = "https://user:supersecret@127.0.0.1/private-token"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = OfficialSiteExtractorAdapter().run("url", target, Path(tmpdir), 5)
+            artifact = result.command.expected_artifact.read_bytes()
+
+        rendered = repr(result)
+        for sensitive in ("user", "supersecret", "private-token"):
+            self.assertNotIn(sensitive, rendered)
+            self.assertNotIn(sensitive.encode(), artifact)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr_excerpt, "official site fetch failed")
+        self.assertEqual(artifact, b"")
 
     def test_run_maps_safe_http_failure_without_leaking_url(self):
         adapter = OfficialSiteExtractorAdapter()

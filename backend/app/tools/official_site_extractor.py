@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import gzip
 from html.parser import HTMLParser
+import io
 import json
 import os
 from pathlib import Path
 import re
 
-from app.core.normalization import normalize_target
+from app.core.normalization import NormalizationError, normalize_target
 from app.core.safe_http import SafeHttpError, safe_fetch
 from app.tools.base import (
     NormalizedEntity,
@@ -93,10 +94,17 @@ class OfficialSiteExtractorAdapter:
         )
 
     def run(self, target_type: str, target_value: str, workdir: Path, timeout_seconds: int) -> ToolRunResult:
-        url = self.validate_target(target_type, target_value)
-        command = self.build_command(target_type, url, workdir, timeout_seconds)
-        command.expected_artifact.parent.mkdir(parents=True, exist_ok=True)
+        workdir.mkdir(parents=True, exist_ok=True)
+        artifact = workdir / "official_site_input.html"
+        command = ToolCommand(
+            args=["PARSE_ARTIFACT", "<rejected-target>"],
+            cwd=workdir,
+            expected_artifact=artifact,
+            timeout_seconds=timeout_seconds,
+        )
         try:
+            url = self.validate_target(target_type, target_value)
+            command = self.build_command(target_type, url, workdir, timeout_seconds)
             response = safe_fetch(
                 url,
                 timeout_seconds=min(timeout_seconds, 15),
@@ -116,7 +124,7 @@ class OfficialSiteExtractorAdapter:
                 stdout_excerpt=f"fetched official site html status={status} bytes={len(body[:MAX_HTML_BYTES])} truncated={truncated}",
                 stderr_excerpt="",
             )
-        except SafeHttpError:
+        except (NormalizationError, SafeHttpError):
             command.expected_artifact.write_text("", encoding="utf-8")
             return ToolRunResult(
                 command=command,
@@ -248,8 +256,9 @@ def _decode_http_body(body: bytes, response) -> bytes:
         encoding = str(headers.get("Content-Encoding", "") or "").lower()
     if "gzip" in encoding or body.startswith(b"\x1f\x8b"):
         try:
-            return gzip.decompress(body)
-        except OSError:
+            with gzip.GzipFile(fileobj=io.BytesIO(body)) as stream:
+                return stream.read(MAX_HTML_BYTES + 1)
+        except (EOFError, OSError):
             return body
     return body
 

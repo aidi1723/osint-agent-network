@@ -59,18 +59,22 @@ def normalize_target(target_type: str, value: str) -> str:
         return normalized
 
     if target_type in {"url", "profile_url"}:
-        parsed = urlsplit(raw)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise NormalizationError(f"invalid {target_type}: {value}")
-        hostname = (parsed.hostname or "").lower()
+        try:
+            parsed = urlsplit(raw)
+            hostname = (parsed.hostname or "").lower()
+            has_userinfo = parsed.username is not None or parsed.password is not None
+        except ValueError:
+            raise NormalizationError(f"invalid {target_type} target") from None
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or not hostname or has_userinfo:
+            raise NormalizationError(f"invalid {target_type} target")
         if hostname in _PRIVATE_HOSTS or hostname.endswith(".local"):
-            raise NormalizationError(f"private {target_type}: {value}")
+            raise NormalizationError(f"private {target_type} target")
         try:
             literal_address = ipaddress.ip_address(hostname)
         except ValueError:
             literal_address = _legacy_ipv4_address(hostname)
         if literal_address is not None and not _is_public_address(literal_address):
-            raise NormalizationError(f"private {target_type}: {value}")
+            raise NormalizationError(f"private {target_type} target")
         return urlunsplit(
             (
                 parsed.scheme.lower(),

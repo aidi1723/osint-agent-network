@@ -67,8 +67,8 @@ def validate_public_url(url: str, resolver: Resolver = socket.getaddrinfo) -> Va
         port = parsed.port
         username = parsed.username
         password = parsed.password
-    except (TypeError, ValueError) as exc:
-        raise InvalidHttpTarget("invalid HTTP target") from exc
+    except (TypeError, ValueError):
+        raise InvalidHttpTarget("invalid HTTP target") from None
 
     if scheme not in {"http", "https"} or not hostname:
         raise InvalidHttpTarget("invalid HTTP target")
@@ -79,8 +79,8 @@ def validate_public_url(url: str, resolver: Resolver = socket.getaddrinfo) -> Va
 
     try:
         ascii_hostname = hostname.encode("idna").decode("ascii").lower().rstrip(".")
-    except UnicodeError as exc:
-        raise InvalidHttpTarget("invalid HTTP target") from exc
+    except UnicodeError:
+        raise InvalidHttpTarget("invalid HTTP target") from None
     if not ascii_hostname or not _valid_hostname(ascii_hostname):
         raise InvalidHttpTarget("invalid HTTP target")
 
@@ -97,8 +97,8 @@ def validate_public_url(url: str, resolver: Resolver = socket.getaddrinfo) -> Va
             answers = resolver(ascii_hostname, port, type=socket.SOCK_STREAM)
             for answer in answers:
                 addresses.add(ipaddress.ip_address(answer[4][0]))
-        except (IndexError, KeyError, OSError, TypeError, ValueError) as exc:
-            raise InvalidHttpTarget("target resolution failed") from exc
+        except (IndexError, KeyError, OSError, TypeError, ValueError):
+            raise InvalidHttpTarget("target resolution failed") from None
     if not addresses:
         raise InvalidHttpTarget("target resolution failed")
     if any(not _is_global_address(address) for address in addresses):
@@ -138,8 +138,8 @@ def safe_fetch(
                 response, connection = connector(target, timeout_seconds, request_headers)
             except SafeHttpError:
                 raise
-            except (OSError, TimeoutError, ValueError, http.client.HTTPException) as exc:
-                raise SafeHttpError("HTTP fetch failed") from exc
+            except (OSError, TimeoutError, ValueError, http.client.HTTPException):
+                raise SafeHttpError("HTTP fetch failed") from None
 
             status = int(getattr(response, "status", 0) or 0)
             response_headers = _copy_headers(getattr(response, "headers", {}))
@@ -156,8 +156,8 @@ def safe_fetch(
 
             try:
                 body = response.read(max_bytes + 1)
-            except (OSError, TimeoutError, http.client.HTTPException) as exc:
-                raise SafeHttpError("HTTP fetch failed") from exc
+            except (OSError, TimeoutError, http.client.HTTPException):
+                raise SafeHttpError("HTTP fetch failed") from None
             if len(body) > max_bytes:
                 raise ResponseTooLarge("HTTP response exceeded size limit")
             return SafeHttpResponse(status, response_headers, body, _canonical_url(target))
@@ -198,7 +198,7 @@ def connect_pinned(
                 _close(raw_socket)
     if last_error is None:
         raise OSError("no validated address available")
-    raise last_error
+    raise SafeHttpError("HTTP fetch failed") from None
 
 
 def _is_global_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:

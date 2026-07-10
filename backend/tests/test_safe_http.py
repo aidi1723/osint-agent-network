@@ -1,4 +1,5 @@
 import socket
+import traceback
 import unittest
 from unittest.mock import patch
 
@@ -151,7 +152,8 @@ class SafeHttpValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(InvalidHttpTarget, "^target resolution failed$") as caught:
             validate_public_url("https://example.com/", resolver=lambda *args, **kwargs: lazy_answers())
 
-        self.assertNotIn("secret.internal", str(caught.exception))
+        formatted = "".join(traceback.format_exception(caught.exception))
+        self.assertNotIn("secret.internal", formatted)
 
     def test_malformed_lazy_resolver_answer_is_stable(self):
         for answer in ((socket.AF_INET,), {"address": "secret.internal"}, None):
@@ -261,6 +263,28 @@ class SafeFetchTests(unittest.TestCase):
                     )
                 self.assertNotIn("secret", str(caught.exception))
                 self.assertEqual(connector_calls, [])
+
+    def test_header_and_connector_tracebacks_do_not_expose_sensitive_causes(self):
+        with self.assertRaises(InvalidHttpTarget) as header_error:
+            safe_fetch(
+                "https://example.com/",
+                timeout_seconds=1,
+                max_bytes=10,
+                headers={"X-Test": "supersecret\nvalue"},
+                resolver=resolver_for(PUBLIC_IP),
+                connector=lambda *args: self.fail("connector must not run"),
+            )
+        self.assertNotIn("supersecret", "".join(traceback.format_exception(header_error.exception)))
+
+        with self.assertRaises(SafeHttpError) as connector_error:
+            safe_fetch(
+                "https://example.com/",
+                timeout_seconds=1,
+                max_bytes=10,
+                resolver=resolver_for(PUBLIC_IP),
+                connector=lambda *args: (_ for _ in ()).throw(OSError("supersecret.internal connector")),
+            )
+        self.assertNotIn("supersecret.internal", "".join(traceback.format_exception(connector_error.exception)))
 
     def test_blocked_target_never_calls_connector(self):
         calls = []
@@ -457,9 +481,29 @@ class SafeFetchTests(unittest.TestCase):
                     connector=connect_pinned,
                 )
 
-        self.assertNotIn("secret", str(caught.exception))
+        self.assertNotIn("secret", "".join(traceback.format_exception(caught.exception)))
         self.assertTrue(connection.closed)
         self.assertTrue(raw_socket.closed)
+
+    def test_socket_failure_traceback_is_sanitized_and_connection_is_closed(self):
+        class Connection:
+            def __init__(self, *args, **kwargs):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        connection = Connection()
+        with patch.object(
+            safe_http_module.socket,
+            "create_connection",
+            side_effect=OSError("supersecret.internal socket"),
+        ), patch.object(safe_http_module.http.client, "HTTPConnection", return_value=connection):
+            with self.assertRaises(SafeHttpError) as caught:
+                safe_fetch("http://8.8.8.8/", timeout_seconds=1, max_bytes=10)
+
+        self.assertNotIn("supersecret.internal", "".join(traceback.format_exception(caught.exception)))
+        self.assertTrue(connection.closed)
 
 
 if __name__ == "__main__":

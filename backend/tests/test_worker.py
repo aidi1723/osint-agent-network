@@ -15,6 +15,7 @@ from app.tools.base import (
 )
 from app.services.store import MemoryStore, SQLiteStore
 from app.services.worker import run_investigation_jobs
+from app.tools.official_site_extractor import OfficialSiteExtractorAdapter
 
 
 class FakeAdapter:
@@ -361,6 +362,39 @@ class MissingCommandAdapter:
 
 
 class WorkerTests(unittest.TestCase):
+    def test_private_credentialed_official_site_failure_is_not_reflected_in_worker_events(self):
+        target = "https://user:supersecret@127.0.0.1/private-token"
+        store = MemoryStore()
+        investigation = store.create_investigation("unsafe url", "domain", "example.com", "quick")
+        first_job = store.list_jobs(investigation.id)[0]
+        store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    **first_job,
+                    "tool_name": "official_site_extractor",
+                    "target_type": "url",
+                    "target_value": target,
+                    "status": "QUEUED",
+                }
+            ],
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            run_investigation_jobs(
+                store,
+                investigation.id,
+                max_jobs=1,
+                artifact_root=Path(tmpdir),
+                adapter_factory=lambda name: OfficialSiteExtractorAdapter(),
+            )
+            artifacts = [path.read_bytes() for path in Path(tmpdir).rglob("*") if path.is_file()]
+
+        events = repr(store.get_investigation(investigation.id)["events"])
+        for sensitive in ("user", "supersecret", "private-token"):
+            self.assertNotIn(sensitive, events)
+            self.assertTrue(all(sensitive.encode() not in artifact for artifact in artifacts))
+
     def test_worker_runs_agent_orchestration_jobs_locally(self):
         store = MemoryStore()
         investigation = store.create_investigation(
