@@ -69,6 +69,9 @@ class AgentIdentityStoreContract:
     def tool_output_storage_failure(self):
         raise NotImplementedError
 
+    def tool_output_finalization_failure(self):
+        raise NotImplementedError
+
     def tool_output_submission_stores(self):
         return (self.store, self.store)
 
@@ -726,6 +729,178 @@ class AgentIdentityStoreContract:
             self.assertEqual(detail[section], [])
         self.assertEqual(self.store.list_jobs(investigation.id)[0]["status"], "CLAIMED")
 
+    def test_tool_output_upserts_duplicate_and_existing_records_with_new_counts(self):
+        registration, investigation, job_id, payload = self.create_tool_output_claim(
+            "dedup"
+        )
+        existing_entity = self.store.add_entity(
+            investigation.id,
+            "domain",
+            "found.dedup.example",
+            "amass",
+            0.95,
+        )
+        existing_evidence = self.store.add_evidence(
+            investigation.id,
+            "found.dedup.example",
+            "dns_resolution",
+            "amass",
+            "preexisting snippet",
+        )
+        existing_relationship = self.store.add_relationship(
+            investigation.id,
+            "dedup.example",
+            "found.dedup.example",
+            "domain_has_subdomain",
+            0.95,
+        )
+        payload["entities"] = [
+            {**payload["entities"][0], "confidence": 0.4},
+            {
+                **payload["entities"][0],
+                "value": "new.dedup.example",
+                "confidence": 0.4,
+            },
+            {
+                **payload["entities"][0],
+                "value": "new.dedup.example",
+                "confidence": 0.9,
+            },
+        ]
+        payload["evidence"] = [
+            {**payload["evidence"][0], "snippet": "updated existing snippet"},
+            {
+                **payload["evidence"][0],
+                "entity_value": "new.dedup.example",
+                "snippet": "first new snippet",
+            },
+            {
+                **payload["evidence"][0],
+                "entity_value": "new.dedup.example",
+                "snippet": "last new snippet",
+            },
+        ]
+        payload["relationships"] = [
+            {**payload["relationships"][0], "confidence": 0.4},
+            {
+                **payload["relationships"][0],
+                "to": "new.dedup.example",
+                "confidence": 0.4,
+            },
+            {
+                **payload["relationships"][0],
+                "to": "new.dedup.example",
+                "confidence": 0.9,
+            },
+        ]
+        batch_time = "2026-07-10T12:00:00+00:00"
+
+        with patch("app.services.store._now", return_value=batch_time):
+            result = self.store.submit_tool_job_output(
+                registration["id"], investigation.id, job_id, payload
+            )
+
+        self.assertEqual(
+            result["created"],
+            {"entities": 1, "evidence": 1, "relationships": 1},
+        )
+        detail = self.store.get_investigation(investigation.id)
+        entities = {item["value"]: item for item in detail["entities"]}
+        evidence = {item["entity_value"]: item for item in detail["evidence"]}
+        relationships = {item["to_value"]: item for item in detail["relationships"]}
+        self.assertEqual(len(entities), 2)
+        self.assertEqual(len(evidence), 2)
+        self.assertEqual(len(relationships), 2)
+        self.assertEqual(entities["found.dedup.example"]["id"], existing_entity["id"])
+        self.assertEqual(entities["found.dedup.example"]["confidence"], 0.95)
+        self.assertEqual(
+            entities["found.dedup.example"]["created_at"],
+            existing_entity["created_at"],
+        )
+        self.assertEqual(entities["new.dedup.example"]["confidence"], 0.9)
+        self.assertEqual(entities["new.dedup.example"]["created_at"], batch_time)
+        self.assertEqual(
+            evidence["found.dedup.example"]["id"], existing_evidence["id"]
+        )
+        self.assertEqual(
+            evidence["found.dedup.example"]["snippet"], "updated existing snippet"
+        )
+        self.assertEqual(evidence["found.dedup.example"]["created_at"], batch_time)
+        self.assertEqual(evidence["new.dedup.example"]["snippet"], "last new snippet")
+        self.assertEqual(evidence["new.dedup.example"]["created_at"], batch_time)
+        self.assertEqual(
+            relationships["found.dedup.example"]["id"],
+            existing_relationship["id"],
+        )
+        self.assertEqual(
+            relationships["found.dedup.example"]["confidence"], 0.95
+        )
+        self.assertEqual(
+            relationships["found.dedup.example"]["created_at"],
+            existing_relationship["created_at"],
+        )
+        self.assertEqual(relationships["new.dedup.example"]["confidence"], 0.9)
+        self.assertEqual(
+            relationships["new.dedup.example"]["created_at"], batch_time
+        )
+
+    def test_tool_output_rollback_restores_updated_existing_records(self):
+        registration, investigation, job_id, payload = self.create_tool_output_claim(
+            "update-rollback"
+        )
+        self.store.add_entity(
+            investigation.id,
+            "domain",
+            "found.update-rollback.example",
+            "amass",
+            0.2,
+        )
+        self.store.add_evidence(
+            investigation.id,
+            "found.update-rollback.example",
+            "dns_resolution",
+            "amass",
+            "original snippet",
+        )
+        self.store.add_relationship(
+            investigation.id,
+            "update-rollback.example",
+            "found.update-rollback.example",
+            "domain_has_subdomain",
+            0.2,
+        )
+        payload["entities"].append(
+            {
+                **payload["entities"][0],
+                "value": "new.update-rollback.example",
+            }
+        )
+        payload["evidence"].append(
+            {
+                **payload["evidence"][0],
+                "entity_value": "new.update-rollback.example",
+            }
+        )
+        payload["relationships"].append(
+            {
+                **payload["relationships"][0],
+                "to": "new.update-rollback.example",
+            }
+        )
+        before = self.store.get_investigation(investigation.id)
+
+        with self.tool_output_finalization_failure() as expected_error:
+            with self.assertRaises(expected_error):
+                self.store.submit_tool_job_output(
+                    registration["id"], investigation.id, job_id, payload
+                )
+
+        after = self.store.get_investigation(investigation.id)
+        for section in ("entities", "evidence", "relationships"):
+            self.assertEqual(after[section], before[section])
+        self.assertEqual(after["events"], [])
+        self.assertEqual(self.store.list_jobs(investigation.id)[0]["status"], "CLAIMED")
+
 class _MemoryStoreContext:
     def __enter__(self):
         return MemoryStore()
@@ -777,6 +952,15 @@ class MemoryAgentIdentityTests(AgentIdentityStoreContract, unittest.TestCase):
         finally:
             if isinstance(self.store.relationships, FailingRelationships):
                 self.store.relationships = original
+
+    @contextmanager
+    def tool_output_finalization_failure(self):
+        with patch.object(
+            self.store,
+            "_touch_investigation",
+            side_effect=RuntimeError("forced tool output finalization failure"),
+        ):
+            yield RuntimeError
 
 
 class _SQLiteStoreContext:
@@ -853,6 +1037,24 @@ class SQLiteAgentIdentityTests(AgentIdentityStoreContract, unittest.TestCase):
         finally:
             with sqlite3.connect(self.store.db_path) as conn:
                 conn.execute("DROP TRIGGER IF EXISTS fail_tool_relationship_insert")
+
+    @contextmanager
+    def tool_output_finalization_failure(self):
+        with sqlite3.connect(self.store.db_path) as conn:
+            conn.execute(
+                """
+                CREATE TRIGGER fail_tool_output_finalization
+                BEFORE UPDATE ON investigations
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced tool output finalization failure');
+                END
+                """
+            )
+        try:
+            yield sqlite3.IntegrityError
+        finally:
+            with sqlite3.connect(self.store.db_path) as conn:
+                conn.execute("DROP TRIGGER IF EXISTS fail_tool_output_finalization")
 
     def test_import_agent_preserves_existing_credentials_and_safe_lifecycle_fields(self):
         registration = self.register()

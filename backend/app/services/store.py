@@ -488,31 +488,80 @@ class MemoryStore:
             original_investigation_status = investigation.status
             original_updated_at = investigation.updated_at
             inserted: list[tuple[dict, str]] = []
+            updated: list[tuple[object, dict]] = []
+            created = {"entities": 0, "evidence": 0, "relationships": 0}
             try:
                 if event is not None:
                     self.events[event.id] = event
                     inserted.append((self.events, event.id))
                 for entity in entities:
-                    self.entities[entity.id] = entity
-                    inserted.append((self.entities, entity.id))
+                    existing = next(
+                        (
+                            item
+                            for item in self.entities.values()
+                            if _entity_signal_key(item) == _entity_signal_key(entity)
+                        ),
+                        None,
+                    )
+                    if existing is None:
+                        self.entities[entity.id] = entity
+                        inserted.append((self.entities, entity.id))
+                        created["entities"] += 1
+                    else:
+                        updated.append((existing, asdict(existing)))
+                        existing.confidence = max(
+                            existing.confidence, entity.confidence
+                        )
                 for item in evidence:
-                    self.evidence[item.id] = item
-                    inserted.append((self.evidence, item.id))
+                    existing = next(
+                        (
+                            stored
+                            for stored in self.evidence.values()
+                            if _evidence_signal_key(stored)
+                            == _evidence_signal_key(item)
+                        ),
+                        None,
+                    )
+                    if existing is None:
+                        self.evidence[item.id] = item
+                        inserted.append((self.evidence, item.id))
+                        created["evidence"] += 1
+                    else:
+                        updated.append((existing, asdict(existing)))
+                        existing.snippet = item.snippet
+                        existing.created_at = item.created_at
                 for relationship in relationships:
-                    self.relationships[relationship.id] = relationship
-                    inserted.append((self.relationships, relationship.id))
+                    existing = next(
+                        (
+                            item
+                            for item in self.relationships.values()
+                            if _relationship_signal_key(item)
+                            == _relationship_signal_key(relationship)
+                        ),
+                        None,
+                    )
+                    if existing is None:
+                        self.relationships[relationship.id] = relationship
+                        inserted.append((self.relationships, relationship.id))
+                        created["relationships"] += 1
+                    else:
+                        updated.append((existing, asdict(existing)))
+                        existing.confidence = max(
+                            existing.confidence, relationship.confidence
+                        )
                 job.status = "COMPLETED"
                 self._touch_investigation(investigation_id, status="RUNNING")
             except Exception:
                 for collection, item_id in reversed(inserted):
                     collection.pop(item_id, None)
+                for item, original in reversed(updated):
+                    for field_name, value in original.items():
+                        setattr(item, field_name, value)
                 job.status = original_status
                 investigation.status = original_investigation_status
                 investigation.updated_at = original_updated_at
                 raise
-            return _tool_output_result(
-                job_id, entities, evidence, relationships
-            )
+            return _tool_output_result(job_id, created)
 
     def add_event(
         self,
@@ -1849,13 +1898,11 @@ class SQLiteStore:
             )
             if completed.rowcount != 1:
                 return None
-            _insert_tool_output_records(
+            created = _insert_tool_output_records(
                 conn, event, entities, evidence, relationships
             )
             self._touch_investigation(conn, investigation_id, status="RUNNING")
-            return _tool_output_result(
-                job_id, entities, evidence, relationships
-            )
+            return _tool_output_result(job_id, created)
 
     def add_event(
         self,
@@ -3575,7 +3622,78 @@ def _build_tool_output_records(
         )
         for item in payload.get("relationships", [])
     ]
+    entities, evidence, relationships = _coalesce_tool_output_records(
+        entities, evidence, relationships
+    )
     return event, entities, evidence, relationships
+
+
+def _entity_signal_key(entity: Entity) -> tuple[str, str, str, str]:
+    return (
+        entity.investigation_id,
+        entity.type,
+        entity.value,
+        entity.source_tool,
+    )
+
+
+def _evidence_signal_key(evidence: Evidence) -> tuple[str, str, str, str]:
+    return (
+        evidence.investigation_id,
+        evidence.entity_value,
+        evidence.evidence_kind,
+        evidence.source_tool,
+    )
+
+
+def _relationship_signal_key(
+    relationship: Relationship,
+) -> tuple[str, str, str, str]:
+    return (
+        relationship.investigation_id,
+        relationship.from_value,
+        relationship.to_value,
+        relationship.relationship_type,
+    )
+
+
+def _coalesce_tool_output_records(
+    entities: list[Entity],
+    evidence: list[Evidence],
+    relationships: list[Relationship],
+) -> tuple[list[Entity], list[Evidence], list[Relationship]]:
+    entity_by_key: dict[tuple[str, str, str, str], Entity] = {}
+    for entity in entities:
+        existing = entity_by_key.get(_entity_signal_key(entity))
+        if existing is None:
+            entity_by_key[_entity_signal_key(entity)] = entity
+        else:
+            existing.confidence = max(existing.confidence, entity.confidence)
+
+    evidence_by_key: dict[tuple[str, str, str, str], Evidence] = {}
+    for item in evidence:
+        existing = evidence_by_key.get(_evidence_signal_key(item))
+        if existing is None:
+            evidence_by_key[_evidence_signal_key(item)] = item
+        else:
+            existing.snippet = item.snippet
+            existing.created_at = item.created_at
+
+    relationship_by_key: dict[tuple[str, str, str, str], Relationship] = {}
+    for relationship in relationships:
+        existing = relationship_by_key.get(_relationship_signal_key(relationship))
+        if existing is None:
+            relationship_by_key[_relationship_signal_key(relationship)] = relationship
+        else:
+            existing.confidence = max(
+                existing.confidence, relationship.confidence
+            )
+
+    return (
+        list(entity_by_key.values()),
+        list(evidence_by_key.values()),
+        list(relationship_by_key.values()),
+    )
 
 
 def _insert_tool_output_records(
@@ -3584,7 +3702,8 @@ def _insert_tool_output_records(
     entities: list[Entity],
     evidence: list[Evidence],
     relationships: list[Relationship],
-) -> None:
+) -> dict[str, int]:
+    created = {"entities": 0, "evidence": 0, "relationships": 0}
     if event is not None:
         conn.execute(
             """
@@ -3603,14 +3722,22 @@ def _insert_tool_output_records(
             ),
         )
     for entity in entities:
+        existing = conn.execute(
+            """
+            SELECT 1 FROM entities
+            WHERE investigation_id = ? AND type = ? AND value = ? AND source_tool = ?
+            """,
+            _entity_signal_key(entity),
+        ).fetchone()
+        if existing is None:
+            created["entities"] += 1
         conn.execute(
             """
             INSERT INTO entities (
                 id, investigation_id, type, value, source_tool, confidence, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(investigation_id, type, value, source_tool) DO UPDATE SET
-                confidence = MAX(confidence, excluded.confidence),
-                created_at = excluded.created_at
+                confidence = MAX(confidence, excluded.confidence)
             """,
             (
                 entity.id,
@@ -3623,6 +3750,16 @@ def _insert_tool_output_records(
             ),
         )
     for item in evidence:
+        existing = conn.execute(
+            """
+            SELECT 1 FROM evidence
+            WHERE investigation_id = ? AND entity_value = ?
+              AND evidence_kind = ? AND source_tool = ?
+            """,
+            _evidence_signal_key(item),
+        ).fetchone()
+        if existing is None:
+            created["evidence"] += 1
         conn.execute(
             """
             INSERT INTO evidence (
@@ -3643,14 +3780,23 @@ def _insert_tool_output_records(
             ),
         )
     for relationship in relationships:
+        existing = conn.execute(
+            """
+            SELECT 1 FROM relationships
+            WHERE investigation_id = ? AND from_value = ?
+              AND to_value = ? AND relationship_type = ?
+            """,
+            _relationship_signal_key(relationship),
+        ).fetchone()
+        if existing is None:
+            created["relationships"] += 1
         conn.execute(
             """
             INSERT INTO relationships (
                 id, investigation_id, from_value, to_value, relationship_type, confidence, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(investigation_id, from_value, to_value, relationship_type) DO UPDATE SET
-                confidence = MAX(confidence, excluded.confidence),
-                created_at = excluded.created_at
+                confidence = MAX(confidence, excluded.confidence)
             """,
             (
                 relationship.id,
@@ -3662,22 +3808,17 @@ def _insert_tool_output_records(
                 relationship.created_at,
             ),
         )
+    return created
 
 
 def _tool_output_result(
     job_id: str,
-    entities: list[Entity],
-    evidence: list[Evidence],
-    relationships: list[Relationship],
+    created: dict[str, int],
 ) -> dict:
     return {
         "job_id": job_id,
         "status": "COMPLETED",
-        "created": {
-            "entities": len(entities),
-            "evidence": len(evidence),
-            "relationships": len(relationships),
-        },
+        "created": created,
     }
 
 
