@@ -346,11 +346,15 @@ class ApiHandler(BaseHTTPRequestHandler):
                     agent_name=payload["agent_name"],
                     agent_type=payload["agent_type"],
                     capabilities=payload.get("capabilities", []),
+                    role_tier=payload["role_tier"],
                 )
             except KeyError as exc:
                 self._json({"detail": f"missing field: {exc.args[0]}"}, status=400)
                 return
-            self._json(agent.__dict__, status=201)
+            except ValueError as exc:
+                self._json({"detail": str(exc)}, status=400)
+                return
+            self._json(agent, status=201)
             return
 
         if parsed.path == "/api/agents/heartbeat":

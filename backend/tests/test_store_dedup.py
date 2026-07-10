@@ -7,6 +7,50 @@ from app.services.store import MemoryStore, SQLiteStore
 
 
 class SQLiteDedupTests(unittest.TestCase):
+    def test_sqlite_store_migrates_legacy_agent_identity_columns_idempotently(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "legacy-agent.sqlite")
+            conn = sqlite3.connect(db_path)
+            conn.executescript(
+                """
+                CREATE TABLE agents (
+                    id TEXT PRIMARY KEY,
+                    agent_name TEXT NOT NULL,
+                    agent_type TEXT NOT NULL,
+                    capabilities_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    registered_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL
+                );
+                INSERT INTO agents VALUES (
+                    'legacy-agent', 'legacy', 'cli', '["company"]', 'OFFLINE',
+                    '2026-05-21T00:00:00+00:00', '2026-05-21T01:00:00+00:00'
+                );
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            SQLiteStore(db_path)
+            SQLiteStore(db_path)
+
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM agents WHERE id = 'legacy-agent'").fetchone()
+            migrations = {
+                item[0]
+                for item in conn.execute("SELECT version FROM schema_migrations").fetchall()
+            }
+            conn.close()
+
+        self.assertEqual(row["agent_name"], "legacy")
+        self.assertEqual(row["capabilities_json"], '["company"]')
+        self.assertIsNone(row["role_tier"])
+        self.assertIsNone(row["token_hash"])
+        self.assertIsNone(row["token_created_at"])
+        self.assertIsNone(row["disabled_at"])
+        self.assertIn("20260710_agent_credentials", migrations)
+
     def test_memory_store_deduplicates_facts_by_claim(self):
         store = MemoryStore()
         investigation = store.create_investigation(

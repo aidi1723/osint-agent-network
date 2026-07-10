@@ -7,6 +7,13 @@ import sqlite3
 from threading import Lock
 from uuid import uuid4
 
+from app.core.agent_auth import (
+    AGENT_ROLE_TIERS,
+    AgentRegistration,
+    generate_agent_token,
+    hash_agent_token,
+    validate_agent_role_tier,
+)
 from app.core.ach_engine import EvidenceItem, Hypothesis, run_ach_analysis
 from app.core.completion_policy import build_completion_policy
 from app.core.cross_verification import build_cross_verification_matrix
@@ -19,6 +26,9 @@ from app.core.intelligence_requirements import apply_requirement_updates, build_
 from app.core.planner import StrategyProfile, plan_initial_job_set, plan_initial_jobs
 from app.core.quality import build_quality_assessment, completion_status_for_detail, render_structured_report
 from app.core.registry import default_tool_registry
+
+
+_AGENT_TOKEN_GENERATION_ATTEMPTS = 5
 
 
 @dataclass
@@ -72,6 +82,10 @@ class Agent:
     status: str
     registered_at: str
     last_seen_at: str
+    role_tier: str | None = None
+    token_hash: str | None = field(default=None, repr=False)
+    token_created_at: str | None = None
+    disabled_at: str | None = None
 
 
 @dataclass
@@ -205,20 +219,39 @@ class MemoryStore:
         agent_name: str,
         agent_type: str,
         capabilities: list[str],
-    ) -> Agent:
-        now = _now()
-        agent = Agent(
-            id=str(uuid4()),
-            agent_name=agent_name,
-            agent_type=agent_type,
-            capabilities=capabilities,
-            status="ONLINE",
-            registered_at=now,
-            last_seen_at=now,
-        )
+        role_tier: str,
+    ) -> dict:
+        validated_tier = validate_agent_role_tier(role_tier)
         with self.lock:
-            self.agents[agent.id] = agent
-        return agent
+            token, token_hash = _allocate_agent_token(
+                {agent.token_hash for agent in self.agents.values() if agent.token_hash}
+            )
+            now = _now()
+            agent = next(
+                (item for item in self.agents.values() if item.agent_name == agent_name),
+                None,
+            )
+            if agent is None:
+                agent = Agent(
+                    id=str(uuid4()),
+                    agent_name=agent_name,
+                    agent_type=agent_type,
+                    capabilities=list(capabilities),
+                    status="ONLINE",
+                    registered_at=now,
+                    last_seen_at=now,
+                )
+                self.agents[agent.id] = agent
+            else:
+                agent.agent_type = agent_type
+                agent.capabilities = list(capabilities)
+                agent.status = "ONLINE"
+                agent.last_seen_at = now
+            agent.role_tier = validated_tier
+            agent.token_hash = token_hash
+            agent.token_created_at = now
+            agent.disabled_at = None
+            return AgentRegistration({**_public_agent(agent), "agent_token": token})
 
     def heartbeat_agent(self, agent_id: str) -> dict | None:
         with self.lock:
@@ -227,11 +260,69 @@ class MemoryStore:
                 return None
             agent.last_seen_at = _now()
             agent.status = "ONLINE"
-            return asdict(agent)
+            return _public_agent(agent)
 
     def list_agents(self) -> list[dict]:
         with self.lock:
-            return [asdict(agent) for agent in self.agents.values()]
+            return [_public_agent(agent) for agent in self.agents.values()]
+
+    def resolve_agent_token(self, token: object) -> dict | None:
+        if not isinstance(token, str) or not token:
+            return None
+        token_hash = hash_agent_token(token)
+        with self.lock:
+            matches = [
+                agent
+                for agent in self.agents.values()
+                if agent.token_hash == token_hash
+                and agent.disabled_at is None
+                and agent.role_tier in AGENT_ROLE_TIERS
+            ]
+            if len(matches) != 1:
+                return None
+            return _public_agent(matches[0])
+
+    def rotate_agent_token(self, agent_id: str) -> dict | None:
+        with self.lock:
+            agent = self.agents.get(agent_id)
+            if agent is None:
+                return None
+            token, token_hash = _allocate_agent_token(
+                {item.token_hash for item in self.agents.values() if item.token_hash}
+            )
+            now = _now()
+            agent.token_hash = token_hash
+            agent.token_created_at = now
+            return AgentRegistration(
+                {"agent_id": agent.id, "agent_token": token, "token_created_at": now}
+            )
+
+    def agent_has_investigation_access(
+        self,
+        agent_id: str,
+        investigation_id: str,
+        required_tier: str,
+    ) -> bool:
+        if required_tier not in AGENT_ROLE_TIERS:
+            return False
+        with self.lock:
+            agent = self.agents.get(agent_id)
+            if (
+                agent is None
+                or agent.disabled_at is not None
+                or agent.role_tier != required_tier
+            ):
+                return False
+            investigation = self.investigations.get(investigation_id)
+            if investigation is None:
+                return False
+            if investigation.claimed_by_agent_id == agent_id:
+                return True
+            return any(
+                job.investigation_id == investigation_id
+                and job.claimed_by_agent_id == agent_id
+                for job in self.jobs.values()
+            )
 
     def claim_task(self, agent_id: str, capabilities: list[str]) -> dict | None:
         with self.lock:
@@ -1200,35 +1291,81 @@ class SQLiteStore:
         agent_name: str,
         agent_type: str,
         capabilities: list[str],
-    ) -> Agent:
-        now = _now()
-        agent = Agent(
-            id=str(uuid4()),
-            agent_name=agent_name,
-            agent_type=agent_type,
-            capabilities=capabilities,
-            status="ONLINE",
-            registered_at=now,
-            last_seen_at=now,
-        )
+        role_tier: str,
+    ) -> dict:
+        validated_tier = validate_agent_role_tier(role_tier)
         with self.lock, closing(self._connect()) as conn, conn:
-            conn.execute(
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
                 """
-                INSERT INTO agents (
-                    id, agent_name, agent_type, capabilities_json, status, registered_at, last_seen_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                SELECT * FROM agents
+                WHERE agent_name = ?
+                ORDER BY registered_at ASC, id ASC
+                LIMIT 1
                 """,
-                (
-                    agent.id,
-                    agent.agent_name,
-                    agent.agent_type,
-                    json.dumps(agent.capabilities, ensure_ascii=False),
-                    agent.status,
-                    agent.registered_at,
-                    agent.last_seen_at,
-                ),
+                (agent_name,),
+            ).fetchone()
+            token, token_hash = _allocate_agent_token(
+                {
+                    row["token_hash"]
+                    for row in conn.execute(
+                        "SELECT token_hash FROM agents WHERE token_hash IS NOT NULL"
+                    ).fetchall()
+                }
             )
-        return agent
+            now = _now()
+            agent_id = existing["id"] if existing is not None else str(uuid4())
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO agents (
+                        id, agent_name, agent_type, capabilities_json, status,
+                        registered_at, last_seen_at, role_tier, token_hash,
+                        token_created_at, disabled_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    """,
+                    (
+                        agent_id,
+                        agent_name,
+                        agent_type,
+                        json.dumps(capabilities, ensure_ascii=False),
+                        "ONLINE",
+                        now,
+                        now,
+                        validated_tier,
+                        token_hash,
+                        now,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE agents
+                    SET agent_type = ?, capabilities_json = ?, status = 'ONLINE',
+                        last_seen_at = ?, role_tier = ?, token_hash = ?,
+                        token_created_at = ?, disabled_at = NULL
+                    WHERE id = ?
+                    """,
+                    (
+                        agent_type,
+                        json.dumps(capabilities, ensure_ascii=False),
+                        now,
+                        validated_tier,
+                        token_hash,
+                        now,
+                        agent_id,
+                    ),
+                )
+                conn.execute(
+                    """
+                    UPDATE agents
+                    SET token_hash = NULL, disabled_at = COALESCE(disabled_at, ?)
+                    WHERE agent_name = ? AND id != ?
+                    """,
+                    (now, agent_name, agent_id),
+                )
+            row = conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)).fetchone()
+        return AgentRegistration({**_agent_from_row(row), "agent_token": token})
 
     def heartbeat_agent(self, agent_id: str) -> dict | None:
         now = _now()
@@ -1247,6 +1384,84 @@ class SQLiteStore:
         with self.lock, closing(self._connect()) as conn:
             rows = conn.execute("SELECT * FROM agents ORDER BY registered_at ASC").fetchall()
         return [_agent_from_row(row) for row in rows]
+
+    def resolve_agent_token(self, token: object) -> dict | None:
+        if not isinstance(token, str) or not token:
+            return None
+        token_hash = hash_agent_token(token)
+        with self.lock, closing(self._connect()) as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM agents
+                WHERE token_hash = ? AND disabled_at IS NULL AND role_tier IS NOT NULL
+                LIMIT 2
+                """,
+                (token_hash,),
+            ).fetchall()
+        if len(rows) != 1 or rows[0]["role_tier"] not in AGENT_ROLE_TIERS:
+            return None
+        return _agent_from_row(rows[0])
+
+    def rotate_agent_token(self, agent_id: str) -> dict | None:
+        with self.lock, closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT id FROM agents WHERE id = ?", (agent_id,)).fetchone()
+            if row is None:
+                return None
+            token, token_hash = _allocate_agent_token(
+                {
+                    item["token_hash"]
+                    for item in conn.execute(
+                        "SELECT token_hash FROM agents WHERE token_hash IS NOT NULL"
+                    ).fetchall()
+                }
+            )
+            now = _now()
+            conn.execute(
+                "UPDATE agents SET token_hash = ?, token_created_at = ? WHERE id = ?",
+                (token_hash, now, agent_id),
+            )
+        return AgentRegistration(
+            {"agent_id": agent_id, "agent_token": token, "token_created_at": now}
+        )
+
+    def agent_has_investigation_access(
+        self,
+        agent_id: str,
+        investigation_id: str,
+        required_tier: str,
+    ) -> bool:
+        if required_tier not in AGENT_ROLE_TIERS:
+            return False
+        with self.lock, closing(self._connect()) as conn:
+            agent = conn.execute(
+                "SELECT role_tier, disabled_at FROM agents WHERE id = ?",
+                (agent_id,),
+            ).fetchone()
+            if (
+                agent is None
+                or agent["disabled_at"] is not None
+                or agent["role_tier"] != required_tier
+            ):
+                return False
+            investigation_claim = conn.execute(
+                """
+                SELECT 1 FROM investigations
+                WHERE id = ? AND claimed_by_agent_id = ?
+                """,
+                (investigation_id, agent_id),
+            ).fetchone()
+            if investigation_claim is not None:
+                return True
+            job_claim = conn.execute(
+                """
+                SELECT 1 FROM jobs
+                WHERE investigation_id = ? AND claimed_by_agent_id = ?
+                LIMIT 1
+                """,
+                (investigation_id, agent_id),
+            ).fetchone()
+            return job_claim is not None
 
     def claim_task(self, agent_id: str, capabilities: list[str]) -> dict | None:
         with self.lock, closing(self._connect()) as conn, conn:
@@ -2355,9 +2570,20 @@ class SQLiteStore:
         with self.lock, closing(self._connect()) as conn, conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO agents (
-                    id, agent_name, agent_type, capabilities_json, status, registered_at, last_seen_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO agents (
+                    id, agent_name, agent_type, capabilities_json, status,
+                    registered_at, last_seen_at, role_tier, token_created_at, disabled_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    agent_name = excluded.agent_name,
+                    agent_type = excluded.agent_type,
+                    capabilities_json = excluded.capabilities_json,
+                    status = excluded.status,
+                    registered_at = excluded.registered_at,
+                    last_seen_at = excluded.last_seen_at,
+                    role_tier = COALESCE(excluded.role_tier, agents.role_tier),
+                    token_created_at = COALESCE(excluded.token_created_at, agents.token_created_at),
+                    disabled_at = COALESCE(excluded.disabled_at, agents.disabled_at)
                 """,
                 (
                     agent["id"],
@@ -2367,6 +2593,9 @@ class SQLiteStore:
                     agent.get("status", "ONLINE"),
                     agent.get("registered_at", _now()),
                     agent.get("last_seen_at", _now()),
+                    agent.get("role_tier"),
+                    agent.get("token_created_at"),
+                    agent.get("disabled_at"),
                 ),
             )
 
@@ -2428,7 +2657,11 @@ class SQLiteStore:
                     capabilities_json TEXT NOT NULL,
                     status TEXT NOT NULL,
                     registered_at TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL
+                    last_seen_at TEXT NOT NULL,
+                    role_tier TEXT,
+                    token_hash TEXT,
+                    token_created_at TEXT,
+                    disabled_at TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS events (
@@ -2603,6 +2836,18 @@ class SQLiteStore:
                 conn.execute("ALTER TABLE jobs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0")
             if "last_error" not in job_columns:
                 conn.execute("ALTER TABLE jobs ADD COLUMN last_error TEXT NOT NULL DEFAULT ''")
+            agent_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(agents)").fetchall()
+            }
+            if "role_tier" not in agent_columns:
+                conn.execute("ALTER TABLE agents ADD COLUMN role_tier TEXT")
+            if "token_hash" not in agent_columns:
+                conn.execute("ALTER TABLE agents ADD COLUMN token_hash TEXT")
+            if "token_created_at" not in agent_columns:
+                conn.execute("ALTER TABLE agents ADD COLUMN token_created_at TEXT")
+            if "disabled_at" not in agent_columns:
+                conn.execute("ALTER TABLE agents ADD COLUMN disabled_at TEXT")
             fact_columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(facts)").fetchall()
@@ -2625,6 +2870,8 @@ class SQLiteStore:
             _record_schema_migration(conn, "20260522_core_v3")
             _record_schema_migration(conn, "20260522_stability_pack")
             _record_schema_migration(conn, "20260706_persistent_background_queue")
+            _record_schema_migration(conn, "20260710_agent_credentials")
+            _dedupe_agent_token_hashes(conn)
             _dedupe_existing_rows(conn)
             conn.executescript(
                 """
@@ -2638,6 +2885,8 @@ class SQLiteStore:
                     ON evidence_ledger(investigation_id, content_hash);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_unique_claim
                     ON facts(investigation_id, subject, predicate, object_value);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_unique_token_hash
+                    ON agents(token_hash) WHERE token_hash IS NOT NULL;
                 """
             )
 
@@ -2812,6 +3061,26 @@ def _record_schema_migration(conn: sqlite3.Connection, version: str) -> None:
     )
 
 
+def _dedupe_agent_token_hashes(conn: sqlite3.Connection) -> None:
+    duplicate_hashes = conn.execute(
+        """
+        SELECT token_hash FROM agents
+        WHERE token_hash IS NOT NULL
+        GROUP BY token_hash HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    for duplicate in duplicate_hashes:
+        rows = conn.execute(
+            """
+            SELECT id FROM agents WHERE token_hash = ?
+            ORDER BY registered_at ASC, id ASC
+            """,
+            (duplicate["token_hash"],),
+        ).fetchall()
+        for row in rows[1:]:
+            conn.execute("UPDATE agents SET token_hash = NULL WHERE id = ?", (row["id"],))
+
+
 def _worker_queue_pending_from_row(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
@@ -2902,6 +3171,30 @@ def _apply_core_v3(data: dict) -> None:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _allocate_agent_token(existing_hashes: set[str]) -> tuple[str, str]:
+    for _ in range(_AGENT_TOKEN_GENERATION_ATTEMPTS):
+        token = generate_agent_token()
+        token_hash = hash_agent_token(token)
+        if token_hash not in existing_hashes:
+            return token, token_hash
+    raise RuntimeError("unable to generate unique agent credential")
+
+
+def _public_agent(agent: Agent) -> dict:
+    return {
+        "id": agent.id,
+        "agent_name": agent.agent_name,
+        "agent_type": agent.agent_type,
+        "capabilities": list(agent.capabilities),
+        "status": agent.status,
+        "registered_at": agent.registered_at,
+        "last_seen_at": agent.last_seen_at,
+        "role_tier": agent.role_tier,
+        "token_created_at": agent.token_created_at,
+        "disabled_at": agent.disabled_at,
+    }
 
 
 def _parse_iso(value: str) -> datetime:
@@ -3041,6 +3334,9 @@ def _agent_from_row(row: sqlite3.Row) -> dict:
         "status": row["status"],
         "registered_at": row["registered_at"],
         "last_seen_at": row["last_seen_at"],
+        "role_tier": row["role_tier"],
+        "token_created_at": row["token_created_at"],
+        "disabled_at": row["disabled_at"],
     }
 
 

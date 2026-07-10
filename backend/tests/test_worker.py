@@ -395,6 +395,7 @@ class WorkerTests(unittest.TestCase):
             agent_name="enterprise-agent",
             agent_type="enterprise_intel_agent",
             capabilities=["enterprise_intel_agent"],
+            role_tier="reader",
         )
 
         claimed = store.claim_job(agent.id, ["enterprise_intel_agent"])

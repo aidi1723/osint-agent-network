@@ -27,6 +27,7 @@ class AgentProtocolTests(unittest.TestCase):
             agent_name="codex-desktop",
             agent_type="codex",
             capabilities=["domain", "theharvester", "amass"],
+            role_tier="reader",
         )
 
         claimed = store.claim_task(
@@ -52,6 +53,7 @@ class AgentProtocolTests(unittest.TestCase):
             agent_name="open-human-production-host",
             agent_type="openhuman",
             capabilities=["domain", "sherlock", "amass"],
+            role_tier="reader",
         )
         store.claim_task(agent.id, ["domain"])
 
@@ -497,6 +499,7 @@ class AgentProtocolTests(unittest.TestCase):
             agent_name="username-only-agent",
             agent_type="cli",
             capabilities=["username", "sherlock"],
+            role_tier="reader",
         )
 
         self.assertIsNone(store.claim_task(agent.id, ["username", "sherlock"]))
@@ -638,6 +641,7 @@ class AgentProtocolTests(unittest.TestCase):
                 agent_name="codex-desktop",
                 agent_type="codex",
                 capabilities=["domain", "amass"],
+                role_tier="reader",
             )
             first_store.claim_task(agent.id, ["domain"])
             first_store.add_event(
@@ -770,6 +774,7 @@ class AgentProtocolTests(unittest.TestCase):
             agent_name="stale-agent",
             agent_type="cli",
             capabilities=["domain"],
+            role_tier="reader",
         )
         store.claim_task(agent.id, ["domain"])
         store.set_investigation_updated_at(investigation.id, "2026-05-19T00:00:00+00:00")
@@ -799,6 +804,7 @@ class AgentProtocolTests(unittest.TestCase):
                 agent_name="stale-agent",
                 agent_type="cli",
                 capabilities=["domain"],
+                role_tier="reader",
             )
             store.claim_task(agent.id, ["domain"])
             store.set_investigation_updated_at(investigation.id, "2026-05-19T00:00:00+00:00")
