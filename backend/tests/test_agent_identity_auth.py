@@ -70,6 +70,43 @@ class _ClaimBarrierConnection:
         return self._connection.execute(sql, *args)
 
 
+class _CompletionSnapshotHookConnection:
+    def __init__(self, connection, inject_once):
+        object.__setattr__(self, "_connection", connection)
+        object.__setattr__(self, "_inject_once", inject_once)
+        object.__setattr__(self, "_has_write_lock", False)
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+    def __setattr__(self, name, value):
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._connection, name, value)
+
+    def __enter__(self):
+        self._connection.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        return self._connection.__exit__(*args)
+
+    def execute(self, sql, *args):
+        normalized = " ".join(sql.upper().split())
+        if normalized == "BEGIN IMMEDIATE":
+            self._inject_once()
+            result = self._connection.execute(sql, *args)
+            self._has_write_lock = True
+            return result
+        return self._connection.execute(sql, *args)
+
+    def close(self):
+        self._connection.close()
+        if not self._has_write_lock:
+            self._inject_once()
+
+
 class AgentIdentityStoreContract:
     def make_store(self):
         raise NotImplementedError
@@ -1320,6 +1357,71 @@ class AgentIdentityStoreContract:
         self.assertEqual(detail["status"], "CLAIMED")
         self.assertEqual(detail["summary"], "")
 
+    def test_scoped_reporter_completion_rolls_back_render_failure(self):
+        reporter = self.register(
+            name="atomic-render-failure-reporter",
+            role_tier="reporter",
+            capabilities=["domain"],
+        )
+        investigation = self.store.create_investigation(
+            name="Atomic render failure",
+            seed_type="domain",
+            seed_value="atomic-render-failure.example",
+            strategy_name="quick",
+        )
+        seeded = self.store.complete_task(
+            investigation_id=investigation.id,
+            agent_id="bootstrap",
+            status="FAILED",
+            summary="prior summary",
+            report_markdown="# Prior report",
+            confidence=0.4,
+        )
+        self.assertTrue(seeded["report_markdown"])
+        self.store.set_investigation_status(investigation.id, "OPEN")
+        claimed = self.store.claim_task(reporter["id"], ["domain"])
+        self.assertEqual(claimed["id"], investigation.id)
+        self.store.add_entity(
+            investigation.id,
+            "domain",
+            "before.atomic-render-failure.example",
+            "agent",
+            0.8,
+        )
+        self.store.add_fact(
+            investigation.id,
+            "The preexisting fact must survive render failure.",
+            "atomic-render-failure.example",
+            "has_domain",
+            "before.atomic-render-failure.example",
+            "NEEDS_REVIEW",
+            0.8,
+            "B-2",
+            [],
+        )
+        before = self.store.get_investigation_raw(investigation.id)
+        agent_before = self.internal_agent_state(reporter["id"])
+
+        with patch(
+            "app.services.store.render_structured_report",
+            side_effect=RuntimeError("forced report render failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "forced report render failure"):
+                self.store.agent_complete_task(
+                    agent_id=reporter["id"],
+                    required_tier="reporter",
+                    investigation_id=investigation.id,
+                    job_id=None,
+                    status="COMPLETED",
+                    summary="late summary",
+                    report_markdown="# Late report",
+                    confidence=0.9,
+                )
+
+        after = self.store.get_investigation_raw(investigation.id)
+        self.assertEqual(after, before)
+        self.assertEqual(self.internal_agent_state(reporter["id"]), agent_before)
+
 class _MemoryStoreContext:
     def __enter__(self):
         return MemoryStore()
@@ -1544,6 +1646,81 @@ class SQLiteAgentIdentityTests(AgentIdentityStoreContract, unittest.TestCase):
         self.assertEqual(
             persisted["claimed_by_agent_id"], winners[0]["claimed_by_agent_id"]
         )
+
+    def test_scoped_completion_snapshot_includes_pretransaction_writer(self):
+        reporter = self.register(
+            name="completion-snapshot-reporter",
+            role_tier="reporter",
+            capabilities=["domain"],
+        )
+        investigation = self.store.create_investigation(
+            name="Transactional completion snapshot",
+            seed_type="domain",
+            seed_value="completion-snapshot.example",
+            strategy_name="quick",
+        )
+        claimed = self.store.claim_task(reporter["id"], ["domain"])
+        self.assertEqual(claimed["id"], investigation.id)
+        writer = SQLiteStore(self.store.db_path)
+        original_connect = self.store._connect
+        injected = {"done": False}
+        fact_statement = "Late transactional fact is included in the final report."
+
+        def inject_once():
+            if injected["done"]:
+                return
+            injected["done"] = True
+            writer.add_entity(
+                investigation.id,
+                "domain",
+                "late.completion-snapshot.example",
+                "agent",
+                0.9,
+            )
+            writer.add_fact(
+                investigation.id,
+                fact_statement,
+                "completion-snapshot.example",
+                "has_domain",
+                "late.completion-snapshot.example",
+                "NEEDS_REVIEW",
+                0.9,
+                "B-2",
+                [],
+            )
+
+        def connect_with_hook():
+            return _CompletionSnapshotHookConnection(
+                original_connect(), inject_once
+            )
+
+        with patch.object(
+            self.store,
+            "_connect",
+            side_effect=connect_with_hook,
+        ):
+            completed = self.store.agent_complete_task(
+                agent_id=reporter["id"],
+                required_tier="reporter",
+                investigation_id=investigation.id,
+                job_id=None,
+                status="COMPLETED",
+                summary="transactional completion",
+                report_markdown="# Transactional completion",
+                confidence=0.9,
+            )
+
+        self.assertTrue(injected["done"])
+        self.assertIsNotNone(completed)
+        self.assertEqual(
+            [item["value"] for item in completed["entities"]],
+            ["late.completion-snapshot.example"],
+        )
+        self.assertEqual(
+            [item["statement"] for item in completed["facts"]],
+            [fact_statement],
+        )
+        self.assertIn(fact_statement, completed["report_markdown"])
 
     @contextmanager
     def tool_output_storage_failure(self):

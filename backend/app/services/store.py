@@ -1187,14 +1187,33 @@ class MemoryStore:
         preview["quality_assessment"] = assessment
         _apply_gap_plans(preview)
         preview["completion_policy"] = build_completion_policy(preview)
-        investigation.status = _policy_status_for_detail(preview, status)
-        investigation.summary = summary
-        investigation.report_markdown = render_structured_report(preview, assessment)
-        investigation.confidence = confidence
-        investigation.updated_at = _now()
-        if agent_id in self.agents:
-            self.agents[agent_id].last_seen_at = investigation.updated_at
-        return self._investigation_detail(investigation_id)
+        final_status = _policy_status_for_detail(preview, status)
+        final_report = render_structured_report(preview, assessment)
+        now = _now()
+        original = {
+            "status": investigation.status,
+            "summary": investigation.summary,
+            "report_markdown": investigation.report_markdown,
+            "confidence": investigation.confidence,
+            "updated_at": investigation.updated_at,
+        }
+        agent = self.agents.get(agent_id)
+        original_last_seen = agent.last_seen_at if agent is not None else None
+        try:
+            investigation.status = final_status
+            investigation.summary = summary
+            investigation.report_markdown = final_report
+            investigation.confidence = confidence
+            investigation.updated_at = now
+            if agent is not None:
+                agent.last_seen_at = now
+            return self._investigation_detail(investigation_id)
+        except Exception:
+            for field_name, value in original.items():
+                setattr(investigation, field_name, value)
+            if agent is not None:
+                agent.last_seen_at = original_last_seen
+            raise
 
     def list_jobs(self, investigation_id: str) -> list[dict]:
         with self.lock:
@@ -2468,18 +2487,6 @@ class SQLiteStore:
     ) -> dict | None:
         if required_tier != "reporter":
             return None
-        preview = self.get_investigation(investigation_id)
-        if preview is None:
-            return None
-        preview["summary"] = summary
-        preview["report_markdown"] = report_markdown
-        assessment = build_quality_assessment(preview)
-        preview["quality_assessment"] = assessment
-        _apply_gap_plans(preview)
-        preview["completion_policy"] = build_completion_policy(preview)
-        final_status = _policy_status_for_detail(preview, status)
-        final_report = render_structured_report(preview, assessment)
-        now = _now()
         with self.lock, closing(self._connect()) as conn, conn:
             conn.execute("BEGIN IMMEDIATE")
             if not self._agent_has_investigation_access_conn(
@@ -2491,6 +2498,18 @@ class SQLiteStore:
                 action="complete_task",
             ):
                 return None
+            preview = self._investigation_detail_conn(conn, investigation_id)
+            if preview is None:
+                return None
+            preview["summary"] = summary
+            preview["report_markdown"] = report_markdown
+            assessment = build_quality_assessment(preview)
+            preview["quality_assessment"] = assessment
+            _apply_gap_plans(preview)
+            preview["completion_policy"] = build_completion_policy(preview)
+            final_status = _policy_status_for_detail(preview, status)
+            final_report = render_structured_report(preview, assessment)
+            now = _now()
             conn.execute(
                 """
                 UPDATE investigations
@@ -2509,7 +2528,7 @@ class SQLiteStore:
             conn.execute(
                 "UPDATE agents SET last_seen_at = ? WHERE id = ?", (now, agent_id)
             )
-        return self.get_investigation(investigation_id)
+            return self._investigation_detail_conn(conn, investigation_id)
 
     def claim_task(self, agent_id: str, capabilities: object) -> dict | None:
         with self.lock, closing(self._connect()) as conn, conn:
@@ -3408,85 +3427,104 @@ class SQLiteStore:
     def get_investigation_raw(self, investigation_id: str) -> dict | None:
         """Return investigation data without expensive derived computations."""
         with self.lock, closing(self._connect()) as conn:
-            row = conn.execute(
-                "SELECT * FROM investigations WHERE id = ?",
+            return self._investigation_detail_raw_conn(conn, investigation_id)
+
+    def _investigation_detail_conn(
+        self, conn: sqlite3.Connection, investigation_id: str
+    ) -> dict | None:
+        data = self._investigation_detail_raw_conn(conn, investigation_id)
+        if data is None:
+            return None
+        _apply_core_v3(data)
+        data["intelligence_memory"] = build_intelligence_memory(data)
+        data["quality_assessment"] = build_quality_assessment(data)
+        _apply_gap_plans(data)
+        data["completion_policy"] = build_completion_policy(data)
+        data["graph"] = build_investigation_graph(data)
+        return data
+
+    def _investigation_detail_raw_conn(
+        self, conn: sqlite3.Connection, investigation_id: str
+    ) -> dict | None:
+        row = conn.execute(
+            "SELECT * FROM investigations WHERE id = ?",
+            (investigation_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        data = _investigation_from_row(row)
+        data["jobs"] = [
+            _job_from_row(item)
+            for item in conn.execute(
+                "SELECT * FROM jobs WHERE investigation_id = ? ORDER BY rowid ASC",
                 (investigation_id,),
-            ).fetchone()
-            if row is None:
-                return None
-            data = _investigation_from_row(row)
-            data["jobs"] = [
-                _job_from_row(item)
-                for item in conn.execute(
-                    "SELECT * FROM jobs WHERE investigation_id = ? ORDER BY rowid ASC",
-                    (investigation_id,),
-                ).fetchall()
-            ]
-            data["events"] = [
-                _event_from_row(item)
-                for item in conn.execute(
-                    "SELECT * FROM events WHERE investigation_id = ? ORDER BY created_at ASC",
-                    (investigation_id,),
-                ).fetchall()
-            ]
-            data["entities"] = [
-                _entity_from_row(item)
-                for item in conn.execute(
-                    "SELECT * FROM entities WHERE investigation_id = ? ORDER BY created_at ASC",
-                    (investigation_id,),
-                ).fetchall()
-            ]
-            data["evidence"] = [
-                _evidence_from_row(item)
-                for item in conn.execute(
-                    "SELECT * FROM evidence WHERE investigation_id = ? ORDER BY created_at ASC",
-                    (investigation_id,),
-                ).fetchall()
-            ]
-            data["evidence_ledger"] = [
-                _evidence_ledger_from_row(item)
-                for item in conn.execute(
-                    "SELECT * FROM evidence_ledger WHERE investigation_id = ? ORDER BY observed_at ASC",
-                    (investigation_id,),
-                ).fetchall()
-            ]
-            data["facts"] = [
-                _fact_from_row(item)
-                for item in conn.execute(
-                    "SELECT * FROM facts WHERE investigation_id = ? ORDER BY observed_at ASC",
-                    (investigation_id,),
-                ).fetchall()
-            ]
-            data["hypotheses"] = [
-                _hypothesis_from_row(item)
-                for item in conn.execute(
-                    "SELECT * FROM hypotheses WHERE investigation_id = ? ORDER BY rowid ASC",
-                    (investigation_id,),
-                ).fetchall()
-            ]
-            analysis_row = conn.execute(
-                "SELECT * FROM hypothesis_analysis WHERE investigation_id = ?",
+            ).fetchall()
+        ]
+        data["events"] = [
+            _event_from_row(item)
+            for item in conn.execute(
+                "SELECT * FROM events WHERE investigation_id = ? ORDER BY created_at ASC",
                 (investigation_id,),
-            ).fetchone()
-            data["hypothesis_analysis"] = (
-                _hypothesis_analysis_from_row(analysis_row)
-                if analysis_row is not None
-                else {
-                    "most_likely_hypothesis": "",
-                    "triggered_indicators": [],
-                    "indicator_activation_rate": 0.0,
-                    "confidence_language": "",
-                }
-            )
-            data["relationships"] = [
-                _relationship_from_row(item)
-                for item in conn.execute(
-                    "SELECT * FROM relationships WHERE investigation_id = ? ORDER BY created_at ASC",
-                    (investigation_id,),
-                ).fetchall()
-            ]
-            data["jobs"] = _with_orchestration_jobs(data)
-            data["job_counts"] = _job_counts(data["jobs"])
+            ).fetchall()
+        ]
+        data["entities"] = [
+            _entity_from_row(item)
+            for item in conn.execute(
+                "SELECT * FROM entities WHERE investigation_id = ? ORDER BY created_at ASC",
+                (investigation_id,),
+            ).fetchall()
+        ]
+        data["evidence"] = [
+            _evidence_from_row(item)
+            for item in conn.execute(
+                "SELECT * FROM evidence WHERE investigation_id = ? ORDER BY created_at ASC",
+                (investigation_id,),
+            ).fetchall()
+        ]
+        data["evidence_ledger"] = [
+            _evidence_ledger_from_row(item)
+            for item in conn.execute(
+                "SELECT * FROM evidence_ledger WHERE investigation_id = ? ORDER BY observed_at ASC",
+                (investigation_id,),
+            ).fetchall()
+        ]
+        data["facts"] = [
+            _fact_from_row(item)
+            for item in conn.execute(
+                "SELECT * FROM facts WHERE investigation_id = ? ORDER BY observed_at ASC",
+                (investigation_id,),
+            ).fetchall()
+        ]
+        data["hypotheses"] = [
+            _hypothesis_from_row(item)
+            for item in conn.execute(
+                "SELECT * FROM hypotheses WHERE investigation_id = ? ORDER BY rowid ASC",
+                (investigation_id,),
+            ).fetchall()
+        ]
+        analysis_row = conn.execute(
+            "SELECT * FROM hypothesis_analysis WHERE investigation_id = ?",
+            (investigation_id,),
+        ).fetchone()
+        data["hypothesis_analysis"] = (
+            _hypothesis_analysis_from_row(analysis_row)
+            if analysis_row is not None
+            else {
+                "most_likely_hypothesis": "",
+                "triggered_indicators": [],
+                "indicator_activation_rate": 0.0,
+                "confidence_language": "",
+            }
+        )
+        data["relationships"] = [
+            _relationship_from_row(item)
+            for item in conn.execute(
+                "SELECT * FROM relationships WHERE investigation_id = ? ORDER BY created_at ASC",
+                (investigation_id,),
+            ).fetchall()
+        ]
+        data["jobs"] = _with_orchestration_jobs(data)
+        data["job_counts"] = _job_counts(data["jobs"])
         return data
 
     def import_detail(self, detail: dict) -> None:
