@@ -15,19 +15,25 @@ class AgentClientCliTests(unittest.TestCase):
 
         def fake_post(base_url, path, payload, token):
             calls.append((base_url, path, payload, token))
-            return {"id": "agent-1", "agent_name": payload["agent_name"]}
+            return {
+                "id": "agent-1",
+                "agent_name": payload["agent_name"],
+                "agent_token": "issued-agent-token",
+            }
 
         output = _run_cli(
             [
                 "--base-url",
                 "http://hub.local",
-                "--token",
-                "secret",
                 "register",
+                "--admin-token",
+                "admin-secret",
                 "--agent-name",
                 "codex-desktop",
                 "--agent-type",
                 "codex",
+                "--role-tier",
+                "reader",
                 "--capability",
                 "domain",
                 "--capability",
@@ -41,8 +47,83 @@ class AgentClientCliTests(unittest.TestCase):
         self.assertEqual(calls[0][2]["agent_name"], "codex-desktop")
         self.assertEqual(calls[0][2]["agent_type"], "codex")
         self.assertEqual(calls[0][2]["capabilities"], ["domain", "amass"])
-        self.assertEqual(calls[0][3], "secret")
+        self.assertEqual(calls[0][2]["role_tier"], "reader")
+        self.assertEqual(calls[0][3], "admin-secret")
         self.assertEqual(output["id"], "agent-1")
+        self.assertEqual(output["agent_token"], "issued-agent-token")
+        self.assertIn("store", output["agent_token_storage_instruction"].lower())
+
+    def test_register_requires_role_tier_and_prefers_scoped_admin_credentials(self):
+        parser = agent_client.build_parser()
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["register"])
+
+        calls = []
+
+        def fake_post(base_url, path, payload, token):
+            calls.append((payload, token))
+            return {"id": "agent-1", "agent_token": "issued"}
+
+        saved = {name: os.environ.get(name) for name in ("ADMIN_API_TOKEN", "AGENT_API_TOKEN")}
+        os.environ["ADMIN_API_TOKEN"] = "env-admin"
+        os.environ["AGENT_API_TOKEN"] = "env-agent"
+        try:
+            _run_cli(["register", "--role-tier", "verifier"], fake_post)
+            _run_cli(
+                [
+                    "--token",
+                    "global-compatible-admin",
+                    "register",
+                    "--admin-token",
+                    "scoped-admin",
+                    "--role-tier",
+                    "reporter",
+                ],
+                fake_post,
+            )
+        finally:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+        self.assertEqual(calls[0], ({
+            "agent_name": "cli-agent",
+            "agent_type": "cli",
+            "capabilities": agent_client.DEFAULT_CAPABILITIES,
+            "role_tier": "verifier",
+        }, "env-admin"))
+        self.assertEqual(calls[1][1], "scoped-admin")
+
+    def test_registration_never_falls_back_to_agent_api_token(self):
+        calls = []
+
+        def fake_post(base_url, path, payload, token):
+            calls.append(token)
+            return {"id": "agent-1", "agent_token": "issued"}
+
+        saved = {name: os.environ.get(name) for name in ("ADMIN_API_TOKEN", "AGENT_API_TOKEN")}
+        os.environ.pop("ADMIN_API_TOKEN", None)
+        os.environ["AGENT_API_TOKEN"] = "agent-write-token"
+        try:
+            _run_cli(["register", "--role-tier", "reader"], fake_post)
+        finally:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+        self.assertEqual(calls, [""])
+
+    def test_help_distinguishes_admin_registration_and_issued_agent_tokens(self):
+        help_text = agent_client.build_parser().format_help()
+        register_help = agent_client.build_parser()._subparsers._group_actions[0].choices[
+            "register"
+        ].format_help()
+        self.assertIn("issued agent token", help_text.lower())
+        self.assertIn("administrator", register_help.lower())
 
     def test_claim_and_write_commands_use_protocol_paths(self):
         calls = []
@@ -172,6 +253,57 @@ class AgentClientCliTests(unittest.TestCase):
         self.assertEqual(calls[0][1]["confidence"], 0.91)
         self.assertEqual(calls[0][2], "env-secret")
         self.assertEqual(output["status"], "COMPLETED")
+
+    def test_write_commands_and_run_tool_use_only_the_issued_agent_token(self):
+        calls = []
+
+        def fake_post(base_url, path, payload, token):
+            calls.append((path, token))
+            return {"ok": True}
+
+        saved = {name: os.environ.get(name) for name in ("ADMIN_API_TOKEN", "AGENT_API_TOKEN")}
+        os.environ["ADMIN_API_TOKEN"] = "admin-must-not-leak"
+        os.environ["AGENT_API_TOKEN"] = "issued-agent-token"
+        try:
+            _run_cli(
+                ["claim", "--agent-id", "agent-1", "--capability", "domain"],
+                fake_post,
+            )
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", suffix=".json", delete=False
+            ) as artifact:
+                json.dump({"hosts": ["www.example.com"]}, artifact)
+                artifact_path = artifact.name
+            try:
+                _run_cli(
+                    [
+                        "run-tool",
+                        "--tool",
+                        "theharvester",
+                        "--target-type",
+                        "domain",
+                        "--target",
+                        "example.com",
+                        "--task-id",
+                        "task-1",
+                        "--agent-id",
+                        "agent-1",
+                        "--input-file",
+                        artifact_path,
+                    ],
+                    fake_post,
+                )
+            finally:
+                os.unlink(artifact_path)
+        finally:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+        self.assertTrue(calls)
+        self.assertEqual({token for _path, token in calls}, {"issued-agent-token"})
 
     def test_core_v2_write_commands_use_protocol_paths(self):
         calls = []

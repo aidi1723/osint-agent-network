@@ -60,8 +60,22 @@ def post_json(base_url: str, path: str, payload: dict, token: str = "") -> dict:
 def run(argv: list[str] | None = None, post_json_fn=post_json) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    token = args.token or os.getenv("AGENT_API_TOKEN", "")
+    if args.command == "register":
+        token = (
+            args.admin_token
+            or os.getenv("ADMIN_API_TOKEN", "")
+            or args.token
+        )
+    else:
+        token = args.token or os.getenv("AGENT_API_TOKEN", "")
     result = dispatch(args, token=token, post_json_fn=post_json_fn)
+    if args.command == "register" and result.get("agent_token"):
+        result = {
+            **result,
+            "agent_token_storage_instruction": (
+                "Store this one-time agent token in the agent runtime; it will not be shown again."
+            ),
+        }
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
@@ -69,12 +83,28 @@ def run(argv: list[str] | None = None, post_json_fn=post_json) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="OSINT Agent Protocol CLI")
     parser.add_argument("--base-url", default=os.getenv("OSINT_AGENT_HUB_URL", "http://127.0.0.1:8088"))
-    parser.add_argument("--token", default="")
+    parser.add_argument(
+        "--token",
+        default="",
+        help="Issued agent token for claim/write commands; retained as register admin-token compatibility.",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    register = subparsers.add_parser("register", help="注册 Agent")
+    register = subparsers.add_parser(
+        "register", help="Register an agent using an administrator credential"
+    )
+    register.add_argument(
+        "--admin-token",
+        default="",
+        help="Administrator credential for this registration request (or ADMIN_API_TOKEN).",
+    )
     register.add_argument("--agent-name", default="cli-agent")
     register.add_argument("--agent-type", default="cli")
+    register.add_argument(
+        "--role-tier",
+        required=True,
+        choices=("reader", "verifier", "reporter", "tool_agent"),
+    )
     register.add_argument("--capability", action="append", default=[])
 
     claim = subparsers.add_parser("claim", help="认领任务")
@@ -206,6 +236,7 @@ def dispatch(args: argparse.Namespace, token: str, post_json_fn) -> dict:
                 "agent_name": args.agent_name,
                 "agent_type": args.agent_type,
                 "capabilities": capabilities,
+                "role_tier": args.role_tier,
             },
             token,
         )

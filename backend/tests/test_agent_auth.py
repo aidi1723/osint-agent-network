@@ -458,7 +458,7 @@ class BrowserAuthHttpTests(unittest.TestCase):
                                 {"detail": "unauthorized management request"},
                             )
 
-    def test_known_bearers_are_forbidden_outside_their_route_scope(self):
+    def test_known_management_bearers_are_forbidden_and_legacy_agent_token_defaults_off(self):
         with patch("app.main.store.list_agents", return_value=[]):
             status, _body, _headers = self.server.request(
                 "GET",
@@ -485,13 +485,14 @@ class BrowserAuthHttpTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 401)
 
-        status, _body, _headers = self.server.request(
+        status, body, _headers = self.server.request(
             "POST",
             "/api/agent/facts",
             payload={},
             headers=[("Authorization", "Bearer agent-secret")],
         )
-        self.assertEqual(status, 400)
+        self.assertEqual(status, 401)
+        self.assertEqual(json_payload(body), {"detail": "unauthorized agent request"})
 
     def test_login_rejects_non_object_json_with_safe_json_error(self):
         for supplied in ([], "scalar-value", None):

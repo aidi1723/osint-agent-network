@@ -1,5 +1,8 @@
 import hashlib
+import hmac
 import secrets
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 
 AGENT_ROLE_TIERS = frozenset({"reader", "verifier", "reporter", "tool_agent"})
@@ -7,6 +10,67 @@ MAX_AGENT_NAME_LENGTH = 128
 MAX_AGENT_TYPE_LENGTH = 128
 MAX_AGENT_CAPABILITIES = 64
 MAX_AGENT_CAPABILITY_LENGTH = 128
+
+
+@dataclass(frozen=True)
+class AgentPrincipal:
+    agent_id: str
+    role_tier: str
+    capabilities: Sequence[str]
+
+
+AGENT_ACTION_TIERS = {
+    "entities": {"reader"},
+    "evidence": {"reader"},
+    "evidence_records": {"reader"},
+    "relationships": {"reader"},
+    "facts": {"verifier"},
+    "hypotheses": {"verifier"},
+    "score_hypotheses": {"verifier"},
+    "complete_task": {"reporter"},
+}
+
+
+def agent_principal_from_record(record: object) -> AgentPrincipal | None:
+    if not isinstance(record, Mapping):
+        return None
+    agent_id = record.get("id")
+    role_tier = record.get("role_tier")
+    capabilities = record.get("capabilities")
+    if (
+        not isinstance(agent_id, str)
+        or not agent_id
+        or role_tier not in AGENT_ROLE_TIERS
+        or not isinstance(capabilities, list)
+        or record.get("disabled_at") is not None
+    ):
+        return None
+    return AgentPrincipal(agent_id, role_tier, tuple(capabilities))
+
+
+def agent_action_allowed(principal: AgentPrincipal, action: str) -> bool:
+    return principal.role_tier in AGENT_ACTION_TIERS.get(action, set())
+
+
+def legacy_agent_token_allowed(env: Mapping[str, str]) -> bool:
+    return str(env.get("OSINT_ALLOW_LEGACY_AGENT_TOKEN", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def legacy_agent_token_matches(supplied_token: str, expected_token: str) -> bool:
+    if not expected_token:
+        return False
+    supplied_digest = hashlib.sha256(
+        supplied_token.encode("utf-8", errors="surrogatepass")
+    ).digest()
+    expected_digest = hashlib.sha256(
+        expected_token.encode("utf-8", errors="surrogatepass")
+    ).digest()
+    return hmac.compare_digest(supplied_digest, expected_digest)
 
 
 def hash_agent_token(token: str) -> str:

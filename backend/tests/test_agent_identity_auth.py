@@ -1,12 +1,18 @@
 import sqlite3
 import unittest
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from backend.tests.test_agent_auth import ApiTestServer, PRODUCTION_ENV, json_payload
 from app import main as app_main
-from app.core.agent_auth import generate_agent_token, hash_agent_token
+from app.core.agent_auth import (
+    AGENT_ACTION_TIERS,
+    AgentPrincipal,
+    generate_agent_token,
+    hash_agent_token,
+)
 from app.services.store import MemoryStore, SQLiteStore
 
 
@@ -603,6 +609,440 @@ class AgentAuthHelperTests(unittest.TestCase):
             hash_agent_token("agent-secret"),
             "cc000e626ba67bed4834794d42288b228f012823877440d2bc5a3787cc6ffce9",
         )
+
+    def test_agent_principal_and_action_tiers_are_explicit_and_nonhierarchical(self):
+        self.assertEqual(
+            AGENT_ACTION_TIERS,
+            {
+                "entities": {"reader"},
+                "evidence": {"reader"},
+                "evidence_records": {"reader"},
+                "relationships": {"reader"},
+                "facts": {"verifier"},
+                "hypotheses": {"verifier"},
+                "score_hypotheses": {"verifier"},
+                "complete_task": {"reporter"},
+            },
+        )
+        principal = AgentPrincipal("agent-1", "reader", ("domain",))
+        with self.assertRaises(FrozenInstanceError):
+            principal.agent_id = "forged"
+
+
+class AgentRouteAuthorizationHttpTests(unittest.TestCase):
+    ENV = {
+        **PRODUCTION_ENV,
+        "OSINT_ALLOW_LEGACY_AGENT_TOKEN": "false",
+    }
+
+    ACTIONS = {
+        "entities": (
+            "/api/agent/entities",
+            {
+                "entities": [
+                    {
+                        "type": "domain",
+                        "value": "example.com",
+                        "source_tool": "agent",
+                        "confidence": 0.8,
+                    }
+                ]
+            },
+            201,
+        ),
+        "evidence": (
+            "/api/agent/evidence",
+            {
+                "entity_value": "example.com",
+                "evidence_kind": "search_result",
+                "source_tool": "agent",
+                "snippet": "Public result",
+            },
+            201,
+        ),
+        "evidence_records": (
+            "/api/agent/evidence-records",
+            {
+                "source_url": "https://example.com/",
+                "source_type": "official_website",
+                "source_tool": "agent",
+                "snippet": "Official source",
+                "credibility": 0.8,
+            },
+            201,
+        ),
+        "relationships": (
+            "/api/agent/relationships",
+            {
+                "from": "Example LLC",
+                "to": "example.com",
+                "relationship_type": "organization_has_domain",
+                "confidence": 0.8,
+            },
+            201,
+        ),
+        "facts": (
+            "/api/agent/facts",
+            {
+                "statement": "Example LLC operates example.com.",
+                "subject": "Example LLC",
+                "predicate": "has_domain",
+                "object": "example.com",
+                "status": "NEEDS_REVIEW",
+                "confidence": 0.8,
+                "admiralty_code": "B-2",
+                "evidence_ids": [],
+            },
+            201,
+        ),
+        "hypotheses": (
+            "/api/agent/hypotheses",
+            {"hypothesis_id": "h1", "statement": "Example LLC is active."},
+            201,
+        ),
+        "score_hypotheses": (
+            "/api/agent/hypotheses/score",
+            {"evidence_items": []},
+            201,
+        ),
+        "complete_task": (
+            "/api/agent/tasks/{task_id}/complete",
+            {"status": "COMPLETED", "summary": "Done", "report_markdown": "# Done"},
+            200,
+        ),
+    }
+
+    def setUp(self):
+        self.store = MemoryStore()
+        self.original_store = app_main.store
+        app_main.store = self.store
+        self.server_context = ApiTestServer()
+        self.server = self.server_context.__enter__()
+        self.counter = 0
+
+    def tearDown(self):
+        self.server_context.__exit__(None, None, None)
+        app_main.store = self.original_store
+
+    def register(self, role_tier, capabilities=None):
+        self.counter += 1
+        return self.store.register_agent(
+            agent_name=f"{role_tier}-{self.counter}",
+            agent_type="test",
+            capabilities=list(capabilities or []),
+            role_tier=role_tier,
+        )
+
+    def claimed_task(self, registration, seed_type=None):
+        seed_type = seed_type or "domain"
+        investigation = self.store.create_investigation(
+            name=f"Task {self.counter}",
+            seed_type=seed_type,
+            seed_value=(
+                f"target-{self.counter}.example"
+                if seed_type == "domain"
+                else f"target-{self.counter}@example.com"
+            ),
+            strategy_name="quick",
+        )
+        claimed = self.store.claim_task(registration["id"], [seed_type])
+        self.assertEqual(claimed["id"], investigation.id)
+        return investigation
+
+    def post(self, path, payload, token, headers=None, env=None):
+        request_headers = [("Authorization", f"Bearer {token}")]
+        request_headers.extend(headers or [])
+        status, body, _response_headers = self.server.request(
+            "POST",
+            path,
+            payload=payload,
+            headers=request_headers,
+            env=env or self.ENV,
+        )
+        return status, json_payload(body)
+
+    def test_real_http_role_matrix_allows_only_the_exact_action_tier(self):
+        roles = ("reader", "verifier", "reporter", "tool_agent")
+        for action, (path_template, action_payload, expected_status) in self.ACTIONS.items():
+            required_role = next(iter(AGENT_ACTION_TIERS[action]))
+            with self.subTest(action=action, role=required_role):
+                allowed = self.register(required_role)
+                investigation = self.claimed_task(allowed)
+                path = path_template.format(task_id=investigation.id)
+                status, _body = self.post(
+                    path,
+                    {"task_id": investigation.id, **action_payload},
+                    allowed["agent_token"],
+                )
+                self.assertEqual(status, expected_status)
+
+            for wrong_role in roles:
+                if wrong_role == required_role:
+                    continue
+                with self.subTest(action=action, wrong_role=wrong_role):
+                    denied = self.register(wrong_role)
+                    investigation = self.claimed_task(denied)
+                    path = path_template.format(task_id=investigation.id)
+                    status, _body = self.post(
+                        path,
+                        {"task_id": investigation.id, **action_payload},
+                        denied["agent_token"],
+                    )
+                    self.assertEqual(status, 403)
+
+    def test_unknown_disabled_legacy_null_and_management_credentials_are_401(self):
+        registration = self.register("reporter")
+        investigation = self.claimed_task(registration)
+        path = f"/api/agent/tasks/{investigation.id}/complete"
+        payload = {"agent_id": registration["id"], "summary": "forbidden"}
+        tokens = ("wrong", "agent-secret")
+        for token in tokens:
+            with self.subTest(token_kind=token):
+                status, _body = self.post(path, payload, token)
+                self.assertEqual(status, 401)
+
+        for token in ("admin-secret", "read-secret"):
+            with self.subTest(management_token=token):
+                status, _body = self.post(path, payload, token)
+                self.assertEqual(status, 403)
+
+        self.store.agents[registration["id"]].disabled_at = "2026-07-10T00:00:00Z"
+        status, _body = self.post(path, payload, registration["agent_token"])
+        self.assertEqual(status, 401)
+        self.store.agents[registration["id"]].disabled_at = None
+        self.store.agents[registration["id"]].token_hash = None
+        status, _body = self.post(path, payload, registration["agent_token"])
+        self.assertEqual(status, 401)
+        self.assertEqual(self.store.get_investigation(investigation.id)["summary"], "")
+
+    def test_forged_unregistered_completion_is_403_before_store_mutation(self):
+        reporter = self.register("reporter")
+        investigation = self.claimed_task(reporter)
+        before = self.store.get_investigation(investigation.id)
+
+        status, body = self.post(
+            f"/api/agent/tasks/{investigation.id}/complete",
+            {"agent_id": "unregistered-forged", "summary": "forged"},
+            reporter["agent_token"],
+        )
+
+        after = self.store.get_investigation(investigation.id)
+        self.assertEqual(status, 403)
+        self.assertEqual(body, {"detail": "agent identity mismatch"})
+        self.assertEqual(after["status"], before["status"])
+        self.assertEqual(after["summary"], before["summary"])
+
+    def test_body_identity_is_optional_and_store_events_use_the_principal(self):
+        reader = self.register("reader")
+        investigation = self.claimed_task(reader)
+        status, event = self.post(
+            "/api/agent/events",
+            {"task_id": investigation.id, "message": "Started"},
+            reader["agent_token"],
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(event["agent_id"], reader["id"])
+
+    def test_active_ownership_is_required_for_actions_events_and_completion(self):
+        cases = (
+            ("reader", "/api/agent/entities", self.ACTIONS["entities"][1]),
+            ("reader", "/api/agent/events", {"message": "Started"}),
+            ("reporter", "/api/agent/tasks/{task_id}/complete", {"summary": "Done"}),
+        )
+        for role, path_template, payload in cases:
+            with self.subTest(role=role, path=path_template):
+                registration = self.register(role)
+                investigation = self.store.create_investigation(
+                    name=f"Unclaimed {self.counter}",
+                    seed_type="domain",
+                    seed_value=f"unclaimed-{self.counter}.example",
+                    strategy_name="quick",
+                )
+                path = path_template.format(task_id=investigation.id)
+                status, body = self.post(
+                    path,
+                    {"task_id": investigation.id, **payload},
+                    registration["agent_token"],
+                )
+                self.assertEqual(status, 409)
+                self.assertEqual(body, {"detail": "active task ownership required"})
+
+    def test_released_and_terminal_claims_are_409_but_active_exact_owner_succeeds(self):
+        reader = self.register("reader")
+        investigation = self.claimed_task(reader)
+        payload = {"task_id": investigation.id, **self.ACTIONS["entities"][1]}
+        status, _body = self.post("/api/agent/entities", payload, reader["agent_token"])
+        self.assertEqual(status, 201)
+
+        for inactive_status in ("OPEN", "COMPLETED"):
+            with self.subTest(inactive_status=inactive_status):
+                self.store.set_investigation_status(investigation.id, inactive_status)
+                status, _body = self.post(
+                    "/api/agent/entities", payload, reader["agent_token"]
+                )
+                self.assertEqual(status, 409)
+
+    def test_matching_active_job_owner_can_write_and_event_scope_rejects_other_agent(self):
+        reader = self.register("reader", ["reader_task"])
+        investigation = self.store.create_investigation(
+            name="Job owned", seed_type="domain", seed_value="example.com", strategy_name="quick"
+        )
+        self.store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": "reader-job",
+                    "tool_name": "reader_task",
+                    "target_type": "domain",
+                    "target_value": "example.com",
+                    "depth": 0,
+                    "agent_role": "reader",
+                }
+            ],
+        )
+        claimed = self.store.claim_job(reader["id"], ["reader_task"])
+        self.assertEqual(claimed["id"], "reader-job")
+
+        status, _body = self.post(
+            "/api/agent/entities",
+            {"task_id": investigation.id, **self.ACTIONS["entities"][1]},
+            reader["agent_token"],
+        )
+        self.assertEqual(status, 201)
+
+        other = self.register("reader")
+        status, _body = self.post(
+            "/api/agent/events",
+            {"task_id": investigation.id, "message": "forged scope"},
+            other["agent_token"],
+        )
+        self.assertEqual(status, 409)
+
+        self.store.update_job_status("reader-job", "COMPLETED")
+        status, _body = self.post(
+            "/api/agent/events",
+            {"task_id": investigation.id, "message": "late event"},
+            reader["agent_token"],
+        )
+        self.assertEqual(status, 409)
+
+    def test_claim_endpoints_bind_identity_and_define_allowed_roles(self):
+        for role in ("reader", "verifier", "reporter"):
+            with self.subTest(task_claim_role=role):
+                registration = self.register(role, ["domain"])
+                investigation = self.store.create_investigation(
+                    name=role,
+                    seed_type="domain",
+                    seed_value=f"{role}.example",
+                    strategy_name="quick",
+                )
+                status, body = self.post(
+                    "/api/agent/tasks/claim",
+                    {"capabilities": ["domain"]},
+                    registration["agent_token"],
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(body["task"]["claimed_by_agent_id"], registration["id"])
+                self.assertEqual(body["task"]["id"], investigation.id)
+
+        tool_agent = self.register("tool_agent", ["external_tool"])
+        status, _body = self.post(
+            "/api/agent/tasks/claim",
+            {"capabilities": ["external_tool"]},
+            tool_agent["agent_token"],
+        )
+        self.assertEqual(status, 403)
+
+        job_investigation = self.store.create_investigation(
+            name="External job", seed_type="domain", seed_value="job.example", strategy_name="quick"
+        )
+        self.store.replace_jobs(
+            job_investigation.id,
+            [
+                {
+                    "id": "external-job",
+                    "tool_name": "external_tool",
+                    "target_type": "domain",
+                    "target_value": "job.example",
+                    "depth": 0,
+                    "agent_role": "reader",
+                }
+            ],
+        )
+        status, body = self.post(
+            "/api/agent/jobs/claim",
+            {"agent_id": tool_agent["id"], "capabilities": ["external_tool"]},
+            tool_agent["agent_token"],
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["job"]["claimed_by_agent_id"], tool_agent["id"])
+
+        forged = self.register("reader", ["email"])
+        self.store.create_investigation(
+            name="Forged claim",
+            seed_type="email",
+            seed_value="forged@example.com",
+            strategy_name="quick",
+        )
+        status, _body = self.post(
+            "/api/agent/tasks/claim",
+            {"agent_id": "another-agent", "capabilities": ["email"]},
+            forged["agent_token"],
+        )
+        self.assertEqual(status, 403)
+
+    def test_legacy_shared_token_requires_explicit_opt_in_and_registered_body_identity(self):
+        reporter = self.register("reporter")
+        investigation = self.claimed_task(reporter)
+        path = f"/api/agent/tasks/{investigation.id}/complete"
+        payload = {"agent_id": reporter["id"], "summary": "legacy completion"}
+
+        status, _body = self.post(path, payload, "agent-secret")
+        self.assertEqual(status, 401)
+
+        enabled_env = {**self.ENV, "OSINT_ALLOW_LEGACY_AGENT_TOKEN": "true"}
+        status, _body = self.post(path, payload, "agent-secret", env=enabled_env)
+        self.assertEqual(status, 200)
+
+        second = self.register("reporter")
+        second_investigation = self.claimed_task(second)
+        status, _body = self.post(
+            f"/api/agent/tasks/{second_investigation.id}/complete",
+            {"summary": "anonymous legacy"},
+            "agent-secret",
+            env=enabled_env,
+        )
+        self.assertEqual(status, 401)
+
+    def test_duplicate_authorization_headers_fail_closed_without_resolving_twice(self):
+        reader = self.register("reader")
+        investigation = self.claimed_task(reader)
+        with patch.object(
+            self.store,
+            "resolve_agent_token",
+            wraps=self.store.resolve_agent_token,
+        ) as resolve:
+            status, _body = self.post(
+                "/api/agent/entities",
+                {"task_id": investigation.id, **self.ACTIONS["entities"][1]},
+                reader["agent_token"],
+                headers=[("Authorization", f"Bearer {reader['agent_token']}")],
+            )
+        self.assertEqual(status, 401)
+        resolve.assert_not_called()
+
+        with patch.object(
+            self.store,
+            "resolve_agent_token",
+            wraps=self.store.resolve_agent_token,
+        ) as resolve:
+            status, _body = self.post(
+                "/api/agent/entities",
+                {"task_id": investigation.id, **self.ACTIONS["entities"][1]},
+                reader["agent_token"],
+            )
+        self.assertEqual(status, 201)
+        resolve.assert_called_once_with(reader["agent_token"])
 
 
 if __name__ == "__main__":

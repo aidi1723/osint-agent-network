@@ -12,6 +12,13 @@ import socket
 from threading import Lock
 from urllib.parse import parse_qs, urlparse
 
+from app.core.agent_auth import (
+    AgentPrincipal,
+    agent_action_allowed,
+    agent_principal_from_record,
+    legacy_agent_token_allowed,
+    legacy_agent_token_matches,
+)
 from app.core.agent_payload_validation import validate_agent_payload
 from app.core.browser_auth import BrowserSessionManager
 from app.core.intel_gateway import build_intel_plan
@@ -252,6 +259,8 @@ class ApiHandler(BaseHTTPRequestHandler):
     def _handle_post(self, parsed):
         session_manager = browser_session_manager()
         allowed_origins = _get_allowed_origins()
+        agent_principal: AgentPrincipal | None = None
+        agent_payload: dict | None = None
 
         if parsed.path == "/api/auth/login":
             payload = self._read_json()
@@ -285,19 +294,68 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path.startswith("/api/agent/"):
-            agent_token = os.getenv("AGENT_API_TOKEN", "")
-            authorization_status = bearer_authorization_status(
-                self.headers,
-                allowed_tokens=(agent_token,) if agent_token else (),
-                known_tokens=_configured_known_bearer_tokens(),
-                require_token=authentication_required_for_environment(),
+            authorization, authorization_present = _single_header_value(
+                self.headers, "Authorization"
             )
-            if authorization_status != 200:
+            if (
+                authorization is None
+                or not authorization_present
+                or not authorization.startswith("Bearer ")
+                or not authorization[len("Bearer "):]
+            ):
                 self._json(
                     {"detail": "unauthorized agent request"},
-                    status=authorization_status,
+                    status=401,
                 )
                 return
+            supplied_token = authorization[len("Bearer "):]
+            agent_principal = agent_principal_from_record(
+                store.resolve_agent_token(supplied_token)
+            )
+            management_tokens = tuple(
+                token
+                for token in (
+                    os.getenv("ADMIN_API_TOKEN", ""),
+                    os.getenv("READ_API_TOKEN", ""),
+                )
+                if token
+            )
+            if agent_principal is None and _token_matches_any(
+                supplied_token, management_tokens
+            ):
+                self._json({"detail": "forbidden agent request"}, status=403)
+                return
+            if agent_principal is None and (
+                legacy_agent_token_allowed(os.environ)
+                and legacy_agent_token_matches(
+                    supplied_token, os.getenv("AGENT_API_TOKEN", "")
+                )
+            ):
+                agent_payload = self._read_json()
+                body_agent_id = agent_payload.get("agent_id")
+                if isinstance(body_agent_id, str) and body_agent_id:
+                    legacy_record = next(
+                        (
+                            item
+                            for item in store.list_agents()
+                            if item.get("id") == body_agent_id
+                        ),
+                        None,
+                    )
+                    agent_principal = agent_principal_from_record(legacy_record)
+            if agent_principal is None:
+                self._json({"detail": "unauthorized agent request"}, status=401)
+                return
+            if agent_payload is None:
+                agent_payload = self._read_json()
+            supplied_agent_id = agent_payload.get("agent_id")
+            if (
+                supplied_agent_id is not None
+                and supplied_agent_id != agent_principal.agent_id
+            ):
+                self._json({"detail": "agent identity mismatch"}, status=403)
+                return
+            agent_payload["agent_id"] = agent_principal.agent_id
         elif requires_write_authorization(parsed.path):
             expected_token = os.getenv("ADMIN_API_TOKEN", "") or os.getenv("AGENT_API_TOKEN", "")
             authorization = resolve_browser_or_bearer_authorization(
@@ -500,9 +558,15 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/agent/tasks/claim":
-            payload = self._read_json()
+            payload = agent_payload
+            if agent_principal.role_tier not in {"reader", "verifier", "reporter"}:
+                self._json(
+                    {"detail": "agent role not permitted", "action": "claim_task"},
+                    status=403,
+                )
+                return
             task = store.claim_task(
-                agent_id=payload.get("agent_id", ""),
+                agent_id=agent_principal.agent_id,
                 capabilities=payload.get("capabilities", []),
             )
             if task is None:
@@ -512,9 +576,20 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/agent/jobs/claim":
-            payload = self._read_json()
+            payload = agent_payload
+            if agent_principal.role_tier not in {
+                "reader",
+                "verifier",
+                "reporter",
+                "tool_agent",
+            }:
+                self._json(
+                    {"detail": "agent role not permitted", "action": "claim_job"},
+                    status=403,
+                )
+                return
             job = store.claim_job(
-                agent_id=payload.get("agent_id", ""),
+                agent_id=agent_principal.agent_id,
                 capabilities=payload.get("capabilities", []),
             )
             if job is None:
@@ -524,19 +599,31 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/agent/events":
-            payload = self._read_json()
+            payload = agent_payload
+            if not self._agent_ownership_allowed(
+                agent_principal, payload.get("task_id")
+            ):
+                return
+            try:
+                task_id = payload["task_id"]
+                message = payload["message"]
+            except KeyError as exc:
+                self._json({"detail": f"missing field: {exc.args[0]}"}, status=400)
+                return
             event = store.add_event(
-                investigation_id=payload["task_id"],
-                agent_id=payload["agent_id"],
+                investigation_id=task_id,
+                agent_id=agent_principal.agent_id,
                 level=payload.get("level", "info"),
-                message=payload["message"],
+                message=message,
                 metadata=payload.get("metadata", {}),
             )
             self._json(event, status=201)
             return
 
         if parsed.path == "/api/agent/entities":
-            payload = self._read_json()
+            payload = agent_payload
+            if not self._agent_action_allowed(agent_principal, "entities", payload):
+                return
             if self._validation_failed(validate_agent_payload("entities", payload)):
                 return
             created = [
@@ -553,7 +640,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/agent/evidence":
-            payload = self._read_json()
+            payload = agent_payload
+            if not self._agent_action_allowed(agent_principal, "evidence", payload):
+                return
             if self._validation_failed(validate_agent_payload("evidence", payload)):
                 return
             evidence = store.add_evidence(
@@ -568,8 +657,14 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/agent/evidence-records":
             try:
-                payload = self._read_json()
-                if self._validation_failed(validate_agent_payload("evidence_records", payload)):
+                payload = agent_payload
+                if not self._agent_action_allowed(
+                    agent_principal, "evidence_records", payload
+                ):
+                    return
+                if self._validation_failed(
+                    validate_agent_payload("evidence_records", payload)
+                ):
                     return
                 record = store.add_evidence_record(
                     investigation_id=payload["task_id"],
@@ -587,7 +682,9 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/agent/facts":
             try:
-                payload = self._read_json()
+                payload = agent_payload
+                if not self._agent_action_allowed(agent_principal, "facts", payload):
+                    return
                 if self._validation_failed(validate_agent_payload("facts", payload)):
                     return
                 fact = store.add_fact(
@@ -609,7 +706,11 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/agent/hypotheses":
             try:
-                payload = self._read_json()
+                payload = agent_payload
+                if not self._agent_action_allowed(
+                    agent_principal, "hypotheses", payload
+                ):
+                    return
                 hypothesis = store.add_hypothesis(
                     investigation_id=payload["task_id"],
                     hypothesis_id=payload["hypothesis_id"],
@@ -624,7 +725,11 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/agent/hypotheses/score":
             try:
-                payload = self._read_json()
+                payload = agent_payload
+                if not self._agent_action_allowed(
+                    agent_principal, "score_hypotheses", payload
+                ):
+                    return
                 result = store.score_hypotheses(
                     investigation_id=payload["task_id"],
                     evidence_items=payload.get("evidence_items", []),
@@ -636,7 +741,11 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/agent/relationships":
-            payload = self._read_json()
+            payload = agent_payload
+            if not self._agent_action_allowed(
+                agent_principal, "relationships", payload
+            ):
+                return
             if self._validation_failed(validate_agent_payload("relationships", payload)):
                 return
             relationship = store.add_relationship(
@@ -651,10 +760,14 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if parsed.path.startswith("/api/agent/tasks/") and parsed.path.endswith("/complete"):
             task_id = parsed.path.split("/")[-2]
-            payload = self._read_json()
+            payload = agent_payload
+            if not self._agent_action_allowed(
+                agent_principal, "complete_task", payload, task_id=task_id
+            ):
+                return
             task = store.complete_task(
                 investigation_id=task_id,
-                agent_id=payload["agent_id"],
+                agent_id=agent_principal.agent_id,
                 status=payload.get("status", "COMPLETED"),
                 summary=payload.get("summary", ""),
                 report_markdown=payload.get("report_markdown", ""),
@@ -667,6 +780,41 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
 
         self._json({"detail": "not found"}, status=404)
+
+    def _agent_action_allowed(
+        self,
+        principal: AgentPrincipal,
+        action: str,
+        payload: dict,
+        task_id: str | None = None,
+    ) -> bool:
+        if not agent_action_allowed(principal, action):
+            self._json(
+                {"detail": "agent role not permitted", "action": action},
+                status=403,
+            )
+            return False
+        investigation_id = task_id if task_id is not None else payload.get("task_id")
+        return self._agent_ownership_allowed(principal, investigation_id)
+
+    def _agent_ownership_allowed(
+        self,
+        principal: AgentPrincipal,
+        investigation_id: object,
+    ) -> bool:
+        if not isinstance(investigation_id, str) or not investigation_id:
+            return True
+        if store.agent_has_investigation_access(
+            principal.agent_id,
+            investigation_id,
+            principal.role_tier,
+        ):
+            return True
+        self._json(
+            {"detail": "active task ownership required"},
+            status=409,
+        )
+        return False
 
     def do_OPTIONS(self):
         self._json({})

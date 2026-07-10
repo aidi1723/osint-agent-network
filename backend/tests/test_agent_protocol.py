@@ -283,6 +283,13 @@ class AgentProtocolTests(unittest.TestCase):
             seed_value="Sample Auto Parts Co.",
             strategy_name="deep",
         )
+        reader = memory_store.register_agent(
+            "http-reader", "test", ["company"], "reader"
+        )
+        verifier = memory_store.register_agent(
+            "http-verifier", "test", ["company"], "verifier"
+        )
+        memory_store.claim_task(reader["id"], ["company"])
         original_store = app_main.store
         app_main.store = memory_store
         server = ThreadingHTTPServer(("127.0.0.1", 0), ApiHandler)
@@ -300,7 +307,9 @@ class AgentProtocolTests(unittest.TestCase):
                     "snippet": "SampleCo contact page lists xs@csituo.com.",
                     "credibility": 0.82,
                 },
+                token=reader["agent_token"],
             )
+            memory_store.investigations[investigation.id].claimed_by_agent_id = verifier["id"]
             _post_json(
                 f"{base_url}/api/agent/facts",
                 {
@@ -314,6 +323,7 @@ class AgentProtocolTests(unittest.TestCase):
                     "admiralty_code": evidence["admiralty_code"],
                     "evidence_ids": [evidence["id"]],
                 },
+                token=verifier["agent_token"],
             )
             _post_json(
                 f"{base_url}/api/agent/hypotheses",
@@ -322,6 +332,7 @@ class AgentProtocolTests(unittest.TestCase):
                     "hypothesis_id": "h1",
                     "statement": "SampleCo is an active export brand network.",
                 },
+                token=verifier["agent_token"],
             )
             analysis = _post_json(
                 f"{base_url}/api/agent/hypotheses/score",
@@ -340,6 +351,7 @@ class AgentProtocolTests(unittest.TestCase):
                         }
                     ],
                 },
+                token=verifier["agent_token"],
             )
         finally:
             server.shutdown()
@@ -350,6 +362,36 @@ class AgentProtocolTests(unittest.TestCase):
         self.assertEqual(detail["facts"][0]["object"], "xs@csituo.com")
         self.assertEqual(detail["hypothesis_analysis"]["most_likely_hypothesis"], "h1")
         self.assertEqual(analysis["most_likely_hypothesis"], "h1")
+
+    def test_unregistered_agent_cannot_complete_forged_task_or_mutate_store(self):
+        memory_store = MemoryStore()
+        investigation = memory_store.create_investigation(
+            name="Forged completion regression",
+            seed_type="domain",
+            seed_value="example.com",
+            strategy_name="quick",
+        )
+        original_store = app_main.store
+        app_main.store = memory_store
+        server = ThreadingHTTPServer(("127.0.0.1", 0), ApiHandler)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status, payload = _post_json_status(
+                f"http://127.0.0.1:{server.server_address[1]}/api/agent/tasks/{investigation.id}/complete",
+                {"agent_id": "forged-unregistered", "summary": "forged"},
+                token="not-issued",
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            app_main.store = original_store
+
+        self.assertEqual(status, 401)
+        self.assertEqual(payload, {"detail": "unauthorized agent request"})
+        detail = memory_store.get_investigation(investigation.id)
+        self.assertEqual(detail["status"], "OPEN")
+        self.assertEqual(detail["summary"], "")
 
     def test_run_jobs_route_enqueues_background_worker(self):
         class FakeQueue:
@@ -898,20 +940,52 @@ class AgentProtocolTests(unittest.TestCase):
             self.assertIsNone(reloaded.get_investigation(deleted_task.id))
 
 
-def _post_json(url: str, payload: dict) -> dict:
+def _post_json(url: str, payload: dict, token: str = "") -> dict:
     encoded = json.dumps(payload).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     request = Request(
         url,
         data=encoded,
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     )
     with urlopen(request, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _post_json_status(url: str, payload: dict, token: str = "") -> tuple[int, dict]:
+    try:
+        return 200, _post_json(url, payload, token=token)
+    except HTTPError as exc:
+        try:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+        finally:
+            exc.close()
+
+
 def _post_json_expect_error(path: str, payload: dict) -> tuple[int, dict]:
     memory_store = MemoryStore()
+    role = "verifier" if path in {
+        "/api/agent/facts",
+        "/api/agent/hypotheses",
+        "/api/agent/hypotheses/score",
+    } else "reader"
+    registration = memory_store.register_agent(
+        agent_name=f"validation-{role}",
+        agent_type="test",
+        capabilities=["domain"],
+        role_tier=role,
+    )
+    investigation = memory_store.create_investigation(
+        name="Validation task",
+        seed_type="domain",
+        seed_value="validation.example",
+        strategy_name="quick",
+    )
+    memory_store.claim_task(registration["id"], ["domain"])
+    payload = {**payload, "task_id": investigation.id}
     original_store = app_main.store
     app_main.store = memory_store
     server = ThreadingHTTPServer(("127.0.0.1", 0), ApiHandler)
@@ -919,10 +993,13 @@ def _post_json_expect_error(path: str, payload: dict) -> tuple[int, dict]:
     thread.start()
     base_url = f"http://127.0.0.1:{server.server_address[1]}"
     try:
+        headers = {"Content-Type": "application/json"}
+        if path.startswith("/api/agent/"):
+            headers["Authorization"] = f"Bearer {registration['agent_token']}"
         request = Request(
             f"{base_url}{path}",
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
         try:
