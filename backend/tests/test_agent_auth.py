@@ -1,5 +1,6 @@
 import http.client
 import json
+import socket
 import unittest
 from http.server import ThreadingHTTPServer
 from threading import Thread
@@ -27,8 +28,11 @@ _NO_PAYLOAD = object()
 
 
 class ApiTestServer:
+    def __init__(self, handler_class=ApiHandler):
+        self.handler_class = handler_class
+
     def __enter__(self):
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), ApiHandler)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), self.handler_class)
         self.thread = Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         return self
@@ -62,6 +66,46 @@ class ApiTestServer:
             response_headers = response.getheaders()
         connection.close()
         return response.status, response_body, response_headers
+
+    def request_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: bytes = b"",
+        headers: list[tuple[str, str]] | None = None,
+        env: dict[str, str] | None = None,
+        shutdown_write: bool = False,
+    ) -> tuple[int, bytes, list[tuple[str, str]]]:
+        connection = http.client.HTTPConnection(*self.server.server_address, timeout=5)
+        try:
+            with patch.dict("os.environ", env or PRODUCTION_ENV, clear=True):
+                connection.putrequest(method, path)
+                for name, value in headers or []:
+                    connection.putheader(name, value)
+                connection.endheaders(body)
+                if shutdown_write and connection.sock is not None:
+                    connection.sock.shutdown(socket.SHUT_WR)
+                response = connection.getresponse()
+                response_body = response.read()
+                response_headers = response.getheaders()
+            return response.status, response_body, response_headers
+        finally:
+            connection.close()
+
+
+class ObservedTimeoutApiHandler(ApiHandler):
+    INITIAL_TIMEOUT_SECONDS = 0.2
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(self.INITIAL_TIMEOUT_SECONDS)
+
+    def do_POST(self):
+        try:
+            super().do_POST()
+        finally:
+            self.server.observed_connection_timeout = self.connection.gettimeout()
 
 
 def header_value(headers: list[tuple[str, str]], name: str) -> str | None:
@@ -338,13 +382,26 @@ class BrowserAuthHttpTests(unittest.TestCase):
             )
         self.assertEqual(status, 200)
 
-        status, _body, _headers = self.server.request(
-            "POST",
-            "/api/investigations/release-stale",
-            payload={},
-            headers=[("Authorization", "Bearer read-secret")],
-        )
-        self.assertEqual(status, 401)
+        for token in ("read-secret", "agent-secret"):
+            with self.subTest(management_token=token):
+                status, _body, _headers = self.server.request(
+                    "POST",
+                    "/api/investigations/release-stale",
+                    payload={},
+                    headers=[("Authorization", f"Bearer {token}")],
+                )
+                self.assertEqual(status, 403)
+
+        for token in (None, "wrong"):
+            with self.subTest(invalid_management_token=token):
+                headers = [] if token is None else [("Authorization", f"Bearer {token}")]
+                status, _body, _headers = self.server.request(
+                    "POST",
+                    "/api/investigations/release-stale",
+                    payload={},
+                    headers=headers,
+                )
+                self.assertEqual(status, 401)
 
         agent_fallback_env = {
             **PRODUCTION_ENV,
@@ -360,6 +417,65 @@ class BrowserAuthHttpTests(unittest.TestCase):
             )
         self.assertEqual(status, 200)
 
+    def test_duplicate_authorization_headers_fail_closed_for_every_auth_scope(self):
+        cases = (
+            ("GET", "/api/agents", _NO_PAYLOAD, "read-secret"),
+            ("POST", "/api/investigations/release-stale", {}, "admin-secret"),
+            ("POST", "/api/agent/facts", {}, "agent-secret"),
+        )
+        with (
+            patch("app.main.store.list_agents", return_value=[]),
+            patch("app.main.store.release_stale_claims", return_value=[]),
+        ):
+            for method, path, payload, valid_token in cases:
+                for values in (
+                    (f"Bearer {valid_token}", "Bearer wrong"),
+                    ("Bearer wrong", f"Bearer {valid_token}"),
+                ):
+                    with self.subTest(path=path, values=values):
+                        status, _body, _headers = self.server.request(
+                            method,
+                            path,
+                            payload=payload,
+                            headers=[("Authorization", value) for value in values],
+                        )
+                        self.assertEqual(status, 401)
+
+    def test_known_bearers_are_forbidden_outside_their_route_scope(self):
+        with patch("app.main.store.list_agents", return_value=[]):
+            status, _body, _headers = self.server.request(
+                "GET",
+                "/api/agents",
+                headers=[("Authorization", "Bearer agent-secret")],
+            )
+        self.assertEqual(status, 403)
+
+        for token in ("admin-secret", "read-secret"):
+            with self.subTest(agent_route_token=token):
+                status, _body, _headers = self.server.request(
+                    "POST",
+                    "/api/agent/facts",
+                    payload={},
+                    headers=[("Authorization", f"Bearer {token}")],
+                )
+                self.assertEqual(status, 403)
+
+        for token in (None, "wrong"):
+            with self.subTest(invalid_agent_route_token=token):
+                headers = [] if token is None else [("Authorization", f"Bearer {token}")]
+                status, _body, _headers = self.server.request(
+                    "POST", "/api/agent/facts", payload={}, headers=headers
+                )
+                self.assertEqual(status, 401)
+
+        status, _body, _headers = self.server.request(
+            "POST",
+            "/api/agent/facts",
+            payload={},
+            headers=[("Authorization", "Bearer agent-secret")],
+        )
+        self.assertEqual(status, 400)
+
     def test_login_rejects_non_object_json_with_safe_json_error(self):
         for supplied in ([], "scalar-value", None):
             with self.subTest(supplied=supplied):
@@ -372,6 +488,106 @@ class BrowserAuthHttpTests(unittest.TestCase):
                 self.assertNotIn("admin-secret", json.dumps(payload))
                 self.assertNotIn("scalar-value", json.dumps(payload))
                 assert_security_headers(self, headers)
+
+    def test_request_body_framing_errors_are_structured_and_non_reflective(self):
+        malformed_cases = (
+            ([('Content-Length', '-1')], b"", True, 400, "invalid content length"),
+            ([('Content-Length', 'abc')], b"", False, 400, "invalid content length"),
+            (
+                [('Content-Length', '2'), ('Content-Length', '2')],
+                b"{}",
+                False,
+                400,
+                "invalid content length",
+            ),
+            (
+                [('Content-Length', '1')],
+                b"\xff",
+                False,
+                400,
+                "request body is not valid utf-8",
+            ),
+            (
+                [('Content-Length', '20')],
+                b"private-body-value",
+                True,
+                400,
+                "incomplete request body",
+            ),
+        )
+        for headers, body, shutdown_write, expected_status, expected_detail in malformed_cases:
+            with self.subTest(headers=headers):
+                status, response_body, response_headers = self.server.request_bytes(
+                    "POST",
+                    "/api/auth/login",
+                    body=body,
+                    headers=headers,
+                    shutdown_write=shutdown_write,
+                )
+                self.assertEqual(status, expected_status)
+                self.assertEqual(json_payload(response_body), {"detail": expected_detail})
+                self.assertNotIn("private-body-value", response_body.decode("utf-8"))
+                assert_security_headers(self, response_headers)
+
+        oversized_env = {**PRODUCTION_ENV, "MAX_REQUEST_BODY_BYTES": "4"}
+        status, response_body, response_headers = self.server.request_bytes(
+            "POST",
+            "/api/auth/login",
+            headers=[("Content-Length", "5")],
+            env=oversized_env,
+        )
+        self.assertEqual(status, 413)
+        self.assertEqual(json_payload(response_body), {"detail": "request body too large"})
+        assert_security_headers(self, response_headers)
+
+    def test_request_body_timeout_returns_408_and_restores_socket_timeout(self):
+        with ApiTestServer(ObservedTimeoutApiHandler) as timeout_server:
+            with patch(
+                "app.main.REQUEST_BODY_READ_TIMEOUT_SECONDS",
+                0.05,
+                create=True,
+            ):
+                status, body, headers = timeout_server.request_bytes(
+                    "POST",
+                    "/api/auth/login",
+                    headers=[("Content-Length", "2")],
+                )
+
+            self.assertEqual(status, 408)
+            self.assertEqual(json_payload(body), {"detail": "request body read timed out"})
+            assert_security_headers(self, headers)
+            self.assertEqual(
+                timeout_server.server.observed_connection_timeout,
+                ObservedTimeoutApiHandler.INITIAL_TIMEOUT_SECONDS,
+            )
+
+    def test_extreme_decimal_content_length_fails_closed_before_body_read(self):
+        status, body, headers = self.server.request_bytes(
+            "POST",
+            "/api/auth/login",
+            headers=[("Content-Length", "9" * 5000)],
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(json_payload(body), {"detail": "invalid content length"})
+        assert_security_headers(self, headers)
+
+    def test_missing_content_length_remains_an_empty_body_for_compatibility(self):
+        status, body, headers = self.server.request_bytes(
+            "POST", "/api/auth/login"
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(json_payload(body), {"detail": "invalid credentials"})
+        assert_security_headers(self, headers)
+
+    def test_transfer_encoded_request_body_is_rejected_as_invalid_framing(self):
+        status, body, headers = self.server.request_bytes(
+            "POST",
+            "/api/auth/login",
+            headers=[("Transfer-Encoding", "chunked")],
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(json_payload(body), {"detail": "invalid request framing"})
+        assert_security_headers(self, headers)
 
     def test_development_management_requests_remain_usable_without_auth(self):
         with patch("app.main.store.release_stale_claims", return_value=[]):
@@ -443,6 +659,53 @@ class BrowserAuthHttpTests(unittest.TestCase):
         self.assertEqual(header_value(headers, "Access-Control-Allow-Credentials"), "true")
         self.assertIn("X-CSRF-Token", header_value(headers, "Access-Control-Allow-Headers"))
         assert_security_headers(self, headers)
+
+    def test_credentialed_cors_requires_one_exact_configured_origin(self):
+        exact_origin = [("Origin", "https://hcs.test")]
+        status, _body, headers = self.server.request(
+            "GET", "/api/auth/session", headers=exact_origin
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(header_value(headers, "Access-Control-Allow-Origin"), "https://hcs.test")
+        self.assertEqual(header_value(headers, "Access-Control-Allow-Credentials"), "true")
+
+        for request_headers in (
+            [("Origin", "https://wrong.test")],
+            [("Origin", "https://hcs.test"), ("Origin", "https://hcs.test")],
+        ):
+            with self.subTest(request_headers=request_headers):
+                status, _body, headers = self.server.request(
+                    "GET", "/api/auth/session", headers=request_headers
+                )
+                self.assertEqual(status, 200)
+                self.assertIsNone(header_value(headers, "Access-Control-Allow-Origin"))
+                self.assertIsNone(header_value(headers, "Access-Control-Allow-Credentials"))
+
+    def test_cors_wildcard_never_enables_credentials_or_cookie_mutation(self):
+        wildcard_env = {**PRODUCTION_ENV, "CORS_ALLOWED_ORIGINS": "*"}
+        origin = [("Origin", "https://arbitrary.test")]
+        status, _body, headers = self.server.request(
+            "OPTIONS", "/api/investigations", headers=origin, env=wildcard_env
+        )
+        self.assertEqual(status, 200)
+        self.assertIsNone(header_value(headers, "Access-Control-Allow-Origin"))
+        self.assertIsNone(header_value(headers, "Access-Control-Allow-Credentials"))
+
+        cookie, csrf_token, _headers = self.login(wildcard_env)
+        status, _body, headers = self.server.request(
+            "POST",
+            "/api/investigations/release-stale",
+            payload={},
+            headers=[
+                ("Cookie", cookie),
+                ("Origin", "https://arbitrary.test"),
+                ("X-CSRF-Token", csrf_token),
+            ],
+            env=wildcard_env,
+        )
+        self.assertEqual(status, 403)
+        self.assertIsNone(header_value(headers, "Access-Control-Allow-Origin"))
+        self.assertIsNone(header_value(headers, "Access-Control-Allow-Credentials"))
 
 
 if __name__ == "__main__":

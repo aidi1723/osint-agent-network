@@ -56,6 +56,32 @@ describe("browser authentication", () => {
     });
   });
 
+  it("rejects authenticated session and login responses without csrf", async () => {
+    const missingCsrf = () => new Response(JSON.stringify({
+      authenticated: true,
+      required: true,
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+
+    await expect(loadSession("", vi.fn(async () => missingCsrf()))).rejects.toEqual(
+      new AuthRequestError("invalid authentication response", 502),
+    );
+    await expect(login("", "operator-secret", vi.fn(async () => missingCsrf()))).rejects.toEqual(
+      new AuthRequestError("invalid authentication response", 502),
+    );
+  });
+
+  it("preserves development bypass when authentication is not required", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      authenticated: false,
+      required: false,
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    await expect(loadSession("", fetchImpl)).resolves.toEqual({
+      authenticated: false,
+      required: false,
+    });
+  });
+
   it("logs in and out using credentialed json mutations", async () => {
     const loginFetch = vi.fn(async () => new Response(JSON.stringify({
       authenticated: true,

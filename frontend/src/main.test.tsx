@@ -20,7 +20,10 @@ const apiMocks = vi.hoisted(() => ({
   setUnauthorizedHandler: vi.fn(),
 }));
 
-vi.mock("./auth", () => authMocks);
+vi.mock("./auth", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./auth")>(),
+  ...authMocks,
+}));
 vi.mock("./api", () => apiMocks);
 
 import { App } from "./main";
@@ -97,6 +100,37 @@ describe("App browser auth shell", () => {
 
     expect(document.body.textContent).toContain("管理员登录");
     expect(document.querySelector(".shell")).toBeNull();
+  });
+
+  it("fails closed when an authenticated session omits csrf", async () => {
+    authMocks.loadSession.mockResolvedValue({ authenticated: true, required: true });
+
+    await renderApp();
+
+    expect(document.body.textContent).toContain("管理员登录");
+    expect(document.querySelector(".shell")).toBeNull();
+    expect(document.querySelector('button[aria-label="退出登录"]')).toBeNull();
+    expect(authMocks.logout).not.toHaveBeenCalled();
+  });
+
+  it("keeps the login screen when a successful login response omits csrf", async () => {
+    authMocks.loadSession.mockResolvedValue({ authenticated: false, required: true });
+    authMocks.login.mockResolvedValue({ authenticated: true });
+    await renderApp();
+
+    await submitLogin("operator-secret");
+
+    expect(document.body.textContent).toContain("管理员登录");
+    expect(document.querySelector(".shell")).toBeNull();
+  });
+
+  it("preserves the unauthenticated development console bypass", async () => {
+    authMocks.loadSession.mockResolvedValue({ authenticated: false, required: false });
+
+    await renderApp();
+
+    expect(document.querySelector(".shell")).not.toBeNull();
+    expect(document.querySelector('button[aria-label="退出登录"]')).toBeNull();
   });
 
   it("mounts OperationsConsole and loads initial data after successful login", async () => {

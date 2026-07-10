@@ -55,9 +55,13 @@ export function App() {
     loadSession(apiBase)
       .then((session) => {
         if (!active) return;
+        const nextCsrfToken = authenticatedCsrfToken(session);
+        if (session.authenticated && !nextCsrfToken) {
+          throw new Error("authenticated session is missing csrf");
+        }
         setAuthRequired(Boolean(session.required));
         setAuthenticated(Boolean(session.authenticated));
-        setCsrfToken(session.authenticated ? session.csrf_token ?? null : null);
+        setCsrfToken(nextCsrfToken);
       })
       .catch(() => {
         if (!active) return;
@@ -84,15 +88,20 @@ export function App() {
 
   async function handleLogin(adminToken: string) {
     const session = await login(apiBase, adminToken);
+    const nextCsrfToken = authenticatedCsrfToken(session);
+    if (!session.authenticated || !nextCsrfToken) {
+      throw new Error("authenticated login is missing csrf");
+    }
     setAuthRequired(true);
     setAuthenticated(true);
-    setCsrfToken(session.csrf_token ?? null);
+    setCsrfToken(nextCsrfToken);
     setSessionError(null);
   }
 
   async function handleLogout() {
+    if (!csrfToken) return;
     try {
-      if (csrfToken) await logout(apiBase, csrfToken);
+      await logout(apiBase, csrfToken);
     } catch {
       // Local auth state must still be cleared when the session already expired.
     } finally {
@@ -111,9 +120,17 @@ export function App() {
   return (
     <OperationsConsole
       csrfToken={csrfToken}
-      onLogout={authenticated ? handleLogout : undefined}
+      onLogout={authenticated && csrfToken ? handleLogout : undefined}
     />
   );
+}
+
+function authenticatedCsrfToken(session: {
+  authenticated: boolean;
+  csrf_token?: string;
+}): string | null {
+  if (!session.authenticated || typeof session.csrf_token !== "string") return null;
+  return session.csrf_token.trim() ? session.csrf_token : null;
 }
 
 type OperationsConsoleProps = {

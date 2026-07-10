@@ -87,5 +87,11 @@ async function authRequest(
       : `Authentication request failed with status ${response.status}`;
     throw new AuthRequestError(message, response.status);
   }
+  if (
+    payload.authenticated === true
+    && (typeof payload.csrf_token !== "string" || !payload.csrf_token.trim())
+  ) {
+    throw new AuthRequestError("invalid authentication response", 502);
+  }
   return payload as AuthSession;
 }

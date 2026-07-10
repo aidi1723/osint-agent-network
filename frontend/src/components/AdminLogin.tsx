@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { KeyRound, LogIn } from "lucide-react";
+import { AuthRequestError } from "../auth";
 
 type AdminLoginProps = {
   onLogin: (adminToken: string) => Promise<void>;
@@ -18,8 +19,12 @@ export function AdminLogin({ onLogin, initialError = null }: AdminLoginProps) {
     setError(null);
     try {
       await onLogin(adminToken);
-    } catch {
-      setError("管理员凭据无效，请检查后重试。");
+    } catch (failure) {
+      setError(
+        failure instanceof AuthRequestError && failure.status === 401
+          ? "管理员凭据无效，请检查后重试。"
+          : "认证服务暂时不可用，请稍后重试。",
+      );
     } finally {
       setSubmitting(false);
     }
