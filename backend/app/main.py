@@ -643,61 +643,69 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/agent/events":
             payload = agent_payload
-            if not self._agent_ownership_allowed(
-                agent_principal,
-                payload.get("task_id"),
-                job_id=payload.get("job_id"),
-                action="event",
-            ):
-                return
             try:
                 task_id = payload["task_id"]
                 message = payload["message"]
             except KeyError as exc:
                 self._json({"detail": f"missing field: {exc.args[0]}"}, status=400)
                 return
-            event = store.add_event(
-                investigation_id=task_id,
+            event = store.agent_add_event(
                 agent_id=agent_principal.agent_id,
+                required_tier=agent_principal.role_tier,
+                investigation_id=task_id,
+                job_id=(
+                    payload.get("job_id")
+                    if isinstance(payload.get("job_id"), str)
+                    else None
+                ),
                 level=payload.get("level", "info"),
                 message=message,
                 metadata=payload.get("metadata", {}),
             )
+            if event is None:
+                self._agent_mutation_conflict()
+                return
             self._json(event, status=201)
             return
 
         if parsed.path == "/api/agent/entities":
             payload = agent_payload
-            if not self._agent_action_allowed(agent_principal, "entities", payload):
+            if not self._agent_action_allowed(agent_principal, "entities"):
                 return
             if self._validation_failed(validate_agent_payload("entities", payload)):
                 return
-            created = [
-                store.add_entity(
-                    investigation_id=payload["task_id"],
-                    entity_type=item["type"],
-                    value=item["value"],
-                    source_tool=item.get("source_tool", "agent"),
-                    confidence=float(item.get("confidence", 0.0)),
-                )
-                for item in payload.get("entities", [])
-            ]
+            created = store.agent_add_entities(
+                agent_id=agent_principal.agent_id,
+                required_tier=agent_principal.role_tier,
+                investigation_id=payload["task_id"],
+                job_id=payload.get("job_id"),
+                entities=payload.get("entities", []),
+            )
+            if created is None:
+                self._agent_mutation_conflict()
+                return
             self._json({"entities": created}, status=201)
             return
 
         if parsed.path == "/api/agent/evidence":
             payload = agent_payload
-            if not self._agent_action_allowed(agent_principal, "evidence", payload):
+            if not self._agent_action_allowed(agent_principal, "evidence"):
                 return
             if self._validation_failed(validate_agent_payload("evidence", payload)):
                 return
-            evidence = store.add_evidence(
+            evidence = store.agent_add_evidence(
+                agent_id=agent_principal.agent_id,
+                required_tier=agent_principal.role_tier,
                 investigation_id=payload["task_id"],
+                job_id=payload.get("job_id"),
                 entity_value=payload["entity_value"],
                 evidence_kind=payload["evidence_kind"],
                 source_tool=payload.get("source_tool", "agent"),
                 snippet=payload.get("snippet", ""),
             )
+            if evidence is None:
+                self._agent_mutation_conflict()
+                return
             self._json(evidence, status=201)
             return
 
@@ -705,15 +713,18 @@ class ApiHandler(BaseHTTPRequestHandler):
             try:
                 payload = agent_payload
                 if not self._agent_action_allowed(
-                    agent_principal, "evidence_records", payload
+                    agent_principal, "evidence_records"
                 ):
                     return
                 if self._validation_failed(
                     validate_agent_payload("evidence_records", payload)
                 ):
                     return
-                record = store.add_evidence_record(
+                record = store.agent_add_evidence_record(
+                    agent_id=agent_principal.agent_id,
+                    required_tier=agent_principal.role_tier,
                     investigation_id=payload["task_id"],
+                    job_id=payload.get("job_id"),
                     source_url=payload["source_url"],
                     source_type=payload["source_type"],
                     source_tool=payload.get("source_tool", "agent"),
@@ -723,18 +734,24 @@ class ApiHandler(BaseHTTPRequestHandler):
             except (KeyError, ValueError) as exc:
                 self._json({"detail": str(exc)}, status=400)
                 return
+            if record is None:
+                self._agent_mutation_conflict()
+                return
             self._json(record, status=201)
             return
 
         if parsed.path == "/api/agent/facts":
             try:
                 payload = agent_payload
-                if not self._agent_action_allowed(agent_principal, "facts", payload):
+                if not self._agent_action_allowed(agent_principal, "facts"):
                     return
                 if self._validation_failed(validate_agent_payload("facts", payload)):
                     return
-                fact = store.add_fact(
+                fact = store.agent_add_fact(
+                    agent_id=agent_principal.agent_id,
+                    required_tier=agent_principal.role_tier,
                     investigation_id=payload["task_id"],
+                    job_id=payload.get("job_id"),
                     statement=payload["statement"],
                     subject=payload["subject"],
                     predicate=payload["predicate"],
@@ -747,6 +764,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             except (KeyError, ValueError) as exc:
                 self._json({"detail": str(exc)}, status=400)
                 return
+            if fact is None:
+                self._agent_mutation_conflict()
+                return
             self._json(fact, status=201)
             return
 
@@ -754,17 +774,23 @@ class ApiHandler(BaseHTTPRequestHandler):
             try:
                 payload = agent_payload
                 if not self._agent_action_allowed(
-                    agent_principal, "hypotheses", payload
+                    agent_principal, "hypotheses"
                 ):
                     return
-                hypothesis = store.add_hypothesis(
+                hypothesis = store.agent_add_hypothesis(
+                    agent_id=agent_principal.agent_id,
+                    required_tier=agent_principal.role_tier,
                     investigation_id=payload["task_id"],
+                    job_id=payload.get("job_id"),
                     hypothesis_id=payload["hypothesis_id"],
                     statement=payload["statement"],
                     group=payload.get("group", "default"),
                 )
             except KeyError as exc:
                 self._json({"detail": f"missing field: {exc.args[0]}"}, status=400)
+                return
+            if hypothesis is None:
+                self._agent_mutation_conflict()
                 return
             self._json(hypothesis, status=201)
             return
@@ -773,15 +799,21 @@ class ApiHandler(BaseHTTPRequestHandler):
             try:
                 payload = agent_payload
                 if not self._agent_action_allowed(
-                    agent_principal, "score_hypotheses", payload
+                    agent_principal, "score_hypotheses"
                 ):
                     return
-                result = store.score_hypotheses(
+                result = store.agent_score_hypotheses(
+                    agent_id=agent_principal.agent_id,
+                    required_tier=agent_principal.role_tier,
                     investigation_id=payload["task_id"],
+                    job_id=payload.get("job_id"),
                     evidence_items=payload.get("evidence_items", []),
                 )
             except (KeyError, ValueError) as exc:
                 self._json({"detail": str(exc)}, status=400)
+                return
+            if result is None:
+                self._agent_mutation_conflict()
                 return
             self._json(result, status=201)
             return
@@ -789,38 +821,44 @@ class ApiHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/agent/relationships":
             payload = agent_payload
             if not self._agent_action_allowed(
-                agent_principal, "relationships", payload
+                agent_principal, "relationships"
             ):
                 return
             if self._validation_failed(validate_agent_payload("relationships", payload)):
                 return
-            relationship = store.add_relationship(
+            relationship = store.agent_add_relationship(
+                agent_id=agent_principal.agent_id,
+                required_tier=agent_principal.role_tier,
                 investigation_id=payload["task_id"],
+                job_id=payload.get("job_id"),
                 from_value=payload["from"],
                 to_value=payload["to"],
                 relationship_type=payload["relationship_type"],
                 confidence=float(payload.get("confidence", 0.0)),
             )
+            if relationship is None:
+                self._agent_mutation_conflict()
+                return
             self._json(relationship, status=201)
             return
 
         if parsed.path.startswith("/api/agent/tasks/") and parsed.path.endswith("/complete"):
             task_id = parsed.path.split("/")[-2]
             payload = agent_payload
-            if not self._agent_action_allowed(
-                agent_principal, "complete_task", payload, task_id=task_id
-            ):
+            if not self._agent_action_allowed(agent_principal, "complete_task"):
                 return
-            task = store.complete_task(
-                investigation_id=task_id,
+            task = store.agent_complete_task(
                 agent_id=agent_principal.agent_id,
+                required_tier=agent_principal.role_tier,
+                investigation_id=task_id,
+                job_id=payload.get("job_id"),
                 status=payload.get("status", "COMPLETED"),
                 summary=payload.get("summary", ""),
                 report_markdown=payload.get("report_markdown", ""),
                 confidence=payload.get("confidence"),
             )
             if task is None:
-                self._json({"detail": "task not found"}, status=404)
+                self._agent_mutation_conflict()
                 return
             self._json(task)
             return
@@ -831,8 +869,6 @@ class ApiHandler(BaseHTTPRequestHandler):
         self,
         principal: AgentPrincipal,
         action: str,
-        payload: dict,
-        task_id: str | None = None,
     ) -> bool:
         if not agent_action_allowed(principal, action):
             self._json(
@@ -840,36 +876,13 @@ class ApiHandler(BaseHTTPRequestHandler):
                 status=403,
             )
             return False
-        investigation_id = task_id if task_id is not None else payload.get("task_id")
-        return self._agent_ownership_allowed(
-            principal,
-            investigation_id,
-            job_id=payload.get("job_id"),
-            action=action,
-        )
+        return True
 
-    def _agent_ownership_allowed(
-        self,
-        principal: AgentPrincipal,
-        investigation_id: object,
-        job_id: object = None,
-        action: str | None = None,
-    ) -> bool:
-        if not isinstance(investigation_id, str) or not investigation_id:
-            return True
-        if store.agent_has_investigation_access(
-            principal.agent_id,
-            investigation_id,
-            principal.role_tier,
-            job_id=job_id if isinstance(job_id, str) else None,
-            action=action,
-        ):
-            return True
+    def _agent_mutation_conflict(self) -> None:
         self._json(
             {"detail": "active task ownership required"},
             status=409,
         )
-        return False
 
     def do_OPTIONS(self):
         self._json({})

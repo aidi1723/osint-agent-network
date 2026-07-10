@@ -901,6 +901,138 @@ class AgentIdentityStoreContract:
         self.assertEqual(after["events"], [])
         self.assertEqual(self.store.list_jobs(investigation.id)[0]["status"], "CLAIMED")
 
+    def test_scoped_entity_mutation_rechecks_lifecycle_role_and_job_state(self):
+        mutate = getattr(self.store, "agent_add_entities", None)
+        self.assertTrue(callable(mutate), "scoped entity mutation API is required")
+        for index, state_change in enumerate(
+            ("cancel", "release", "disable", "role_change")
+        ):
+            with self.subTest(state_change=state_change):
+                registration = self.register(
+                    name=f"atomic-reader-{state_change}",
+                    role_tier="reader",
+                    capabilities=["domain"],
+                )
+                investigation = self.store.create_investigation(
+                    name=f"Atomic entity {state_change}",
+                    seed_type="domain",
+                    seed_value=f"atomic-{index}.example",
+                    strategy_name="quick",
+                )
+                claimed = self.store.claim_task(registration["id"], ["domain"])
+                self.assertEqual(claimed["id"], investigation.id)
+                if state_change == "cancel":
+                    self.store.cancel_task(investigation.id)
+                elif state_change == "release":
+                    self.store.reopen_task(investigation.id)
+                elif state_change == "disable":
+                    self.disable_agent(registration["id"])
+                else:
+                    self.set_agent_role(registration["id"], "verifier")
+
+                result = mutate(
+                    agent_id=registration["id"],
+                    required_tier="reader",
+                    investigation_id=investigation.id,
+                    job_id=None,
+                    entities=[
+                        {
+                            "type": "domain",
+                            "value": f"late-{index}.example",
+                            "source_tool": "agent",
+                            "confidence": 0.8,
+                        }
+                    ],
+                )
+
+                self.assertIsNone(result)
+                self.assertEqual(
+                    self.store.get_investigation(investigation.id)["entities"], []
+                )
+                if state_change == "release":
+                    self.store.archive_task(investigation.id)
+
+        registration = self.register(
+            name="atomic-reader-completed-job",
+            role_tier="reader",
+            capabilities=["reader_task"],
+        )
+        investigation = self.store.create_investigation(
+            name="Atomic completed job",
+            seed_type="domain",
+            seed_value="atomic-completed-job.example",
+            strategy_name="quick",
+        )
+        self.store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": "atomic-completed-reader-job",
+                    "tool_name": "reader_task",
+                    "target_type": "domain",
+                    "target_value": "atomic-completed-job.example",
+                    "depth": 0,
+                    "agent_role": "reader",
+                    "output_contract": "entities",
+                }
+            ],
+        )
+        claimed_job = self.store.claim_job(registration["id"], ["reader_task"])
+        self.assertEqual(claimed_job["id"], "atomic-completed-reader-job")
+        self.store.update_job_status("atomic-completed-reader-job", "COMPLETED")
+
+        result = mutate(
+            agent_id=registration["id"],
+            required_tier="reader",
+            investigation_id=investigation.id,
+            job_id="atomic-completed-reader-job",
+            entities=[
+                {
+                    "type": "domain",
+                    "value": "late-job.example",
+                    "source_tool": "agent",
+                    "confidence": 0.8,
+                }
+            ],
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(self.store.get_investigation(investigation.id)["entities"], [])
+
+    def test_scoped_reporter_completion_rechecks_disabled_agent(self):
+        complete = getattr(self.store, "agent_complete_task", None)
+        self.assertTrue(callable(complete), "scoped completion API is required")
+        reporter = self.register(
+            name="atomic-disabled-reporter",
+            role_tier="reporter",
+            capabilities=["domain"],
+        )
+        investigation = self.store.create_investigation(
+            name="Atomic disabled completion",
+            seed_type="domain",
+            seed_value="atomic-disabled-completion.example",
+            strategy_name="quick",
+        )
+        claimed = self.store.claim_task(reporter["id"], ["domain"])
+        self.assertEqual(claimed["id"], investigation.id)
+        self.disable_agent(reporter["id"])
+
+        result = complete(
+            agent_id=reporter["id"],
+            required_tier="reporter",
+            investigation_id=investigation.id,
+            job_id=None,
+            status="COMPLETED",
+            summary="late completion",
+            report_markdown="# Late",
+            confidence=0.9,
+        )
+
+        self.assertIsNone(result)
+        detail = self.store.get_investigation(investigation.id)
+        self.assertEqual(detail["status"], "CLAIMED")
+        self.assertEqual(detail["summary"], "")
+
 class _MemoryStoreContext:
     def __enter__(self):
         return MemoryStore()
@@ -2368,6 +2500,117 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(body["job"]["id"], job_id)
+
+    def test_http_entity_rechecks_cancellation_inside_scoped_store_call(self):
+        reader = self.register("reader")
+        investigation = self.claimed_task(reader)
+        original = getattr(self.store, "agent_add_entities", None)
+
+        def cancel_then_mutate(**kwargs):
+            self.store.cancel_task(investigation.id)
+            return original(**kwargs) if original is not None else None
+
+        with patch.object(
+            self.store,
+            "agent_add_entities",
+            side_effect=cancel_then_mutate,
+            create=True,
+        ):
+            status, body = self.post(
+                "/api/agent/entities",
+                {"task_id": investigation.id, **self.ACTIONS["entities"][1]},
+                reader["agent_token"],
+            )
+
+        self.assertEqual(status, 409)
+        self.assertEqual(body, {"detail": "active task ownership required"})
+        self.assertEqual(self.store.get_investigation(investigation.id)["entities"], [])
+
+    def test_http_completion_rechecks_disable_inside_scoped_store_call(self):
+        reporter = self.register("reporter")
+        investigation = self.claimed_task(reporter)
+        original = getattr(self.store, "agent_complete_task", None)
+
+        def disable_then_complete(**kwargs):
+            self.store.agents[reporter["id"]].disabled_at = "2026-07-10T00:00:00Z"
+            return original(**kwargs) if original is not None else None
+
+        with patch.object(
+            self.store,
+            "agent_complete_task",
+            side_effect=disable_then_complete,
+            create=True,
+        ):
+            status, body = self.post(
+                f"/api/agent/tasks/{investigation.id}/complete",
+                {
+                    "task_id": investigation.id,
+                    "summary": "late completion",
+                    "report_markdown": "# Late",
+                },
+                reporter["agent_token"],
+            )
+
+        self.assertEqual(status, 409)
+        self.assertEqual(body, {"detail": "active task ownership required"})
+        detail = self.store.get_investigation(investigation.id)
+        self.assertEqual(detail["status"], "CLAIMED")
+        self.assertEqual(detail["summary"], "")
+
+    def test_other_normal_agent_routes_delegate_to_scoped_store_mutations(self):
+        cases = (
+            ("event", "reader", "/api/agent/events", {"message": "Started"}, "agent_add_event"),
+            ("evidence", "reader", *self.ACTIONS["evidence"][:2], "agent_add_evidence"),
+            (
+                "evidence_records",
+                "reader",
+                *self.ACTIONS["evidence_records"][:2],
+                "agent_add_evidence_record",
+            ),
+            ("facts", "verifier", *self.ACTIONS["facts"][:2], "agent_add_fact"),
+            (
+                "hypotheses",
+                "verifier",
+                *self.ACTIONS["hypotheses"][:2],
+                "agent_add_hypothesis",
+            ),
+            (
+                "score_hypotheses",
+                "verifier",
+                *self.ACTIONS["score_hypotheses"][:2],
+                "agent_score_hypotheses",
+            ),
+            (
+                "relationships",
+                "reader",
+                *self.ACTIONS["relationships"][:2],
+                "agent_add_relationship",
+            ),
+        )
+        for action, role, path, action_payload, method_name in cases:
+            with self.subTest(action=action):
+                registration = self.register(role)
+                investigation = self.claimed_task(registration)
+                with patch.object(
+                    self.store,
+                    method_name,
+                    return_value={"delegated": action},
+                    create=True,
+                ) as scoped_mutation:
+                    status, _body = self.post(
+                        path,
+                        {"task_id": investigation.id, **action_payload},
+                        registration["agent_token"],
+                    )
+
+                self.assertEqual(status, 201)
+                scoped_mutation.assert_called_once()
+                self.assertEqual(
+                    scoped_mutation.call_args.kwargs["agent_id"], registration["id"]
+                )
+                self.assertEqual(
+                    scoped_mutation.call_args.kwargs["required_tier"], role
+                )
 
     def test_legacy_shared_token_requires_explicit_opt_in_and_registered_body_identity(self):
         reporter = self.register("reporter")

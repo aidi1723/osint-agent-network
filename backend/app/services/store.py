@@ -332,31 +332,384 @@ class MemoryStore:
         if required_tier not in AGENT_ROLE_TIERS:
             return False
         with self.lock:
-            agent = self.agents.get(agent_id)
-            if (
-                agent is None
-                or agent.disabled_at is not None
-                or agent.role_tier != required_tier
+            return self._agent_has_investigation_access_locked(
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action=action,
+            )
+
+    def _agent_has_investigation_access_locked(
+        self,
+        agent_id: str,
+        investigation_id: str,
+        required_tier: str,
+        job_id: str | None = None,
+        action: str | None = None,
+    ) -> bool:
+        if required_tier not in AGENT_ROLE_TIERS:
+            return False
+        agent = self.agents.get(agent_id)
+        if (
+            agent is None
+            or agent.disabled_at is not None
+            or agent.role_tier != required_tier
+        ):
+            return False
+        investigation = self.investigations.get(investigation_id)
+        if (
+            investigation is None
+            or investigation.status not in _AGENT_ACCESS_INVESTIGATION_STATUSES
+        ):
+            return False
+        if investigation.claimed_by_agent_id == agent_id:
+            return True
+        if not job_id or not action:
+            return False
+        job = self.jobs.get(job_id)
+        return bool(
+            job is not None
+            and job.investigation_id == investigation_id
+            and job.claimed_by_agent_id == agent_id
+            and job.status in _AGENT_ACCESS_JOB_STATUSES
+            and tier_for_role(job.agent_role) == required_tier
+            and agent_output_contract_allows(job.output_contract, action)
+        )
+
+    def agent_add_event(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        level: str,
+        message: str,
+        metadata: dict | None = None,
+    ) -> dict | None:
+        event = AgentEvent(
+            id=str(uuid4()),
+            investigation_id=investigation_id,
+            agent_id=agent_id,
+            level=level,
+            message=message,
+            metadata=metadata or {},
+            created_at=_now(),
+        )
+        with self.lock:
+            if not self._agent_has_investigation_access_locked(
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="event",
             ):
-                return False
-            investigation = self.investigations.get(investigation_id)
-            if (
-                investigation is None
-                or investigation.status not in _AGENT_ACCESS_INVESTIGATION_STATUSES
+                return None
+            self.events[event.id] = event
+            self._touch_investigation(investigation_id, status="RUNNING")
+            return asdict(event)
+
+    def agent_add_entities(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        entities: list[dict],
+    ) -> list[dict] | None:
+        if required_tier != "reader":
+            return None
+        records = [
+            Entity(
+                id=str(uuid4()),
+                investigation_id=investigation_id,
+                type=item["type"],
+                value=item["value"],
+                source_tool=item.get("source_tool", "agent"),
+                confidence=float(item.get("confidence", 0.0)),
+                created_at=_now(),
+            )
+            for item in entities
+        ]
+        with self.lock:
+            if not self._agent_has_investigation_access_locked(
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="entities",
             ):
-                return False
-            if investigation.claimed_by_agent_id == agent_id:
-                return True
-            if not job_id or not action:
-                return False
-            job = self.jobs.get(job_id)
-            return bool(
-                job is not None
-                and job.investigation_id == investigation_id
-                and job.claimed_by_agent_id == agent_id
-                and job.status in _AGENT_ACCESS_JOB_STATUSES
-                and tier_for_role(job.agent_role) == required_tier
-                and agent_output_contract_allows(job.output_contract, action)
+                return None
+            for entity in records:
+                self.entities[entity.id] = entity
+            self._touch_investigation(investigation_id, status="RUNNING")
+            return [asdict(entity) for entity in records]
+
+    def agent_add_evidence(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        entity_value: str,
+        evidence_kind: str,
+        source_tool: str,
+        snippet: str,
+    ) -> dict | None:
+        if required_tier != "reader":
+            return None
+        evidence = Evidence(
+            id=str(uuid4()),
+            investigation_id=investigation_id,
+            entity_value=entity_value,
+            evidence_kind=evidence_kind,
+            source_tool=source_tool,
+            snippet=snippet,
+            created_at=_now(),
+        )
+        with self.lock:
+            if not self._agent_has_investigation_access_locked(
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="evidence",
+            ):
+                return None
+            self.evidence[evidence.id] = evidence
+            self._touch_investigation(investigation_id, status="RUNNING")
+            return asdict(evidence)
+
+    def agent_add_evidence_record(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        source_url: str,
+        source_type: str,
+        source_tool: str,
+        snippet: str,
+        credibility: float,
+    ) -> dict | None:
+        if required_tier != "reader":
+            return None
+        record = build_evidence_record(
+            id=str(uuid4()),
+            investigation_id=investigation_id,
+            source_url=source_url,
+            source_type=source_type,
+            source_tool=source_tool,
+            snippet=snippet,
+            observed_at=_now(),
+            credibility=credibility,
+        )
+        data = asdict(record)
+        with self.lock:
+            if not self._agent_has_investigation_access_locked(
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="evidence_records",
+            ):
+                return None
+            self.evidence_ledger[record.id] = data
+            self._touch_investigation(investigation_id, status="RUNNING")
+            return data
+
+    def agent_add_fact(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        statement: str,
+        subject: str,
+        predicate: str,
+        object_value: str,
+        status: str,
+        confidence: float,
+        admiralty_code: str,
+        evidence_ids: list[str],
+    ) -> dict | None:
+        if required_tier != "verifier":
+            return None
+        now = _now()
+        fact = FactRecord(
+            id=str(uuid4()),
+            investigation_id=investigation_id,
+            statement=statement,
+            subject=subject,
+            predicate=predicate,
+            object=object_value,
+            status=status,
+            promotion_stage=default_promotion_stage_for_status(status),
+            confidence=confidence,
+            admiralty_code=admiralty_code,
+            evidence_ids=evidence_ids,
+            observed_at=now,
+            valid_from=now,
+        )
+        validate_fact_record(fact)
+        with self.lock:
+            if not self._agent_has_investigation_access_locked(
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="facts",
+            ):
+                return None
+            existing = next(
+                (
+                    item
+                    for item in self.facts.values()
+                    if item.investigation_id == investigation_id
+                    and item.subject == subject
+                    and item.predicate == predicate
+                    and item.object == object_value
+                ),
+                None,
+            )
+            result = _merge_fact_record(existing, fact) if existing else fact
+            self.facts[result.id] = result
+            self._touch_investigation(investigation_id, status="RUNNING")
+            return _fact_as_dict(result)
+
+    def agent_add_hypothesis(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        hypothesis_id: str,
+        statement: str,
+        group: str = "default",
+    ) -> dict | None:
+        if required_tier != "verifier":
+            return None
+        now = _now()
+        row = {
+            "id": hypothesis_id,
+            "investigation_id": investigation_id,
+            "statement": statement,
+            "mutually_exclusive_group": group,
+            "status": "UNVERIFIED",
+            "support_score": 0.0,
+            "inconsistency_score": 0.0,
+            "supporting_evidence": [],
+            "contradictory_evidence": [],
+            "created_at": now,
+            "updated_at": now,
+        }
+        with self.lock:
+            if not self._agent_has_investigation_access_locked(
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="hypotheses",
+            ):
+                return None
+            self.hypotheses[f"{investigation_id}:{hypothesis_id}"] = row
+            self._touch_investigation(investigation_id, status="RUNNING")
+            return dict(row)
+
+    def agent_score_hypotheses(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        evidence_items: list[dict],
+    ) -> dict | None:
+        if required_tier != "verifier":
+            return None
+        with self.lock:
+            if not self._agent_has_investigation_access_locked(
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="score_hypotheses",
+            ):
+                return None
+            return self._score_hypotheses_locked(investigation_id, evidence_items)
+
+    def agent_add_relationship(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        from_value: str,
+        to_value: str,
+        relationship_type: str,
+        confidence: float,
+    ) -> dict | None:
+        if required_tier != "reader":
+            return None
+        relationship = Relationship(
+            id=str(uuid4()),
+            investigation_id=investigation_id,
+            from_value=from_value,
+            to_value=to_value,
+            relationship_type=relationship_type,
+            confidence=confidence,
+            created_at=_now(),
+        )
+        with self.lock:
+            if not self._agent_has_investigation_access_locked(
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="relationships",
+            ):
+                return None
+            self.relationships[relationship.id] = relationship
+            self._touch_investigation(investigation_id, status="RUNNING")
+            return asdict(relationship)
+
+    def agent_complete_task(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        status: str,
+        summary: str,
+        report_markdown: str,
+        confidence: float | None,
+    ) -> dict | None:
+        if required_tier != "reporter":
+            return None
+        with self.lock:
+            if not self._agent_has_investigation_access_locked(
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="complete_task",
+            ):
+                return None
+            return self._complete_task_locked(
+                investigation_id,
+                agent_id,
+                status,
+                summary,
+                report_markdown,
+                confidence,
             )
 
     def claim_task(self, agent_id: str, capabilities: object) -> dict | None:
@@ -732,57 +1085,62 @@ class MemoryStore:
 
     def score_hypotheses(self, investigation_id: str, evidence_items: list[dict]) -> dict:
         with self.lock:
-            rows = [
-                item
-                for item in self.hypotheses.values()
-                if item["investigation_id"] == investigation_id
-            ]
-            hypotheses = [
-                Hypothesis(
-                    id=row["id"],
-                    statement=row["statement"],
-                    mutually_exclusive_group=row["mutually_exclusive_group"],
-                )
-                for row in rows
-            ]
-            ach_evidence = [
-                EvidenceItem(
-                    id=str(item["id"]),
-                    summary=str(item["summary"]),
-                    kinds=tuple(item.get("kinds", [])),
-                    supports=tuple(item.get("supports", [])),
-                    contradicts=tuple(item.get("contradicts", [])),
-                    source_reliability=str(item.get("source_reliability", "unknown")),
-                    credibility=float(item.get("credibility", 0.0)),
-                    keywords=tuple(item.get("keywords", [])),
-                )
-                for item in evidence_items
-            ]
-            result = run_ach_analysis(hypotheses, ach_evidence)
-            now = _now()
-            for item in result.hypotheses:
-                row = self.hypotheses.get(f"{investigation_id}:{item['id']}")
-                if row is None:
-                    continue
-                row.update(
-                    {
-                        "status": item["status"],
-                        "support_score": item["support_score"],
-                        "inconsistency_score": item["inconsistency_score"],
-                        "supporting_evidence": item["supporting_evidence"],
-                        "contradictory_evidence": item["contradictory_evidence"],
-                        "updated_at": now,
-                    }
-                )
-            analysis = {
-                "most_likely_hypothesis": result.most_likely_hypothesis,
-                "triggered_indicators": result.triggered_indicators,
-                "indicator_activation_rate": result.indicator_activation_rate,
-                "confidence_language": result.confidence_language,
-                "updated_at": now,
-            }
-            self.hypothesis_analysis[investigation_id] = analysis
-            self._touch_investigation(investigation_id, status="RUNNING")
+            return self._score_hypotheses_locked(investigation_id, evidence_items)
+
+    def _score_hypotheses_locked(
+        self, investigation_id: str, evidence_items: list[dict]
+    ) -> dict:
+        rows = [
+            item
+            for item in self.hypotheses.values()
+            if item["investigation_id"] == investigation_id
+        ]
+        hypotheses = [
+            Hypothesis(
+                id=row["id"],
+                statement=row["statement"],
+                mutually_exclusive_group=row["mutually_exclusive_group"],
+            )
+            for row in rows
+        ]
+        ach_evidence = [
+            EvidenceItem(
+                id=str(item["id"]),
+                summary=str(item["summary"]),
+                kinds=tuple(item.get("kinds", [])),
+                supports=tuple(item.get("supports", [])),
+                contradicts=tuple(item.get("contradicts", [])),
+                source_reliability=str(item.get("source_reliability", "unknown")),
+                credibility=float(item.get("credibility", 0.0)),
+                keywords=tuple(item.get("keywords", [])),
+            )
+            for item in evidence_items
+        ]
+        result = run_ach_analysis(hypotheses, ach_evidence)
+        now = _now()
+        for item in result.hypotheses:
+            row = self.hypotheses.get(f"{investigation_id}:{item['id']}")
+            if row is None:
+                continue
+            row.update(
+                {
+                    "status": item["status"],
+                    "support_score": item["support_score"],
+                    "inconsistency_score": item["inconsistency_score"],
+                    "supporting_evidence": item["supporting_evidence"],
+                    "contradictory_evidence": item["contradictory_evidence"],
+                    "updated_at": now,
+                }
+            )
+        analysis = {
+            "most_likely_hypothesis": result.most_likely_hypothesis,
+            "triggered_indicators": result.triggered_indicators,
+            "indicator_activation_rate": result.indicator_activation_rate,
+            "confidence_language": result.confidence_language,
+            "updated_at": now,
+        }
+        self.hypothesis_analysis[investigation_id] = analysis
+        self._touch_investigation(investigation_id, status="RUNNING")
         return _ach_result_as_dict(result)
 
     def add_relationship(
@@ -817,24 +1175,42 @@ class MemoryStore:
         confidence: float | None,
     ) -> dict | None:
         with self.lock:
-            investigation = self.investigations.get(investigation_id)
-            if investigation is None:
-                return None
-            preview = self._investigation_detail(investigation_id)
-            preview["summary"] = summary
-            preview["report_markdown"] = report_markdown
-            assessment = build_quality_assessment(preview)
-            preview["quality_assessment"] = assessment
-            _apply_gap_plans(preview)
-            preview["completion_policy"] = build_completion_policy(preview)
-            investigation.status = _policy_status_for_detail(preview, status)
-            investigation.summary = summary
-            investigation.report_markdown = render_structured_report(preview, assessment)
-            investigation.confidence = confidence
-            investigation.updated_at = _now()
-            if agent_id in self.agents:
-                self.agents[agent_id].last_seen_at = investigation.updated_at
-            return self._investigation_detail(investigation_id)
+            return self._complete_task_locked(
+                investigation_id,
+                agent_id,
+                status,
+                summary,
+                report_markdown,
+                confidence,
+            )
+
+    def _complete_task_locked(
+        self,
+        investigation_id: str,
+        agent_id: str,
+        status: str,
+        summary: str,
+        report_markdown: str,
+        confidence: float | None,
+    ) -> dict | None:
+        investigation = self.investigations.get(investigation_id)
+        if investigation is None:
+            return None
+        preview = self._investigation_detail(investigation_id)
+        preview["summary"] = summary
+        preview["report_markdown"] = report_markdown
+        assessment = build_quality_assessment(preview)
+        preview["quality_assessment"] = assessment
+        _apply_gap_plans(preview)
+        preview["completion_policy"] = build_completion_policy(preview)
+        investigation.status = _policy_status_for_detail(preview, status)
+        investigation.summary = summary
+        investigation.report_markdown = render_structured_report(preview, assessment)
+        investigation.confidence = confidence
+        investigation.updated_at = _now()
+        if agent_id in self.agents:
+            self.agents[agent_id].last_seen_at = investigation.updated_at
+        return self._investigation_detail(investigation_id)
 
     def list_jobs(self, investigation_id: str) -> list[dict]:
         with self.lock:
@@ -1645,56 +2021,508 @@ class SQLiteStore:
         if required_tier not in AGENT_ROLE_TIERS:
             return False
         with self.lock, closing(self._connect()) as conn:
-            agent = conn.execute(
-                "SELECT role_tier, disabled_at FROM agents WHERE id = ?",
-                (agent_id,),
-            ).fetchone()
-            if (
-                agent is None
-                or agent["disabled_at"] is not None
-                or agent["role_tier"] != required_tier
-            ):
-                return False
-            investigation_claim = conn.execute(
-                """
-                SELECT 1 FROM investigations
-                WHERE id = ? AND claimed_by_agent_id = ? AND status IN (?, ?)
-                """,
-                (
-                    investigation_id,
-                    agent_id,
-                    *_AGENT_ACCESS_INVESTIGATION_STATUSES,
-                ),
-            ).fetchone()
-            if investigation_claim is not None:
-                return True
-            if not job_id or not action:
-                return False
-            job_claim = conn.execute(
-                """
-                SELECT jobs.* FROM jobs AS jobs
-                JOIN investigations AS investigations
-                  ON investigations.id = jobs.investigation_id
-                WHERE jobs.id = ?
-                  AND jobs.investigation_id = ?
-                  AND jobs.claimed_by_agent_id = ?
-                  AND jobs.status IN (?, ?)
-                  AND investigations.status IN (?, ?)
-                LIMIT 1
-                """,
-                (
-                    job_id,
-                    investigation_id,
-                    agent_id,
-                    *_AGENT_ACCESS_JOB_STATUSES,
-                    *_AGENT_ACCESS_INVESTIGATION_STATUSES,
-                ),
-            ).fetchone()
-            return bool(
-                job_claim is not None
-                and tier_for_role(job_claim["agent_role"]) == required_tier
-                and agent_output_contract_allows(job_claim["output_contract"], action)
+            return self._agent_has_investigation_access_conn(
+                conn,
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action=action,
             )
+
+    def _agent_has_investigation_access_conn(
+        self,
+        conn: sqlite3.Connection,
+        agent_id: str,
+        investigation_id: str,
+        required_tier: str,
+        job_id: str | None = None,
+        action: str | None = None,
+    ) -> bool:
+        if required_tier not in AGENT_ROLE_TIERS:
+            return False
+        agent = conn.execute(
+            "SELECT role_tier, disabled_at FROM agents WHERE id = ?",
+            (agent_id,),
+        ).fetchone()
+        if (
+            agent is None
+            or agent["disabled_at"] is not None
+            or agent["role_tier"] != required_tier
+        ):
+            return False
+        investigation_claim = conn.execute(
+            """
+            SELECT 1 FROM investigations
+            WHERE id = ? AND claimed_by_agent_id = ? AND status IN (?, ?)
+            """,
+            (
+                investigation_id,
+                agent_id,
+                *_AGENT_ACCESS_INVESTIGATION_STATUSES,
+            ),
+        ).fetchone()
+        if investigation_claim is not None:
+            return True
+        if not job_id or not action:
+            return False
+        job_claim = conn.execute(
+            """
+            SELECT jobs.* FROM jobs AS jobs
+            JOIN investigations AS investigations
+              ON investigations.id = jobs.investigation_id
+            WHERE jobs.id = ?
+              AND jobs.investigation_id = ?
+              AND jobs.claimed_by_agent_id = ?
+              AND jobs.status IN (?, ?)
+              AND investigations.status IN (?, ?)
+            LIMIT 1
+            """,
+            (
+                job_id,
+                investigation_id,
+                agent_id,
+                *_AGENT_ACCESS_JOB_STATUSES,
+                *_AGENT_ACCESS_INVESTIGATION_STATUSES,
+            ),
+        ).fetchone()
+        return bool(
+            job_claim is not None
+            and tier_for_role(job_claim["agent_role"]) == required_tier
+            and agent_output_contract_allows(job_claim["output_contract"], action)
+        )
+
+    def agent_add_event(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        level: str,
+        message: str,
+        metadata: dict | None = None,
+    ) -> dict | None:
+        event = AgentEvent(
+            id=str(uuid4()),
+            investigation_id=investigation_id,
+            agent_id=agent_id,
+            level=level,
+            message=message,
+            metadata=metadata or {},
+            created_at=_now(),
+        )
+        with self.lock, closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not self._agent_has_investigation_access_conn(
+                conn,
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="event",
+            ):
+                return None
+            _sqlite_insert_event(conn, event)
+            self._touch_investigation(conn, investigation_id, status="RUNNING")
+        return asdict(event)
+
+    def agent_add_entities(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        entities: list[dict],
+    ) -> list[dict] | None:
+        if required_tier != "reader":
+            return None
+        records = [
+            Entity(
+                id=str(uuid4()),
+                investigation_id=investigation_id,
+                type=item["type"],
+                value=item["value"],
+                source_tool=item.get("source_tool", "agent"),
+                confidence=float(item.get("confidence", 0.0)),
+                created_at=_now(),
+            )
+            for item in entities
+        ]
+        with self.lock, closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not self._agent_has_investigation_access_conn(
+                conn,
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="entities",
+            ):
+                return None
+            for entity in records:
+                _sqlite_upsert_entity(conn, entity)
+            self._touch_investigation(conn, investigation_id, status="RUNNING")
+        return [asdict(entity) for entity in records]
+
+    def agent_add_evidence(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        entity_value: str,
+        evidence_kind: str,
+        source_tool: str,
+        snippet: str,
+    ) -> dict | None:
+        if required_tier != "reader":
+            return None
+        evidence = Evidence(
+            id=str(uuid4()),
+            investigation_id=investigation_id,
+            entity_value=entity_value,
+            evidence_kind=evidence_kind,
+            source_tool=source_tool,
+            snippet=snippet,
+            created_at=_now(),
+        )
+        with self.lock, closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not self._agent_has_investigation_access_conn(
+                conn,
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="evidence",
+            ):
+                return None
+            _sqlite_upsert_evidence(conn, evidence)
+            self._touch_investigation(conn, investigation_id, status="RUNNING")
+        return asdict(evidence)
+
+    def agent_add_evidence_record(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        source_url: str,
+        source_type: str,
+        source_tool: str,
+        snippet: str,
+        credibility: float,
+    ) -> dict | None:
+        if required_tier != "reader":
+            return None
+        record = build_evidence_record(
+            id=str(uuid4()),
+            investigation_id=investigation_id,
+            source_url=source_url,
+            source_type=source_type,
+            source_tool=source_tool,
+            snippet=snippet,
+            observed_at=_now(),
+            credibility=credibility,
+        )
+        data = asdict(record)
+        with self.lock, closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not self._agent_has_investigation_access_conn(
+                conn,
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="evidence_records",
+            ):
+                return None
+            _sqlite_upsert_evidence_record(conn, record)
+            self._touch_investigation(conn, investigation_id, status="RUNNING")
+        return data
+
+    def agent_add_fact(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        statement: str,
+        subject: str,
+        predicate: str,
+        object_value: str,
+        status: str,
+        confidence: float,
+        admiralty_code: str,
+        evidence_ids: list[str],
+    ) -> dict | None:
+        if required_tier != "verifier":
+            return None
+        now = _now()
+        fact = FactRecord(
+            id=str(uuid4()),
+            investigation_id=investigation_id,
+            statement=statement,
+            subject=subject,
+            predicate=predicate,
+            object=object_value,
+            status=status,
+            promotion_stage=default_promotion_stage_for_status(status),
+            confidence=confidence,
+            admiralty_code=admiralty_code,
+            evidence_ids=evidence_ids,
+            observed_at=now,
+            valid_from=now,
+        )
+        validate_fact_record(fact)
+        with self.lock, closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not self._agent_has_investigation_access_conn(
+                conn,
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="facts",
+            ):
+                return None
+            existing = conn.execute(
+                """
+                SELECT * FROM facts
+                WHERE investigation_id = ? AND subject = ? AND predicate = ? AND object_value = ?
+                """,
+                (investigation_id, subject, predicate, object_value),
+            ).fetchone()
+            if existing is not None:
+                result = _merge_fact_dict(
+                    _fact_from_row(existing), _fact_as_dict(fact)
+                )
+                conn.execute(
+                    """
+                    UPDATE facts
+                    SET statement = ?, status = ?, promotion_stage = ?, confidence = ?,
+                        admiralty_code = ?, evidence_ids_json = ?, observed_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        result["statement"],
+                        result["status"],
+                        result["promotion_stage"],
+                        result["confidence"],
+                        result["admiralty_code"],
+                        json.dumps(result["evidence_ids"], ensure_ascii=False),
+                        result["observed_at"],
+                        result["id"],
+                    ),
+                )
+            else:
+                result = _fact_as_dict(fact)
+                conn.execute(
+                    """
+                    INSERT INTO facts (
+                        id, investigation_id, statement, subject, predicate, object_value,
+                        status, promotion_stage, confidence, admiralty_code, evidence_ids_json,
+                        observed_at, valid_from, valid_to, supersedes_fact_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        fact.id,
+                        fact.investigation_id,
+                        fact.statement,
+                        fact.subject,
+                        fact.predicate,
+                        fact.object,
+                        fact.status,
+                        fact.promotion_stage,
+                        fact.confidence,
+                        fact.admiralty_code,
+                        json.dumps(fact.evidence_ids, ensure_ascii=False),
+                        fact.observed_at,
+                        fact.valid_from,
+                        fact.valid_to,
+                        fact.supersedes_fact_id,
+                    ),
+                )
+            self._touch_investigation(conn, investigation_id, status="RUNNING")
+        return result
+
+    def agent_add_hypothesis(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        hypothesis_id: str,
+        statement: str,
+        group: str = "default",
+    ) -> dict | None:
+        if required_tier != "verifier":
+            return None
+        now = _now()
+        with self.lock, closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not self._agent_has_investigation_access_conn(
+                conn,
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="hypotheses",
+            ):
+                return None
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO hypotheses (
+                    id, investigation_id, statement, mutually_exclusive_group, status,
+                    support_score, inconsistency_score, supporting_evidence_json,
+                    contradictory_evidence_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    hypothesis_id,
+                    investigation_id,
+                    statement,
+                    group,
+                    "UNVERIFIED",
+                    0.0,
+                    0.0,
+                    "[]",
+                    "[]",
+                    now,
+                    now,
+                ),
+            )
+            self._touch_investigation(conn, investigation_id, status="RUNNING")
+            row = conn.execute(
+                "SELECT * FROM hypotheses WHERE investigation_id = ? AND id = ?",
+                (investigation_id, hypothesis_id),
+            ).fetchone()
+        return _hypothesis_from_row(row)
+
+    def agent_score_hypotheses(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        evidence_items: list[dict],
+    ) -> dict | None:
+        if required_tier != "verifier":
+            return None
+        with self.lock, closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not self._agent_has_investigation_access_conn(
+                conn,
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="score_hypotheses",
+            ):
+                return None
+            return self._score_hypotheses_conn(conn, investigation_id, evidence_items)
+
+    def agent_add_relationship(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        from_value: str,
+        to_value: str,
+        relationship_type: str,
+        confidence: float,
+    ) -> dict | None:
+        if required_tier != "reader":
+            return None
+        relationship = Relationship(
+            id=str(uuid4()),
+            investigation_id=investigation_id,
+            from_value=from_value,
+            to_value=to_value,
+            relationship_type=relationship_type,
+            confidence=confidence,
+            created_at=_now(),
+        )
+        with self.lock, closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not self._agent_has_investigation_access_conn(
+                conn,
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="relationships",
+            ):
+                return None
+            _sqlite_upsert_relationship(conn, relationship)
+            self._touch_investigation(conn, investigation_id, status="RUNNING")
+        return asdict(relationship)
+
+    def agent_complete_task(
+        self,
+        *,
+        agent_id: str,
+        required_tier: str,
+        investigation_id: str,
+        job_id: str | None,
+        status: str,
+        summary: str,
+        report_markdown: str,
+        confidence: float | None,
+    ) -> dict | None:
+        if required_tier != "reporter":
+            return None
+        preview = self.get_investigation(investigation_id)
+        if preview is None:
+            return None
+        preview["summary"] = summary
+        preview["report_markdown"] = report_markdown
+        assessment = build_quality_assessment(preview)
+        preview["quality_assessment"] = assessment
+        _apply_gap_plans(preview)
+        preview["completion_policy"] = build_completion_policy(preview)
+        final_status = _policy_status_for_detail(preview, status)
+        final_report = render_structured_report(preview, assessment)
+        now = _now()
+        with self.lock, closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not self._agent_has_investigation_access_conn(
+                conn,
+                agent_id,
+                investigation_id,
+                required_tier,
+                job_id=job_id,
+                action="complete_task",
+            ):
+                return None
+            conn.execute(
+                """
+                UPDATE investigations
+                SET status = ?, summary = ?, report_markdown = ?, confidence = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    final_status,
+                    summary,
+                    final_report,
+                    confidence,
+                    now,
+                    investigation_id,
+                ),
+            )
+            conn.execute(
+                "UPDATE agents SET last_seen_at = ? WHERE id = ?", (now, agent_id)
+            )
+        return self.get_investigation(investigation_id)
 
     def claim_task(self, agent_id: str, capabilities: object) -> dict | None:
         with self.lock, closing(self._connect()) as conn, conn:
@@ -1922,22 +2750,7 @@ class SQLiteStore:
             created_at=_now(),
         )
         with self.lock, closing(self._connect()) as conn, conn:
-            conn.execute(
-                """
-                INSERT INTO events (
-                    id, investigation_id, agent_id, level, message, metadata_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    event.id,
-                    event.investigation_id,
-                    event.agent_id,
-                    event.level,
-                    event.message,
-                    json.dumps(event.metadata, ensure_ascii=False),
-                    event.created_at,
-                ),
-            )
+            _sqlite_insert_event(conn, event)
             self._touch_investigation(conn, investigation_id, status="RUNNING")
         return asdict(event)
 
@@ -1959,25 +2772,7 @@ class SQLiteStore:
             created_at=_now(),
         )
         with self.lock, closing(self._connect()) as conn, conn:
-            conn.execute(
-                """
-                INSERT INTO entities (
-                    id, investigation_id, type, value, source_tool, confidence, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(investigation_id, type, value, source_tool) DO UPDATE SET
-                    confidence = MAX(confidence, excluded.confidence),
-                    created_at = excluded.created_at
-                """,
-                (
-                    entity.id,
-                    entity.investigation_id,
-                    entity.type,
-                    entity.value,
-                    entity.source_tool,
-                    entity.confidence,
-                    entity.created_at,
-                ),
-            )
+            _sqlite_upsert_entity(conn, entity)
             self._touch_investigation(conn, investigation_id, status="RUNNING")
         return asdict(entity)
 
@@ -1999,25 +2794,7 @@ class SQLiteStore:
             created_at=_now(),
         )
         with self.lock, closing(self._connect()) as conn, conn:
-            conn.execute(
-                """
-                INSERT INTO evidence (
-                    id, investigation_id, entity_value, evidence_kind, source_tool, snippet, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(investigation_id, entity_value, evidence_kind, source_tool) DO UPDATE SET
-                    snippet = excluded.snippet,
-                    created_at = excluded.created_at
-                """,
-                (
-                    evidence.id,
-                    evidence.investigation_id,
-                    evidence.entity_value,
-                    evidence.evidence_kind,
-                    evidence.source_tool,
-                    evidence.snippet,
-                    evidence.created_at,
-                ),
-            )
+            _sqlite_upsert_evidence(conn, evidence)
             self._touch_investigation(conn, investigation_id, status="RUNNING")
         return asdict(evidence)
 
@@ -2042,37 +2819,7 @@ class SQLiteStore:
         )
         data = asdict(record)
         with self.lock, closing(self._connect()) as conn, conn:
-            conn.execute(
-                """
-                INSERT INTO evidence_ledger (
-                    id, investigation_id, source_url, source_type, source_tool, snippet,
-                    observed_at, admiralty_code, source_reliability,
-                    information_credibility, content_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(investigation_id, content_hash) DO UPDATE SET
-                    source_url = excluded.source_url,
-                    source_type = excluded.source_type,
-                    source_tool = excluded.source_tool,
-                    snippet = excluded.snippet,
-                    observed_at = excluded.observed_at,
-                    admiralty_code = excluded.admiralty_code,
-                    source_reliability = excluded.source_reliability,
-                    information_credibility = excluded.information_credibility
-                """,
-                (
-                    record.id,
-                    record.investigation_id,
-                    record.source_url,
-                    record.source_type,
-                    record.source_tool,
-                    record.snippet,
-                    record.observed_at,
-                    record.admiralty_code,
-                    record.source_reliability,
-                    record.information_credibility,
-                    record.content_hash,
-                ),
-            )
+            _sqlite_upsert_evidence_record(conn, record)
             self._touch_investigation(conn, investigation_id, status="RUNNING")
         return data
 
@@ -2204,70 +2951,78 @@ class SQLiteStore:
 
     def score_hypotheses(self, investigation_id: str, evidence_items: list[dict]) -> dict:
         with self.lock, closing(self._connect()) as conn, conn:
-            rows = conn.execute(
-                "SELECT * FROM hypotheses WHERE investigation_id = ? ORDER BY rowid ASC",
-                (investigation_id,),
-            ).fetchall()
-            hypotheses = [
-                Hypothesis(
-                    id=row["id"],
-                    statement=row["statement"],
-                    mutually_exclusive_group=row["mutually_exclusive_group"],
-                )
-                for row in rows
-            ]
-            ach_evidence = [
-                EvidenceItem(
-                    id=str(item["id"]),
-                    summary=str(item["summary"]),
-                    kinds=tuple(item.get("kinds", [])),
-                    supports=tuple(item.get("supports", [])),
-                    contradicts=tuple(item.get("contradicts", [])),
-                    source_reliability=str(item.get("source_reliability", "unknown")),
-                    credibility=float(item.get("credibility", 0.0)),
-                    keywords=tuple(item.get("keywords", [])),
-                )
-                for item in evidence_items
-            ]
-            result = run_ach_analysis(hypotheses, ach_evidence)
-            now = _now()
-            for item in result.hypotheses:
-                conn.execute(
-                    """
-                    UPDATE hypotheses
-                    SET status = ?, support_score = ?, inconsistency_score = ?,
-                        supporting_evidence_json = ?, contradictory_evidence_json = ?,
-                        updated_at = ?
-                    WHERE investigation_id = ? AND id = ?
-                    """,
-                    (
-                        item["status"],
-                        item["support_score"],
-                        item["inconsistency_score"],
-                        json.dumps(item["supporting_evidence"], ensure_ascii=False),
-                        json.dumps(item["contradictory_evidence"], ensure_ascii=False),
-                        now,
-                        investigation_id,
-                        item["id"],
-                    ),
-                )
+            return self._score_hypotheses_conn(conn, investigation_id, evidence_items)
+
+    def _score_hypotheses_conn(
+        self,
+        conn: sqlite3.Connection,
+        investigation_id: str,
+        evidence_items: list[dict],
+    ) -> dict:
+        rows = conn.execute(
+            "SELECT * FROM hypotheses WHERE investigation_id = ? ORDER BY rowid ASC",
+            (investigation_id,),
+        ).fetchall()
+        hypotheses = [
+            Hypothesis(
+                id=row["id"],
+                statement=row["statement"],
+                mutually_exclusive_group=row["mutually_exclusive_group"],
+            )
+            for row in rows
+        ]
+        ach_evidence = [
+            EvidenceItem(
+                id=str(item["id"]),
+                summary=str(item["summary"]),
+                kinds=tuple(item.get("kinds", [])),
+                supports=tuple(item.get("supports", [])),
+                contradicts=tuple(item.get("contradicts", [])),
+                source_reliability=str(item.get("source_reliability", "unknown")),
+                credibility=float(item.get("credibility", 0.0)),
+                keywords=tuple(item.get("keywords", [])),
+            )
+            for item in evidence_items
+        ]
+        result = run_ach_analysis(hypotheses, ach_evidence)
+        now = _now()
+        for item in result.hypotheses:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO hypothesis_analysis (
-                    investigation_id, most_likely_hypothesis, triggered_indicators_json,
-                    indicator_activation_rate, confidence_language, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                UPDATE hypotheses
+                SET status = ?, support_score = ?, inconsistency_score = ?,
+                    supporting_evidence_json = ?, contradictory_evidence_json = ?,
+                    updated_at = ?
+                WHERE investigation_id = ? AND id = ?
                 """,
                 (
-                    investigation_id,
-                    result.most_likely_hypothesis,
-                    json.dumps(result.triggered_indicators, ensure_ascii=False),
-                    result.indicator_activation_rate,
-                    result.confidence_language,
+                    item["status"],
+                    item["support_score"],
+                    item["inconsistency_score"],
+                    json.dumps(item["supporting_evidence"], ensure_ascii=False),
+                    json.dumps(item["contradictory_evidence"], ensure_ascii=False),
                     now,
+                    investigation_id,
+                    item["id"],
                 ),
             )
-            self._touch_investigation(conn, investigation_id, status="RUNNING")
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO hypothesis_analysis (
+                investigation_id, most_likely_hypothesis, triggered_indicators_json,
+                indicator_activation_rate, confidence_language, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                investigation_id,
+                result.most_likely_hypothesis,
+                json.dumps(result.triggered_indicators, ensure_ascii=False),
+                result.indicator_activation_rate,
+                result.confidence_language,
+                now,
+            ),
+        )
+        self._touch_investigation(conn, investigation_id, status="RUNNING")
         return _ach_result_as_dict(result)
 
     def add_relationship(
@@ -2288,25 +3043,7 @@ class SQLiteStore:
             created_at=_now(),
         )
         with self.lock, closing(self._connect()) as conn, conn:
-            conn.execute(
-                """
-                INSERT INTO relationships (
-                    id, investigation_id, from_value, to_value, relationship_type, confidence, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(investigation_id, from_value, to_value, relationship_type) DO UPDATE SET
-                    confidence = MAX(confidence, excluded.confidence),
-                    created_at = excluded.created_at
-                """,
-                (
-                    relationship.id,
-                    relationship.investigation_id,
-                    relationship.from_value,
-                    relationship.to_value,
-                    relationship.relationship_type,
-                    relationship.confidence,
-                    relationship.created_at,
-                ),
-            )
+            _sqlite_upsert_relationship(conn, relationship)
             self._touch_investigation(conn, investigation_id, status="RUNNING")
         return asdict(relationship)
 
@@ -3558,6 +4295,127 @@ def _apply_core_v3(data: dict) -> None:
         requirements,
         matrix,
         data.get("facts") or [],
+    )
+
+
+def _sqlite_insert_event(conn: sqlite3.Connection, event: AgentEvent) -> None:
+    conn.execute(
+        """
+        INSERT INTO events (
+            id, investigation_id, agent_id, level, message, metadata_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event.id,
+            event.investigation_id,
+            event.agent_id,
+            event.level,
+            event.message,
+            json.dumps(event.metadata, ensure_ascii=False),
+            event.created_at,
+        ),
+    )
+
+
+def _sqlite_upsert_entity(conn: sqlite3.Connection, entity: Entity) -> None:
+    conn.execute(
+        """
+        INSERT INTO entities (
+            id, investigation_id, type, value, source_tool, confidence, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(investigation_id, type, value, source_tool) DO UPDATE SET
+            confidence = MAX(confidence, excluded.confidence),
+            created_at = excluded.created_at
+        """,
+        (
+            entity.id,
+            entity.investigation_id,
+            entity.type,
+            entity.value,
+            entity.source_tool,
+            entity.confidence,
+            entity.created_at,
+        ),
+    )
+
+
+def _sqlite_upsert_evidence(conn: sqlite3.Connection, evidence: Evidence) -> None:
+    conn.execute(
+        """
+        INSERT INTO evidence (
+            id, investigation_id, entity_value, evidence_kind, source_tool, snippet, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(investigation_id, entity_value, evidence_kind, source_tool) DO UPDATE SET
+            snippet = excluded.snippet,
+            created_at = excluded.created_at
+        """,
+        (
+            evidence.id,
+            evidence.investigation_id,
+            evidence.entity_value,
+            evidence.evidence_kind,
+            evidence.source_tool,
+            evidence.snippet,
+            evidence.created_at,
+        ),
+    )
+
+
+def _sqlite_upsert_evidence_record(conn: sqlite3.Connection, record) -> None:
+    conn.execute(
+        """
+        INSERT INTO evidence_ledger (
+            id, investigation_id, source_url, source_type, source_tool, snippet,
+            observed_at, admiralty_code, source_reliability,
+            information_credibility, content_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(investigation_id, content_hash) DO UPDATE SET
+            source_url = excluded.source_url,
+            source_type = excluded.source_type,
+            source_tool = excluded.source_tool,
+            snippet = excluded.snippet,
+            observed_at = excluded.observed_at,
+            admiralty_code = excluded.admiralty_code,
+            source_reliability = excluded.source_reliability,
+            information_credibility = excluded.information_credibility
+        """,
+        (
+            record.id,
+            record.investigation_id,
+            record.source_url,
+            record.source_type,
+            record.source_tool,
+            record.snippet,
+            record.observed_at,
+            record.admiralty_code,
+            record.source_reliability,
+            record.information_credibility,
+            record.content_hash,
+        ),
+    )
+
+
+def _sqlite_upsert_relationship(
+    conn: sqlite3.Connection, relationship: Relationship
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO relationships (
+            id, investigation_id, from_value, to_value, relationship_type, confidence, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(investigation_id, from_value, to_value, relationship_type) DO UPDATE SET
+            confidence = MAX(confidence, excluded.confidence),
+            created_at = excluded.created_at
+        """,
+        (
+            relationship.id,
+            relationship.investigation_id,
+            relationship.from_value,
+            relationship.to_value,
+            relationship.relationship_type,
+            relationship.confidence,
+            relationship.created_at,
+        ),
     )
 
 
