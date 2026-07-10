@@ -650,6 +650,32 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
         self.assertEqual(result.stderr_excerpt, "official site fetch failed")
         self.assertNotIn("private-token", result.stderr_excerpt)
 
+    def test_run_maps_lazy_resolver_failure_without_leaking_details(self):
+        def failing_fetch(url, timeout_seconds, max_bytes, headers):
+            def lazy_answers():
+                yield (2, 1, 6, "", ("8.8.8.8", 443))
+                raise OSError("secret.internal resolver detail")
+
+            from app.core.safe_http import safe_fetch
+
+            return safe_fetch(
+                url,
+                timeout_seconds=timeout_seconds,
+                max_bytes=max_bytes,
+                headers=headers,
+                resolver=lambda *args, **kwargs: lazy_answers(),
+                connector=lambda *args: self.fail("connector must not run"),
+            )
+
+        adapter = OfficialSiteExtractorAdapter()
+        with patch("app.tools.official_site_extractor.safe_fetch", side_effect=failing_fetch):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                result = adapter.run("url", "https://example.com/secret-path", Path(tmpdir), timeout_seconds=5)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr_excerpt, "official site fetch failed")
+        self.assertNotIn("secret", result.stderr_excerpt)
+
     def test_parser_extracts_srr_style_identity_scope_and_filters_script_phone_noise(self):
         adapter = OfficialSiteExtractorAdapter()
         html = """

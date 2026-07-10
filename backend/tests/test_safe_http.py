@@ -1,6 +1,8 @@
 import socket
 import unittest
+from unittest.mock import patch
 
+from app.core import safe_http as safe_http_module
 from app.core.normalization import NormalizationError, normalize_target
 from app.core.safe_http import (
     BlockedNetworkTarget,
@@ -8,6 +10,7 @@ from app.core.safe_http import (
     RedirectLimitExceeded,
     ResponseTooLarge,
     SafeHttpError,
+    connect_pinned,
     safe_fetch,
     validate_public_url,
 )
@@ -93,6 +96,58 @@ class SafeHttpValidationTests(unittest.TestCase):
                 with self.assertRaises(BlockedNetworkTarget):
                     validate_public_url(url, resolver=resolver_for("127.0.0.1"))
 
+    def test_blocks_private_literals_without_trusting_resolver_answers(self):
+        private_urls = (
+            "http://127.0.0.1/",
+            "http://10.0.0.1/",
+            "http://[::1]/",
+            "http://[::ffff:127.0.0.1]/",
+            "http://127.1/",
+            "http://2130706433/",
+            "http://0177.0.0.1/",
+        )
+        for url in private_urls:
+            calls = []
+            with self.subTest(url=url):
+                with self.assertRaises(BlockedNetworkTarget):
+                    validate_public_url(
+                        url,
+                        resolver=lambda *args, calls=calls, **kwargs: calls.append(args)
+                        or resolver_for(PUBLIC_IP)(*args),
+                    )
+                self.assertEqual(calls, [])
+
+    def test_public_literal_is_pinned_exactly_without_resolver(self):
+        calls = []
+
+        target = validate_public_url(
+            "https://8.8.8.8/path",
+            resolver=lambda *args, **kwargs: calls.append(args) or resolver_for("1.1.1.1")(*args),
+        )
+
+        self.assertEqual(target.original_hostname, PUBLIC_IP)
+        self.assertEqual(target.validated_ips, (PUBLIC_IP,))
+        self.assertEqual(calls, [])
+
+    def test_lazy_resolver_failure_is_stable_and_non_reflective(self):
+        def lazy_answers():
+            yield (socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC_IP, 443))
+            raise OSError("secret.internal resolver detail")
+
+        with self.assertRaisesRegex(InvalidHttpTarget, "^target resolution failed$") as caught:
+            validate_public_url("https://example.com/", resolver=lambda *args, **kwargs: lazy_answers())
+
+        self.assertNotIn("secret.internal", str(caught.exception))
+
+    def test_malformed_lazy_resolver_answer_is_stable(self):
+        for answer in ((socket.AF_INET,), {"address": "secret.internal"}, None):
+            with self.subTest(answer=answer):
+                with self.assertRaisesRegex(InvalidHttpTarget, "^target resolution failed$"):
+                    validate_public_url(
+                        "https://example.com/",
+                        resolver=lambda *args, answer=answer, **kwargs: iter([answer]),
+                    )
+
     def test_normalization_rejects_non_global_and_legacy_ip_literals(self):
         for url in ("http://10.0.0.1/", "http://[::1]/", "http://127.1/", "http://2130706433/"):
             with self.subTest(url=url):
@@ -162,6 +217,30 @@ class SafeFetchTests(unittest.TestCase):
 
         self.assertEqual(seen_headers, [{"Host": "example.com"}])
 
+    def test_rejects_malformed_headers_before_connector_without_reflection(self):
+        malformed = (
+            ({"X-Bad\r\nInjected": "value"}, "name control"),
+            ({"X-Test": "secret\nvalue"}, "value control"),
+            ({"Bad Header": "value"}, "invalid token"),
+            ({1: "value"}, "non-string name"),
+            ({"X-Test": 1}, "non-string value"),
+            ({"Host": "secret\r\nInjected: yes"}, "malformed replaced host"),
+        )
+        for headers, label in malformed:
+            connector_calls = []
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(SafeHttpError, "^invalid HTTP headers$") as caught:
+                    safe_fetch(
+                        "https://example.com/",
+                        timeout_seconds=1,
+                        max_bytes=10,
+                        resolver=resolver_for(PUBLIC_IP),
+                        connector=lambda *args: connector_calls.append(args),
+                        headers=headers,
+                    )
+                self.assertNotIn("secret", str(caught.exception))
+                self.assertEqual(connector_calls, [])
+
     def test_blocked_target_never_calls_connector(self):
         calls = []
 
@@ -190,6 +269,30 @@ class SafeFetchTests(unittest.TestCase):
                 resolver=resolver,
                 connector=lambda *args: responses.pop(0),
             )
+
+    def test_literal_redirect_is_blocked_before_resolver_or_second_connection(self):
+        connector_calls = []
+        resolver_calls = []
+
+        def resolver(host, port, *args, **kwargs):
+            resolver_calls.append(host)
+            return resolver_for(PUBLIC_IP)(host, port)
+
+        def connector(target, timeout_seconds, headers):
+            connector_calls.append(target.original_hostname)
+            return FakeResponse(302, headers={"Location": "http://127.1/admin"}), FakeConnection()
+
+        with self.assertRaises(BlockedNetworkTarget):
+            safe_fetch(
+                "https://example.com/start",
+                timeout_seconds=1,
+                max_bytes=10,
+                resolver=resolver,
+                connector=connector,
+            )
+
+        self.assertEqual(connector_calls, ["example.com"])
+        self.assertEqual(resolver_calls, ["example.com"])
 
     def test_follows_relative_redirect(self):
         requested_paths = []
@@ -299,6 +402,43 @@ class SafeFetchTests(unittest.TestCase):
         self.assertEqual(result.body, b"ok")
         self.assertTrue(response.closed)
         self.assertTrue(connection.closed)
+
+    def test_connector_value_error_closes_connection_and_socket_and_is_stable(self):
+        class Socket:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        class Connection:
+            def __init__(self, *args, **kwargs):
+                self.sock = None
+                self.closed = False
+
+            def request(self, *args, **kwargs):
+                raise ValueError("secret request construction detail")
+
+            def close(self):
+                self.closed = True
+
+        raw_socket = Socket()
+        connection = Connection()
+
+        with patch.object(safe_http_module.socket, "create_connection", return_value=raw_socket), patch.object(
+            safe_http_module.http.client, "HTTPConnection", return_value=connection
+        ):
+            with self.assertRaisesRegex(SafeHttpError, "^HTTP fetch failed$") as caught:
+                safe_fetch(
+                    "http://8.8.8.8/",
+                    timeout_seconds=1,
+                    max_bytes=10,
+                    connector=connect_pinned,
+                )
+
+        self.assertNotIn("secret", str(caught.exception))
+        self.assertTrue(connection.closed)
+        self.assertTrue(raw_socket.closed)
 
 
 if __name__ == "__main__":

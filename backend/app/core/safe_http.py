@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import http.client
 import ipaddress
+import re
 import socket
 import ssl
 from typing import Callable, Mapping
@@ -53,6 +54,7 @@ class SafeHttpResponse:
 Resolver = Callable[..., list[tuple]]
 Connector = Callable[[ValidatedTarget, float, Mapping[str, str]], tuple[object, object]]
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
 def validate_public_url(url: str, resolver: Resolver = socket.getaddrinfo) -> ValidatedTarget:
@@ -86,18 +88,17 @@ def validate_public_url(url: str, resolver: Resolver = socket.getaddrinfo) -> Va
     if port not in {80, 443}:
         raise InvalidHttpTarget("invalid HTTP target")
 
-    try:
-        answers = resolver(ascii_hostname, port, type=socket.SOCK_STREAM)
-    except (OSError, TypeError, ValueError) as exc:
-        raise InvalidHttpTarget("target resolution failed") from exc
-
-    addresses: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
-    try:
-        for answer in answers:
-            address = ipaddress.ip_address(answer[4][0])
-            addresses.add(address)
-    except (IndexError, TypeError, ValueError) as exc:
-        raise InvalidHttpTarget("target resolution failed") from exc
+    literal_address = _literal_address(ascii_hostname)
+    if literal_address is not None:
+        addresses = {literal_address}
+    else:
+        addresses: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
+        try:
+            answers = resolver(ascii_hostname, port, type=socket.SOCK_STREAM)
+            for answer in answers:
+                addresses.add(ipaddress.ip_address(answer[4][0]))
+        except (IndexError, KeyError, OSError, TypeError, ValueError) as exc:
+            raise InvalidHttpTarget("target resolution failed") from exc
     if not addresses:
         raise InvalidHttpTarget("target resolution failed")
     if any(not _is_global_address(address) for address in addresses):
@@ -122,12 +123,13 @@ def safe_fetch(
     if max_bytes < 0 or max_redirects < 0 or timeout_seconds <= 0:
         raise ValueError("safe_fetch limits must be positive")
     connector = connector or connect_pinned
+    base_headers = _validated_headers(headers)
     current_url = url
     redirects = 0
 
     while True:
         target = validate_public_url(current_url, resolver=resolver)
-        request_headers = {key: value for key, value in (headers or {}).items() if key.lower() != "host"}
+        request_headers = dict(base_headers)
         request_headers["Host"] = _host_header(target)
         response = None
         connection = None
@@ -136,7 +138,7 @@ def safe_fetch(
                 response, connection = connector(target, timeout_seconds, request_headers)
             except SafeHttpError:
                 raise
-            except (OSError, TimeoutError, http.client.HTTPException) as exc:
+            except (OSError, TimeoutError, ValueError, http.client.HTTPException) as exc:
                 raise SafeHttpError("HTTP fetch failed") from exc
 
             status = int(getattr(response, "status", 0) or 0)
@@ -173,8 +175,10 @@ def connect_pinned(
     last_error: BaseException | None = None
     for address in target.validated_ips:
         raw_socket = None
-        connection = http.client.HTTPConnection(target.original_hostname, target.port, timeout=timeout_seconds)
+        connection = None
+        succeeded = False
         try:
+            connection = http.client.HTTPConnection(target.original_hostname, target.port, timeout=timeout_seconds)
             raw_socket = socket.create_connection((address, target.port), timeout=timeout_seconds)
             if target.scheme == "https":
                 raw_socket = ssl.create_default_context().wrap_socket(
@@ -183,12 +187,15 @@ def connect_pinned(
                 )
             connection.sock = raw_socket
             connection.request("GET", target.request_path, headers=dict(headers))
-            return connection.getresponse(), connection
-        except (OSError, TimeoutError, http.client.HTTPException) as exc:
+            response = connection.getresponse()
+            succeeded = True
+            return response, connection
+        except (OSError, TimeoutError, ValueError, http.client.HTTPException) as exc:
             last_error = exc
-            connection.close()
-            if raw_socket is not None:
-                raw_socket.close()
+        finally:
+            if not succeeded:
+                _close(connection)
+                _close(raw_socket)
     if last_error is None:
         raise OSError("no validated address available")
     raise last_error
@@ -207,6 +214,19 @@ def _is_global_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -
             address.is_unspecified,
         )
     )
+
+
+def _literal_address(hostname: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(hostname)
+    except ValueError:
+        pass
+    if not hostname or any(char not in "0123456789." for char in hostname):
+        return None
+    try:
+        return ipaddress.IPv4Address(socket.inet_aton(hostname))
+    except OSError:
+        return None
 
 
 def _valid_hostname(hostname: str) -> bool:
@@ -236,6 +256,24 @@ def _host_header(target: ValidatedTarget) -> str:
 
 def _canonical_url(target: ValidatedTarget) -> str:
     return f"{target.scheme}://{_host_header(target)}{target.request_path}"
+
+
+def _validated_headers(headers: Mapping[str, str] | None) -> dict[str, str]:
+    if headers is None:
+        return {}
+    if not isinstance(headers, Mapping):
+        raise InvalidHttpTarget("invalid HTTP headers")
+    validated = {}
+    for name, value in headers.items():
+        if not isinstance(name, str) or not isinstance(value, str):
+            raise InvalidHttpTarget("invalid HTTP headers")
+        if not _HEADER_NAME_RE.fullmatch(name):
+            raise InvalidHttpTarget("invalid HTTP headers")
+        if any(ord(char) < 32 or ord(char) == 127 or ord(char) > 255 for char in value):
+            raise InvalidHttpTarget("invalid HTTP headers")
+        if name.lower() != "host":
+            validated[name] = value
+    return validated
 
 
 def _copy_headers(headers: object) -> dict[str, str]:
