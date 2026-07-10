@@ -6,10 +6,10 @@ import { fetchInvestigationIntelligence } from "../api";
 type IntelligencePanelProps = {
   investigation: Investigation;
   apiBase: string;
-  apiHeaders: () => Record<string, string> | undefined;
+  requestHeaders: () => Record<string, string> | undefined;
 };
 
-export function IntelligencePanel({ investigation, apiBase, apiHeaders }: IntelligencePanelProps) {
+export function IntelligencePanel({ investigation, apiBase, requestHeaders }: IntelligencePanelProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<IntelligenceData | null>(null);
@@ -19,7 +19,7 @@ export function IntelligencePanel({ investigation, apiBase, apiHeaders }: Intell
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchInvestigationIntelligence(apiBase, investigation.id, apiHeaders());
+      const result = await fetchInvestigationIntelligence(apiBase, investigation.id, requestHeaders());
       setData(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : "情报汇总加载失败");

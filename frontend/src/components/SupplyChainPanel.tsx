@@ -6,10 +6,10 @@ import { createSupplyChainInvestigation, fetchSupplyChainData } from "../api";
 type SupplyChainPanelProps = {
   investigation: Investigation;
   apiBase: string;
-  apiHeaders: () => Record<string, string> | undefined;
+  requestHeaders: () => Record<string, string> | undefined;
 };
 
-export function SupplyChainPanel({ investigation, apiBase, apiHeaders }: SupplyChainPanelProps) {
+export function SupplyChainPanel({ investigation, apiBase, requestHeaders }: SupplyChainPanelProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<SupplyChainData | null>(null);
@@ -20,7 +20,7 @@ export function SupplyChainPanel({ investigation, apiBase, apiHeaders }: SupplyC
     setError(null);
 
     try {
-      const result = await fetchSupplyChainData(apiBase, investigation.seed_value, apiHeaders());
+      const result = await fetchSupplyChainData(apiBase, investigation.seed_value, requestHeaders());
       setData(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : "查询失败");
@@ -32,7 +32,7 @@ export function SupplyChainPanel({ investigation, apiBase, apiHeaders }: SupplyC
   const createInvestigation = async (companyName: string) => {
     setError(null);
     try {
-      await createSupplyChainInvestigation(apiBase, companyName, apiHeaders());
+      await createSupplyChainInvestigation(apiBase, companyName, requestHeaders());
       window.location.reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "创建深度调查失败");

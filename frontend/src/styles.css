@@ -261,6 +261,8 @@ textarea {
 }
 
 .sidebar {
+  display: flex;
+  flex-direction: column;
   border-right: 1px solid #d7dee8;
   background: #ffffff;
   padding: 12px 8px;
@@ -328,6 +330,144 @@ nav a svg {
 nav a.active {
   color: #0f4f7a;
   background: #e8f4fb;
+}
+
+.logout-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  margin: auto auto 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--hcs-muted);
+}
+
+.logout-button:hover {
+  border-color: var(--hcs-border);
+  background: var(--hcs-soft);
+  color: var(--hcs-text);
+}
+
+.admin-login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--hcs-bg);
+}
+
+.admin-login-panel {
+  width: min(100%, 380px);
+  border: 1px solid var(--hcs-border-strong);
+  border-radius: 8px;
+  background: var(--hcs-surface);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  padding: 20px;
+}
+
+.admin-login-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--hcs-border);
+}
+
+.admin-login-brand img {
+  width: 38px;
+  height: 38px;
+  object-fit: contain;
+}
+
+.admin-login-brand div,
+.admin-login-heading div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.admin-login-brand strong {
+  color: var(--hcs-text);
+  font-size: 14px;
+}
+
+.admin-login-brand span,
+.admin-login-heading p {
+  color: var(--hcs-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.admin-login-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 18px 0;
+  color: var(--hcs-blue);
+}
+
+.admin-login-heading svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.admin-login-heading h1 {
+  color: var(--hcs-text);
+  font-size: 17px;
+  letter-spacing: 0;
+}
+
+.admin-login-panel form {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-login-panel label {
+  color: var(--hcs-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.admin-login-panel input {
+  width: 100%;
+  height: 40px;
+  border: 1px solid var(--hcs-border-strong);
+  border-radius: 6px;
+  background: var(--hcs-surface);
+  color: var(--hcs-text);
+  padding: 8px 10px;
+  outline: none;
+}
+
+.admin-login-panel input:focus {
+  border-color: var(--hcs-blue);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+}
+
+.admin-login-panel button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 40px;
+  margin-top: 6px;
+  border-radius: 6px;
+}
+
+.admin-login-error {
+  color: #b91c1c;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.session-checking {
+  color: var(--hcs-muted);
+  font-size: 13px;
 }
 
 .workspace {

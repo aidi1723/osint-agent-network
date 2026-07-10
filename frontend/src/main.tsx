@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, AlertTriangle, Cpu, Database, Filter, GitBranch, Play, RefreshCcw, Search } from "lucide-react";
+import { Activity, AlertTriangle, Cpu, Database, Filter, GitBranch, LogOut, Play, RefreshCcw, Search } from "lucide-react";
 import { marked } from "marked";
 import "./styles.css";
-import { fetchJson } from "./api";
+import { fetchJson, setUnauthorizedHandler } from "./api";
+import { loadSession, login, logout, requestOptions } from "./auth";
 import { combineGraphs, findDecisionProfileForInvestigation, visiblePrimaryInvestigations, type BundleInvestigation } from "./investigation-bundle";
 import { labelOf, statusClass, targetTypeLabels, strategyLabels, taskStateLabels, agentRoleLabels, entityTypeLabels, evidenceKindLabels, relationshipTypeLabels } from "./labels";
 import { Metric, MiniMetrics } from "./components/Metric";
@@ -24,6 +25,7 @@ import { FactPromotionPanel } from "./components/FactPromotionPanel";
 import { SystemStatusPanel } from "./components/SystemStatusPanel";
 import { SupplyChainPanel } from "./components/SupplyChainPanel";
 import { IntelligencePanel } from "./components/IntelligencePanel";
+import { AdminLogin } from "./components/AdminLogin";
 import { buildCockpitMetrics, cockpitBluf } from "./dashboard-metrics";
 import { chooseDefaultInvestigation } from "./default-investigation";
 import { preferredDecisionLabel, preferredOrganizationLabel } from "./hcs-graph-data";
@@ -32,18 +34,6 @@ import { isActiveInvestigationStatus, isReviewableInvestigationStatus, sanitizeR
 import type { Tool, Investigation, Agent, DataMetric, SystemStatus } from "./types";
 
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? "";
-const adminApiToken = import.meta.env.VITE_ADMIN_API_TOKEN ?? "";
-
-function jsonHeaders() {
-  return {
-    "Content-Type": "application/json",
-    ...(adminApiToken ? { Authorization: `Bearer ${adminApiToken}` } : {}),
-  };
-}
-
-function apiHeaders() {
-  return adminApiToken ? { Authorization: `Bearer ${adminApiToken}` } : undefined;
-}
 
 type ConfirmState = {
   title: string;
@@ -54,6 +44,84 @@ type ConfirmState = {
 } | null;
 
 function App() {
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [authRequired, setAuthRequired] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [csrfToken, setCsrfToken] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    loadSession(apiBase)
+      .then((session) => {
+        if (!active) return;
+        setAuthRequired(Boolean(session.required));
+        setAuthenticated(Boolean(session.authenticated));
+        setCsrfToken(session.authenticated ? session.csrf_token ?? null : null);
+      })
+      .catch(() => {
+        if (!active) return;
+        setAuthRequired(true);
+        setAuthenticated(false);
+        setCsrfToken(null);
+        setSessionError("无法确认登录状态，请验证凭据后重试。");
+      })
+      .finally(() => {
+        if (active) setCheckingSession(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setAuthRequired(true);
+      setAuthenticated(false);
+      setCsrfToken(null);
+      setSessionError("登录状态已失效，请重新验证。");
+    });
+    return () => setUnauthorizedHandler(null);
+  }, []);
+
+  async function handleLogin(adminToken: string) {
+    const session = await login(apiBase, adminToken);
+    setAuthRequired(true);
+    setAuthenticated(true);
+    setCsrfToken(session.csrf_token ?? null);
+    setSessionError(null);
+  }
+
+  async function handleLogout() {
+    try {
+      if (csrfToken) await logout(apiBase, csrfToken);
+    } catch {
+      // Local auth state must still be cleared when the session already expired.
+    } finally {
+      setAuthenticated(false);
+      setCsrfToken(null);
+      setSessionError(null);
+    }
+  }
+
+  if (checkingSession) {
+    return <main className="admin-login-shell"><div className="session-checking" role="status">正在验证登录状态...</div></main>;
+  }
+  if (authRequired && !authenticated) {
+    return <AdminLogin onLogin={handleLogin} initialError={sessionError} />;
+  }
+  return (
+    <OperationsConsole
+      csrfToken={csrfToken}
+      onLogout={authenticated ? handleLogout : undefined}
+    />
+  );
+}
+
+type OperationsConsoleProps = {
+  csrfToken: string | null;
+  onLogout?: () => Promise<void>;
+};
+
+function OperationsConsole({ csrfToken, onLogout }: OperationsConsoleProps) {
   const [tools, setTools] = useState<Tool[]>([]);
   const [investigations, setInvestigations] = useState<Investigation[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -75,18 +143,22 @@ function App() {
   const dataBoardRef = useRef<HTMLElement | null>(null);
   const selectedIdRef = useRef<string | null>(null);
 
+  function csrfHeaders(): Record<string, string> | undefined {
+    return csrfToken ? { "X-CSRF-Token": csrfToken } : undefined;
+  }
+
   async function refresh() {
     try {
       const [toolsPayload, invPayload, agentsPayload] = await Promise.all([
-        fetchJson<{ tools?: Tool[] }>(`${apiBase}/api/tools`, { headers: apiHeaders() }),
-        fetchJson<{ investigations?: Investigation[] }>(`${apiBase}/api/investigations${showArchived ? "?include_archived=true" : ""}`, { headers: apiHeaders() }),
-        fetchJson<{ agents?: Agent[] }>(`${apiBase}/api/agents`, { headers: apiHeaders() }),
+        fetchJson<{ tools?: Tool[] }>(`${apiBase}/api/tools`, requestOptions("GET")),
+        fetchJson<{ investigations?: Investigation[] }>(`${apiBase}/api/investigations${showArchived ? "?include_archived=true" : ""}`, requestOptions("GET")),
+        fetchJson<{ agents?: Agent[] }>(`${apiBase}/api/agents`, requestOptions("GET")),
       ]);
       setTools(toolsPayload.tools ?? []);
       setInvestigations(invPayload.investigations ?? []);
       setAgents(agentsPayload.agents ?? []);
       setApiStatus("online");
-      fetchJson<SystemStatus | null>(`${apiBase}/api/system/status`, { headers: apiHeaders() })
+      fetchJson<SystemStatus | null>(`${apiBase}/api/system/status`, requestOptions("GET"))
         .then((payload) => setSystemStatus(payload))
         .catch(() => setSystemStatus(null));
     } catch (exc) {
@@ -110,7 +182,7 @@ function App() {
       await refresh();
       if (selectedIdRef.current) {
         try {
-          const payload = await fetchJson<Investigation>(`${apiBase}/api/investigations/${selectedIdRef.current}`, { headers: apiHeaders() });
+          const payload = await fetchJson<Investigation>(`${apiBase}/api/investigations/${selectedIdRef.current}`, requestOptions("GET"));
           setSelected((prev) => prev ? { ...prev, ...payload } : null);
         } catch (exc) {
           setError(exc instanceof Error ? exc.message : "任务详情刷新失败");
@@ -140,20 +212,24 @@ function App() {
           metadata: { ...sparseMetadata, intelligence_requirements: intelligenceRequirements },
         }
       : { ...form, metadata: { intelligence_requirements: intelligenceRequirements } };
-    const res = await fetch(`${apiBase}/api/investigations`, {
-      method: "POST", headers: jsonHeaders(), body: JSON.stringify(payload),
-    });
-    if (!res.ok) { setError((await res.json()).detail ?? "无法创建调查任务"); return; }
-    await refresh();
+    try {
+      await fetchJson(`${apiBase}/api/investigations`, {
+        ...requestOptions("POST", csrfToken ?? undefined),
+        body: JSON.stringify(payload),
+      });
+      await refresh();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "无法创建调查任务");
+    }
   }
 
   async function loadInvestigation(id: string) {
     setLoadingDetail(true);
     selectedIdRef.current = id;
     try {
-      const payload = await fetchJson<Investigation>(`${apiBase}/api/investigations/${id}`, { headers: apiHeaders() });
+      const payload = await fetchJson<Investigation>(`${apiBase}/api/investigations/${id}`, requestOptions("GET"));
       const dp = findDecisionProfileForInvestigation(payload, investigations);
-      const loadedDp = dp ? await fetchJson<Investigation>(`${apiBase}/api/investigations/${dp.id}`, { headers: apiHeaders() }) : null;
+      const loadedDp = dp ? await fetchJson<Investigation>(`${apiBase}/api/investigations/${dp.id}`, requestOptions("GET")) : null;
       setSelected({ ...payload, decision_profile: loadedDp ?? undefined, combined_graph: combineGraphs(payload.graph, loadedDp?.graph) });
       window.requestAnimationFrame(() => dataBoardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
     } catch (exc) {
@@ -165,9 +241,16 @@ function App() {
 
   async function postInvestigationAction(id: string, action: "cancel" | "reopen" | "retry" | "archive" | "delete") {
     setError(null);
-    const res = await fetch(`${apiBase}/api/investigations/${id}/${action}`, { method: "POST", headers: jsonHeaders() });
-    if (!res.ok) { setError((await res.json()).detail ?? "任务操作失败"); return; }
-    const updated = await res.json();
+    let updated;
+    try {
+      updated = await fetchJson<Investigation & { deleted?: boolean }>(
+        `${apiBase}/api/investigations/${id}/${action}`,
+        requestOptions("POST", csrfToken ?? undefined),
+      );
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "任务操作失败");
+      return;
+    }
     if (action === "delete") { if (selected?.id === id) { setSelected(null); selectedIdRef.current = null; } }
     else { setSelected(updated); }
     await refresh();
@@ -185,22 +268,31 @@ function App() {
 
   async function releaseStaleClaims() {
     setError(null);
-    const res = await fetch(`${apiBase}/api/investigations/release-stale`, { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ stale_after_seconds: 1800 }) });
-    if (!res.ok) { setError((await res.json()).detail ?? "释放过期认领失败"); return; }
-    await refresh();
+    try {
+      await fetchJson(`${apiBase}/api/investigations/release-stale`, {
+        ...requestOptions("POST", csrfToken ?? undefined),
+        body: JSON.stringify({ stale_after_seconds: 1800 }),
+      });
+      await refresh();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "释放过期认领失败");
+    }
   }
 
   async function runSelectedJobs() {
     if (!selected) return;
     setError(null); setRunningJobs(true);
     try {
-      const res = await fetch(`${apiBase}/api/investigations/${selected.id}/run-jobs`, { method: "POST", headers: jsonHeaders(), body: JSON.stringify({}) });
-      if (!res.ok) { setError((await res.json()).detail ?? "运行队列失败"); return; }
-      const payload = await res.json();
+      const payload = await fetchJson<{ busy?: boolean }>(`${apiBase}/api/investigations/${selected.id}/run-jobs`, {
+        ...requestOptions("POST", csrfToken ?? undefined),
+        body: JSON.stringify({}),
+      });
       if (payload.busy) {
         setError("当前任务已有运行中的队列，请等待完成或释放过期认领后再运行。");
       }
       await refresh(); await loadInvestigation(selected.id);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "运行队列失败");
     } finally { setRunningJobs(false); }
   }
 
@@ -300,6 +392,11 @@ function App() {
           <a aria-disabled="true" title="即将上线"><Cpu size={18} />工具管理</a>
           <a aria-disabled="true" title="即将上线"><Database size={18} />报告库</a>
         </nav>
+        {onLogout ? (
+          <button className="logout-button" type="button" onClick={onLogout} aria-label="退出登录" title="退出登录">
+            <LogOut size={18} />
+          </button>
+        ) : null}
       </aside>
 
       <section className="workspace">
@@ -427,13 +524,13 @@ function App() {
                 <IntelligencePanel
                   investigation={selected}
                   apiBase={apiBase}
-                  apiHeaders={apiHeaders}
+                  requestHeaders={csrfHeaders}
                 />
                 {selected.seed_type === "company" && (
                   <SupplyChainPanel
                     investigation={selected}
                     apiBase={apiBase}
-                    apiHeaders={apiHeaders}
+                    requestHeaders={csrfHeaders}
                   />
                 )}
               </section>

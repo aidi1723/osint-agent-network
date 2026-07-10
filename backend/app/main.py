@@ -2,9 +2,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+from threading import Lock
 from urllib.parse import parse_qs, urlparse
 
 from app.core.agent_payload_validation import validate_agent_payload
+from app.core.browser_auth import BrowserSessionManager
 from app.core.intel_gateway import build_intel_plan
 from app.core.mcp_descriptor import build_mcp_descriptor, load_mcp_resource
 from app.core.normalization import NormalizationError
@@ -19,6 +21,11 @@ from app.services.store import store
 from app.services.worker import run_investigation_jobs
 
 
+_browser_session_manager_lock = Lock()
+_browser_session_manager: BrowserSessionManager | None = None
+_browser_session_manager_config: tuple[str, bool, int] | None = None
+
+
 class RequestJsonError(Exception):
     def __init__(self, payload: dict, status: int):
         super().__init__(str(payload.get("detail", "invalid request body")))
@@ -31,9 +38,27 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        session_manager = browser_session_manager()
+        if parsed.path == "/api/auth/session":
+            payload = session_manager.session_payload(self.headers)
+            payload["required"] = authentication_required_for_environment()
+            self._json(payload)
+            return
+
         read_token = os.getenv("READ_API_TOKEN", "") or os.getenv("ADMIN_API_TOKEN", "") or os.getenv("AGENT_API_TOKEN", "")
         require_token = authentication_required_for_environment()
         if not read_request_authorized(parsed.path, dict(self.headers), read_token, require_token=require_token):
+            authorization_status = browser_or_bearer_authorization(
+                self.headers,
+                expected_token=read_token,
+                require_token=require_token,
+                session_manager=session_manager,
+                allowed_origins=_get_allowed_origins(),
+                mutation=False,
+            )
+        else:
+            authorization_status = 200
+        if authorization_status != 200:
             self._json({"detail": "unauthorized read request"}, status=401)
             return
 
@@ -202,6 +227,40 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._json(exc.payload, status=exc.status)
 
     def _handle_post(self, parsed):
+        session_manager = browser_session_manager()
+        allowed_origins = _get_allowed_origins()
+
+        if parsed.path == "/api/auth/login":
+            payload = self._read_json()
+            result = session_manager.login(payload.get("admin_token", ""))
+            if result is None:
+                self._json({"detail": "invalid credentials"}, status=401)
+                return
+            self._json(
+                {"authenticated": True, "csrf_token": result.csrf_token},
+                headers=(("Set-Cookie", result.set_cookie),),
+            )
+            return
+
+        if parsed.path == "/api/auth/logout":
+            browser_principal = session_manager.authorize_session(
+                self.headers, allowed_origins, mutation=False
+            )
+            if browser_principal is None:
+                self._json({"detail": "unauthorized management request"}, status=401)
+                return
+            if session_manager.authorize_session(
+                self.headers, allowed_origins, mutation=True
+            ) is None:
+                self._json({"detail": "browser mutation protection failed"}, status=403)
+                return
+            expired_cookie = session_manager.logout(self.headers)
+            self._json(
+                {"authenticated": False},
+                headers=(("Set-Cookie", expired_cookie),),
+            )
+            return
+
         if parsed.path.startswith("/api/agent/"):
             if not agent_request_authorized(
                 dict(self.headers),
@@ -212,12 +271,21 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
         elif requires_write_authorization(parsed.path):
             expected_token = os.getenv("ADMIN_API_TOKEN", "") or os.getenv("AGENT_API_TOKEN", "")
-            if not request_authorized(
-                dict(self.headers),
-                expected_token,
+            authorization_status = browser_or_bearer_authorization(
+                self.headers,
+                expected_token=expected_token,
                 require_token=authentication_required_for_environment(),
-            ):
-                self._json({"detail": "unauthorized management request"}, status=401)
+                session_manager=session_manager,
+                allowed_origins=allowed_origins,
+                mutation=True,
+            )
+            if authorization_status != 200:
+                detail = (
+                    "browser mutation protection failed"
+                    if authorization_status == 403
+                    else "unauthorized management request"
+                )
+                self._json({"detail": detail}, status=authorization_status)
                 return
 
         if parsed.path == "/api/investigations":
@@ -585,46 +653,58 @@ class ApiHandler(BaseHTTPRequestHandler):
         self._json({"detail": "validation failed", "errors": errors}, status=400)
         return True
 
-    def _json(self, payload: dict, status: int = 200):
+    def _json(
+        self,
+        payload: dict,
+        status: int = 200,
+        headers: tuple[tuple[str, str], ...] = (),
+    ):
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(encoded)))
-        origin = self.headers.get("Origin", "")
-        allowed_origins = _get_allowed_origins()
-        if origin in allowed_origins or "*" in allowed_origins:
-            self.send_header("Access-Control-Allow-Origin", origin or allowed_origins[0])
-        self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        self.end_headers()
+        self._send_headers(
+            status,
+            "application/json; charset=utf-8",
+            len(encoded),
+            headers,
+        )
         self.wfile.write(encoded)
 
     def _text(self, body: str, content_type: str, status: int = 200):
         encoded = body.encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(encoded)))
-        origin = self.headers.get("Origin", "")
-        allowed_origins = _get_allowed_origins()
-        if origin in allowed_origins or "*" in allowed_origins:
-            self.send_header("Access-Control-Allow-Origin", origin or allowed_origins[0])
-        self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        self.end_headers()
+        self._send_headers(status, content_type, len(encoded))
         self.wfile.write(encoded)
 
     def _binary(self, body: bytes, content_type: str, status: int = 200):
+        self._send_headers(status, content_type, len(body))
+        self.wfile.write(body)
+
+    def _send_headers(
+        self,
+        status: int,
+        content_type: str,
+        content_length: int,
+        headers: tuple[tuple[str, str], ...] = (),
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        origin = self.headers.get("Origin", "")
+        self.send_header("Content-Length", str(content_length))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        origin_values = self.headers.get_all("Origin", [])
+        origin = origin_values[0] if len(origin_values) == 1 else ""
         allowed_origins = _get_allowed_origins()
-        if origin in allowed_origins or "*" in allowed_origins:
-            self.send_header("Access-Control-Allow-Origin", origin or allowed_origins[0])
+        if origin and (origin in allowed_origins or "*" in allowed_origins):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Credentials", "true")
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization, X-CSRF-Token",
+        )
+        for name, value in headers:
+            self.send_header(name, value)
         self.end_headers()
-        self.wfile.write(body)
 
 
 def run():
@@ -654,6 +734,34 @@ def request_authorized(headers: dict, expected_token: str, require_token: bool =
     return authorization == f"Bearer {expected_token}"
 
 
+def browser_or_bearer_authorization(
+    headers,
+    *,
+    expected_token: str,
+    require_token: bool,
+    session_manager: BrowserSessionManager,
+    allowed_origins: tuple[str, ...],
+    mutation: bool,
+) -> int:
+    authorization = headers.get("Authorization") or headers.get("authorization") or ""
+    if expected_token and authorization == f"Bearer {expected_token}":
+        return 200
+
+    browser_principal = session_manager.authorize_session(
+        headers, allowed_origins, mutation=False
+    )
+    if browser_principal is not None:
+        if mutation and session_manager.authorize_session(
+            headers, allowed_origins, mutation=True
+        ) is None:
+            return 403
+        return 200
+
+    if not expected_token and not require_token:
+        return 200
+    return 401
+
+
 def read_request_authorized(path: str, headers: dict, expected_token: str, require_token: bool = False) -> bool:
     if path in {"/api/health"}:
         return True
@@ -680,11 +788,50 @@ def missing_required_auth_tokens(env: dict | None = None) -> list[str]:
     return [name for name in required if not str(values.get(name, "")).strip()]
 
 
-def _get_allowed_origins() -> list[str]:
+def _get_allowed_origins() -> tuple[str, ...]:
     env_value = os.getenv("CORS_ALLOWED_ORIGINS", "")
     if env_value:
-        return [origin.strip() for origin in env_value.split(",") if origin.strip()]
-    return ["http://127.0.0.1:3008", "http://localhost:3008"]
+        return tuple(origin.strip() for origin in env_value.split(",") if origin.strip())
+    return ("http://127.0.0.1:3008", "http://localhost:3008")
+
+
+def browser_session_manager() -> BrowserSessionManager:
+    global _browser_session_manager, _browser_session_manager_config
+
+    admin_token = os.getenv("ADMIN_API_TOKEN", "")
+    secure_cookie = _configured_cookie_secure()
+    session_ttl_seconds = _configured_session_ttl_seconds()
+    config = (admin_token, secure_cookie, session_ttl_seconds)
+    with _browser_session_manager_lock:
+        if _browser_session_manager is None or _browser_session_manager_config != config:
+            _browser_session_manager = BrowserSessionManager(
+                admin_token=admin_token,
+                secure_cookie=secure_cookie,
+                session_ttl_seconds=session_ttl_seconds,
+            )
+            _browser_session_manager_config = config
+        return _browser_session_manager
+
+
+def _configured_cookie_secure() -> bool:
+    default = str(os.getenv("APP_ENV", "")).strip().lower() in {"prod", "production"}
+    value = str(os.getenv("OSINT_COOKIE_SECURE", "")).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _configured_session_ttl_seconds() -> int:
+    value = str(os.getenv("OSINT_SESSION_TTL_SECONDS", "")).strip()
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return BrowserSessionManager.DEFAULT_SESSION_TTL_SECONDS
+    if parsed <= 0:
+        return BrowserSessionManager.DEFAULT_SESSION_TTL_SECONDS
+    return parsed
 
 
 def requires_write_authorization(path: str) -> bool:

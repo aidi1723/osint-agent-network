@@ -1,19 +1,37 @@
 import type { IntelligenceData, Investigation, SupplyChainData } from "./types";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+type UnauthorizedHandler = (() => void) | null;
+
+let unauthorizedHandler: UnauthorizedHandler = null;
+
+export function setUnauthorizedHandler(handler: UnauthorizedHandler): void {
+  unauthorizedHandler = handler;
+}
+
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
 
 export async function fetchJson<T = unknown>(
   input: RequestInfo | URL,
   init?: RequestInit,
   fetchImpl: FetchLike = fetch,
 ): Promise<T> {
-  const response = await fetchImpl(input, init);
+  const response = await fetchImpl(input, { ...init, credentials: "include" });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = typeof payload.detail === "string" && payload.detail.trim()
       ? payload.detail
       : `Request failed with status ${response.status}`;
-    throw new Error(message);
+    if (response.status === 401) unauthorizedHandler?.();
+    throw new ApiError(message, response.status);
   }
   return payload as T;
 }
@@ -28,6 +46,7 @@ export function fetchSupplyChainData(
     `${apiBase}/api/customs/supply-chain`,
     {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
         ...(headers || {}),
@@ -48,6 +67,7 @@ export function createSupplyChainInvestigation(
     `${apiBase}/api/investigations`,
     {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
         ...(headers || {}),
@@ -71,7 +91,7 @@ export function fetchInvestigationIntelligence(
 ): Promise<IntelligenceData> {
   return fetchJson<IntelligenceData>(
     `${apiBase}/api/investigations/${investigationId}/intelligence`,
-    { headers: headers || {} },
+    { credentials: "include", headers: headers || {} },
     fetchImpl,
   );
 }
