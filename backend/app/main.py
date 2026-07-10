@@ -1,5 +1,7 @@
 from collections.abc import Mapping
+from dataclasses import dataclass
 from email.message import Message
+from enum import Enum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hashlib
 import hmac
@@ -32,6 +34,18 @@ _browser_session_manager_config: tuple[str, bool, int] | None = None
 REQUEST_BODY_READ_TIMEOUT_SECONDS = 5.0
 
 HeaderInput = Mapping[str, str] | Message
+
+
+class AuthorizationSource(Enum):
+    NONE = "none"
+    BEARER = "bearer"
+    BROWSER_SESSION = "browser_session"
+
+
+@dataclass(frozen=True)
+class AuthorizationResult:
+    status: int
+    source: AuthorizationSource
 
 
 class RequestJsonError(Exception):
@@ -286,7 +300,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
         elif requires_write_authorization(parsed.path):
             expected_token = os.getenv("ADMIN_API_TOKEN", "") or os.getenv("AGENT_API_TOKEN", "")
-            authorization_status = browser_or_bearer_authorization(
+            authorization = resolve_browser_or_bearer_authorization(
                 self.headers,
                 expected_tokens=(expected_token,) if expected_token else (),
                 known_tokens=_configured_known_bearer_tokens(),
@@ -295,13 +309,16 @@ class ApiHandler(BaseHTTPRequestHandler):
                 allowed_origins=allowed_origins,
                 mutation=True,
             )
-            if authorization_status != 200:
-                detail = (
-                    "browser mutation protection failed"
-                    if authorization_status == 403
-                    else "unauthorized management request"
-                )
-                self._json({"detail": detail}, status=authorization_status)
+            if authorization.status != 200:
+                if authorization.status == 403:
+                    detail = (
+                        "browser mutation protection failed"
+                        if authorization.source is AuthorizationSource.BROWSER_SESSION
+                        else "forbidden management request"
+                    )
+                else:
+                    detail = "unauthorized management request"
+                self._json({"detail": detail}, status=authorization.status)
                 return
 
         if parsed.path == "/api/investigations":
@@ -839,6 +856,27 @@ def browser_or_bearer_authorization(
     allowed_origins: tuple[str, ...],
     mutation: bool,
 ) -> int:
+    return resolve_browser_or_bearer_authorization(
+        headers,
+        expected_tokens=expected_tokens,
+        known_tokens=known_tokens,
+        require_token=require_token,
+        session_manager=session_manager,
+        allowed_origins=allowed_origins,
+        mutation=mutation,
+    ).status
+
+
+def resolve_browser_or_bearer_authorization(
+    headers: HeaderInput,
+    *,
+    expected_tokens: tuple[str, ...],
+    known_tokens: tuple[str, ...],
+    require_token: bool,
+    session_manager: BrowserSessionManager,
+    allowed_origins: tuple[str, ...],
+    mutation: bool,
+) -> AuthorizationResult:
     bearer_status = bearer_authorization_status(
         headers,
         allowed_tokens=expected_tokens,
@@ -849,9 +887,9 @@ def browser_or_bearer_authorization(
         headers, "Authorization"
     )
     if bearer_status == 200:
-        return 200
+        return AuthorizationResult(200, AuthorizationSource.BEARER)
     if authorization_present:
-        return bearer_status
+        return AuthorizationResult(bearer_status, AuthorizationSource.BEARER)
 
     browser_principal = session_manager.authorize_session(
         headers, allowed_origins, mutation=False
@@ -860,12 +898,12 @@ def browser_or_bearer_authorization(
         if mutation and session_manager.authorize_session(
             headers, allowed_origins, mutation=True
         ) is None:
-            return 403
-        return 200
+            return AuthorizationResult(403, AuthorizationSource.BROWSER_SESSION)
+        return AuthorizationResult(200, AuthorizationSource.BROWSER_SESSION)
 
     if not any(expected_tokens) and not require_token:
-        return 200
-    return 401
+        return AuthorizationResult(200, AuthorizationSource.NONE)
+    return AuthorizationResult(401, AuthorizationSource.NONE)
 
 
 def read_request_authorized(path: str, headers: HeaderInput, expected_token: str, require_token: bool = False) -> bool:

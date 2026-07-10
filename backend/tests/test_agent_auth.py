@@ -283,13 +283,17 @@ class BrowserAuthHttpTests(unittest.TestCase):
         )
         for headers in cases:
             with self.subTest(headers=headers):
-                status, _body, _response_headers = self.server.request(
+                status, body, _response_headers = self.server.request(
                     "POST",
                     "/api/investigations/release-stale",
                     payload={"stale_after_seconds": 1800},
                     headers=headers,
                 )
                 self.assertEqual(status, 403)
+                self.assertEqual(
+                    json_payload(body),
+                    {"detail": "browser mutation protection failed"},
+                )
 
         with patch("app.main.store.release_stale_claims", return_value=[]):
             status, body, _headers = self.server.request(
@@ -384,24 +388,32 @@ class BrowserAuthHttpTests(unittest.TestCase):
 
         for token in ("read-secret", "agent-secret"):
             with self.subTest(management_token=token):
-                status, _body, _headers = self.server.request(
+                status, body, _headers = self.server.request(
                     "POST",
                     "/api/investigations/release-stale",
                     payload={},
                     headers=[("Authorization", f"Bearer {token}")],
                 )
                 self.assertEqual(status, 403)
+                self.assertEqual(
+                    json_payload(body),
+                    {"detail": "forbidden management request"},
+                )
 
         for token in (None, "wrong"):
             with self.subTest(invalid_management_token=token):
                 headers = [] if token is None else [("Authorization", f"Bearer {token}")]
-                status, _body, _headers = self.server.request(
+                status, body, _headers = self.server.request(
                     "POST",
                     "/api/investigations/release-stale",
                     payload={},
                     headers=headers,
                 )
                 self.assertEqual(status, 401)
+                self.assertEqual(
+                    json_payload(body),
+                    {"detail": "unauthorized management request"},
+                )
 
         agent_fallback_env = {
             **PRODUCTION_ENV,
@@ -433,13 +445,18 @@ class BrowserAuthHttpTests(unittest.TestCase):
                     ("Bearer wrong", f"Bearer {valid_token}"),
                 ):
                     with self.subTest(path=path, values=values):
-                        status, _body, _headers = self.server.request(
+                        status, body, _headers = self.server.request(
                             method,
                             path,
                             payload=payload,
                             headers=[("Authorization", value) for value in values],
                         )
                         self.assertEqual(status, 401)
+                        if path == "/api/investigations/release-stale":
+                            self.assertEqual(
+                                json_payload(body),
+                                {"detail": "unauthorized management request"},
+                            )
 
     def test_known_bearers_are_forbidden_outside_their_route_scope(self):
         with patch("app.main.store.list_agents", return_value=[]):
