@@ -511,7 +511,6 @@ class MemoryStore:
             observed_at=_now(),
             credibility=credibility,
         )
-        data = asdict(record)
         with self.lock:
             if not self._agent_has_investigation_access_locked(
                 agent_id,
@@ -521,9 +520,9 @@ class MemoryStore:
                 action="evidence_records",
             ):
                 return None
-            self.evidence_ledger[record.id] = data
+            stored = _memory_upsert_evidence_record(self.evidence_ledger, record)
             self._touch_investigation(investigation_id, status="RUNNING")
-            return data
+            return stored
 
     def agent_add_fact(
         self,
@@ -985,11 +984,10 @@ class MemoryStore:
             observed_at=_now(),
             credibility=credibility,
         )
-        data = asdict(record)
         with self.lock:
-            self.evidence_ledger[record.id] = data
+            stored = _memory_upsert_evidence_record(self.evidence_ledger, record)
             self._touch_investigation(investigation_id, status="RUNNING")
-        return data
+        return stored
 
     def add_fact(
         self,
@@ -2235,7 +2233,6 @@ class SQLiteStore:
             observed_at=_now(),
             credibility=credibility,
         )
-        data = asdict(record)
         with self.lock, closing(self._connect()) as conn, conn:
             conn.execute("BEGIN IMMEDIATE")
             if not self._agent_has_investigation_access_conn(
@@ -2247,9 +2244,9 @@ class SQLiteStore:
                 action="evidence_records",
             ):
                 return None
-            _sqlite_upsert_evidence_record(conn, record)
+            stored = _sqlite_upsert_evidence_record(conn, record)
             self._touch_investigation(conn, investigation_id, status="RUNNING")
-        return data
+        return stored
 
     def agent_add_fact(
         self,
@@ -2864,11 +2861,10 @@ class SQLiteStore:
             observed_at=_now(),
             credibility=credibility,
         )
-        data = asdict(record)
         with self.lock, closing(self._connect()) as conn, conn:
-            _sqlite_upsert_evidence_record(conn, record)
+            stored = _sqlite_upsert_evidence_record(conn, record)
             self._touch_investigation(conn, investigation_id, status="RUNNING")
-        return data
+        return stored
 
     def add_fact(
         self,
@@ -4462,7 +4458,7 @@ def _sqlite_upsert_evidence(
     return _evidence_from_row(row), existing is None
 
 
-def _sqlite_upsert_evidence_record(conn: sqlite3.Connection, record) -> None:
+def _sqlite_upsert_evidence_record(conn: sqlite3.Connection, record) -> dict:
     conn.execute(
         """
         INSERT INTO evidence_ledger (
@@ -4494,6 +4490,14 @@ def _sqlite_upsert_evidence_record(conn: sqlite3.Connection, record) -> None:
             record.content_hash,
         ),
     )
+    row = conn.execute(
+        """
+        SELECT * FROM evidence_ledger
+        WHERE investigation_id = ? AND content_hash = ?
+        """,
+        (record.investigation_id, record.content_hash),
+    ).fetchone()
+    return _evidence_ledger_from_row(row)
 
 
 def _sqlite_upsert_relationship(
@@ -4669,6 +4673,34 @@ def _memory_upsert_evidence(
     existing.snippet = candidate.snippet
     existing.created_at = candidate.created_at
     return existing, False, original
+
+
+def _memory_upsert_evidence_record(records: dict[str, dict], candidate) -> dict:
+    data = asdict(candidate)
+    existing = next(
+        (
+            item
+            for item in records.values()
+            if item["investigation_id"] == candidate.investigation_id
+            and item["content_hash"] == candidate.content_hash
+        ),
+        None,
+    )
+    if existing is None:
+        records[candidate.id] = data
+        return dict(data)
+    for field_name in (
+        "source_url",
+        "source_type",
+        "source_tool",
+        "snippet",
+        "observed_at",
+        "admiralty_code",
+        "source_reliability",
+        "information_credibility",
+    ):
+        existing[field_name] = data[field_name]
+    return dict(existing)
 
 
 def _memory_upsert_relationship(

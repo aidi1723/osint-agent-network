@@ -1422,6 +1422,89 @@ class AgentIdentityStoreContract:
         self.assertEqual(after, before)
         self.assertEqual(self.internal_agent_state(reporter["id"]), agent_before)
 
+    def test_scoped_evidence_record_upsert_returns_persisted_identity(self):
+        reader = self.register(
+            name="stable-evidence-record-reader",
+            role_tier="reader",
+            capabilities=["domain"],
+        )
+        investigation = self.store.create_investigation(
+            name="Stable evidence record identity",
+            seed_type="domain",
+            seed_value="stable-evidence.example",
+            strategy_name="quick",
+        )
+        claimed = self.store.claim_task(reader["id"], ["domain"])
+        self.assertEqual(claimed["id"], investigation.id)
+
+        with patch(
+            "app.services.store._now",
+            side_effect=[
+                "2026-07-11T01:00:00+00:00",
+                "2026-07-11T01:00:01+00:00",
+                "2026-07-11T02:00:00+00:00",
+                "2026-07-11T02:00:01+00:00",
+            ],
+        ):
+            first = self.store.agent_add_evidence_record(
+                agent_id=reader["id"],
+                required_tier="reader",
+                investigation_id=investigation.id,
+                job_id=None,
+                source_url="https://stable-evidence.example/about?revision=1",
+                source_type="official_website",
+                source_tool="first-reader",
+                snippet="The same source-backed statement.",
+                credibility=0.7,
+            )
+            second = self.store.agent_add_evidence_record(
+                agent_id=reader["id"],
+                required_tier="reader",
+                investigation_id=investigation.id,
+                job_id=None,
+                source_url="https://stable-evidence.example/about?revision=2",
+                source_type="mainstream_media",
+                source_tool="second-reader",
+                snippet="The same source-backed statement.",
+                credibility=0.95,
+            )
+
+        detail = self.store.get_investigation_raw(investigation.id)
+        self.assertEqual(len(detail["evidence_ledger"]), 1)
+        persisted = detail["evidence_ledger"][0]
+        self.assertEqual(first["id"], persisted["id"])
+        self.assertEqual(second["id"], persisted["id"])
+        self.assertEqual(first["content_hash"], persisted["content_hash"])
+        self.assertEqual(second["content_hash"], persisted["content_hash"])
+        self.assertEqual(
+            persisted["source_url"],
+            "https://stable-evidence.example/about?revision=2",
+        )
+        self.assertEqual(persisted["source_type"], "mainstream_media")
+        self.assertEqual(persisted["source_tool"], "second-reader")
+        self.assertEqual(persisted["observed_at"], "2026-07-11T02:00:00+00:00")
+        self.assertEqual(persisted["admiralty_code"], "B-1")
+        self.assertEqual(persisted["source_reliability"], "B")
+        self.assertEqual(persisted["information_credibility"], "1")
+
+        fact = self.store.add_fact(
+            investigation.id,
+            "The returned evidence ID backs this fact.",
+            "stable-evidence.example",
+            "has_source_backed_statement",
+            "The same source-backed statement.",
+            "CONFIRMED",
+            0.95,
+            persisted["admiralty_code"],
+            [second["id"]],
+        )
+        self.assertEqual(fact["evidence_ids"], [persisted["id"]])
+        linked_detail = self.store.get_investigation_raw(investigation.id)
+        self.assertIn(
+            linked_detail["facts"][0]["evidence_ids"][0],
+            {item["id"] for item in linked_detail["evidence_ledger"]},
+        )
+
 class _MemoryStoreContext:
     def __enter__(self):
         return MemoryStore()
@@ -2278,6 +2361,47 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
         )
         self.assertEqual(status, 201)
         self.assertEqual(event["agent_id"], reader["id"])
+
+    def test_repeated_http_evidence_records_return_the_persisted_row(self):
+        reader = self.register("reader")
+        investigation = self.claimed_task(reader)
+        common = {
+            "task_id": investigation.id,
+            "snippet": "The same HTTP source-backed statement.",
+        }
+        first_status, first = self.post(
+            "/api/agent/evidence-records",
+            {
+                **common,
+                "source_url": "https://http-evidence.example/about?revision=1",
+                "source_type": "official_website",
+                "source_tool": "first-http-reader",
+                "credibility": 0.7,
+            },
+            reader["agent_token"],
+        )
+        second_status, second = self.post(
+            "/api/agent/evidence-records",
+            {
+                **common,
+                "source_url": "https://http-evidence.example/about?revision=2",
+                "source_type": "mainstream_media",
+                "source_tool": "second-http-reader",
+                "credibility": 0.95,
+            },
+            reader["agent_token"],
+        )
+
+        detail = self.store.get_investigation_raw(investigation.id)
+        self.assertEqual(first_status, 201)
+        self.assertEqual(second_status, 201)
+        self.assertEqual(len(detail["evidence_ledger"]), 1)
+        persisted = detail["evidence_ledger"][0]
+        self.assertEqual(first["id"], persisted["id"])
+        self.assertEqual(second["id"], persisted["id"])
+        self.assertEqual(first["content_hash"], persisted["content_hash"])
+        self.assertEqual(second["content_hash"], persisted["content_hash"])
+        self.assertEqual(persisted["source_tool"], "second-http-reader")
 
     def test_active_ownership_is_required_for_actions_events_and_completion(self):
         cases = (
