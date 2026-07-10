@@ -170,6 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     complete = subparsers.add_parser("complete", help="完成任务")
     complete.add_argument("--task-id", required=True)
+    complete.add_argument("--job-id", default="")
     complete.add_argument("--agent-id", required=True)
     complete.add_argument("--status", default="COMPLETED")
     complete.add_argument("--summary", default="")
@@ -203,6 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_tool.add_argument("--target-type", required=True)
     run_tool.add_argument("--target", required=True)
     run_tool.add_argument("--task-id", default="")
+    run_tool.add_argument("--job-id", default="")
     run_tool.add_argument("--agent-id", default="")
     run_tool.add_argument("--input-file", default="")
     run_tool.add_argument("--workdir", default="")
@@ -378,6 +380,7 @@ def dispatch(args: argparse.Namespace, token: str, post_json_fn) -> dict:
             f"/api/agent/tasks/{args.task_id}/complete",
             {
                 "agent_id": args.agent_id,
+                "job_id": args.job_id,
                 "status": args.status,
                 "summary": args.summary,
                 "report_markdown": report_markdown,
@@ -513,73 +516,58 @@ def dispatch_run_tool(args: argparse.Namespace, token: str, post_json_fn) -> dic
         output["posted"] = {"entities": 0, "evidence": 0, "relationships": 0}
         return output
 
-    if not args.task_id or not args.agent_id:
-        raise ValueError("run-tool requires --task-id and --agent-id unless --dry-run is used")
+    if not args.task_id or not args.job_id or not args.agent_id:
+        raise ValueError(
+            "run-tool requires --task-id, --job-id, and --agent-id unless --dry-run is used"
+        )
 
     post_json_fn(
         args.base_url,
-        "/api/agent/events",
+        f"/api/agent/jobs/{args.job_id}/output",
         {
             "task_id": args.task_id,
             "agent_id": args.agent_id,
-            "level": "info",
-            "message": f"完成工具解析：{args.tool}",
-            "metadata": {
-                "tool": args.tool,
-                "target_type": args.target_type,
-                "target": args.target,
-                "counts": output["counts"],
+            "tool": args.tool,
+            "event": {
+                "level": "info",
+                "message": f"完成工具解析：{args.tool}",
+                "metadata": {
+                    "tool": args.tool,
+                    "target_type": args.target_type,
+                    "target": args.target,
+                    "counts": output["counts"],
+                },
             },
+            "entities": [
+                {
+                    "type": item.type,
+                    "value": item.value,
+                    "source_tool": item.source_tool,
+                    "confidence": item.confidence,
+                }
+                for item in parsed.entities
+            ],
+            "evidence": [
+                {
+                    "entity_value": item.entity_value,
+                    "evidence_kind": item.evidence_kind,
+                    "source_tool": item.source_tool,
+                    "snippet": item.snippet,
+                }
+                for item in parsed.evidence
+            ],
+            "relationships": [
+                {
+                    "from": item.from_value,
+                    "to": item.to_value,
+                    "relationship_type": item.relationship_type,
+                    "confidence": item.confidence,
+                }
+                for item in parsed.relationships
+            ],
         },
         token,
     )
-
-    if parsed.entities:
-        post_json_fn(
-            args.base_url,
-            "/api/agent/entities",
-            {
-                "task_id": args.task_id,
-                "entities": [
-                    {
-                        "type": item.type,
-                        "value": item.value,
-                        "source_tool": item.source_tool,
-                        "confidence": item.confidence,
-                    }
-                    for item in parsed.entities
-                ],
-            },
-            token,
-        )
-
-    for item in parsed.evidence:
-        post_json_fn(
-            args.base_url,
-            "/api/agent/evidence",
-            {
-                "task_id": args.task_id,
-                "entity_value": item.entity_value,
-                "evidence_kind": item.evidence_kind,
-                "source_tool": item.source_tool,
-                "snippet": item.snippet,
-            },
-            token,
-        )
-
-    for item in parsed.relationships:
-        post_json_fn(
-            args.base_url,
-            "/api/agent/relationships",
-            {
-                "task_id": args.task_id,
-                "from": item.from_value,
-                "to": item.to_value,
-                "relationship_type": item.relationship_type,
-                "confidence": item.confidence,
-            },
-            token,
-        )
 
     output["posted"] = output["counts"]
     return output

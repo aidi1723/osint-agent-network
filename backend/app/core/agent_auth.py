@@ -30,6 +30,17 @@ AGENT_ACTION_TIERS = {
     "complete_task": {"reporter"},
 }
 
+AGENT_ACTION_OUTPUTS = {
+    "entities": "entities",
+    "evidence": "evidence",
+    "evidence_records": "evidence",
+    "relationships": "relationships",
+    "facts": "claims",
+    "hypotheses": "claims",
+    "score_hypotheses": "claims",
+    "complete_task": "report",
+}
+
 
 def agent_principal_from_record(record: object) -> AgentPrincipal | None:
     if not isinstance(record, Mapping):
@@ -50,6 +61,25 @@ def agent_principal_from_record(record: object) -> AgentPrincipal | None:
 
 def agent_action_allowed(principal: AgentPrincipal, action: str) -> bool:
     return principal.role_tier in AGENT_ACTION_TIERS.get(action, set())
+
+
+def agent_output_contract_allows(output_contract: object, action: str) -> bool:
+    if action == "event":
+        return True
+    required_output = AGENT_ACTION_OUTPUTS.get(action)
+    if required_output is None or not isinstance(output_contract, str):
+        return False
+    return required_output in agent_output_contract_sections(output_contract)
+
+
+def agent_output_contract_sections(output_contract: object) -> frozenset[str]:
+    if not isinstance(output_contract, str):
+        return frozenset()
+    return frozenset(
+        item.strip()
+        for item in output_contract.split(":", 1)[0].split(",")
+        if item.strip()
+    )
 
 
 def legacy_agent_token_allowed(env: Mapping[str, str]) -> bool:

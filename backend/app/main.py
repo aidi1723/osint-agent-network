@@ -15,11 +15,15 @@ from urllib.parse import parse_qs, urlparse
 from app.core.agent_auth import (
     AgentPrincipal,
     agent_action_allowed,
+    agent_output_contract_sections,
     agent_principal_from_record,
     legacy_agent_token_allowed,
     legacy_agent_token_matches,
 )
-from app.core.agent_payload_validation import validate_agent_payload
+from app.core.agent_payload_validation import (
+    validate_agent_payload,
+    validate_tool_output_payload,
+)
 from app.core.browser_auth import BrowserSessionManager
 from app.core.intel_gateway import build_intel_plan
 from app.core.mcp_descriptor import build_mcp_descriptor, load_mcp_resource
@@ -357,7 +361,12 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
             agent_payload["agent_id"] = agent_principal.agent_id
         elif requires_write_authorization(parsed.path):
-            expected_token = os.getenv("ADMIN_API_TOKEN", "") or os.getenv("AGENT_API_TOKEN", "")
+            if parsed.path == "/api/agents/register":
+                expected_token = os.getenv("ADMIN_API_TOKEN", "")
+            else:
+                expected_token = os.getenv("ADMIN_API_TOKEN", "") or os.getenv(
+                    "AGENT_API_TOKEN", ""
+                )
             authorization = resolve_browser_or_bearer_authorization(
                 self.headers,
                 expected_tokens=(expected_token,) if expected_token else (),
@@ -567,12 +576,101 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
             task = store.claim_task(
                 agent_id=agent_principal.agent_id,
-                capabilities=payload.get("capabilities", []),
+                capabilities=list(agent_principal.capabilities),
             )
             if task is None:
                 self._json({"task": None, "message": "no matching open task"})
                 return
             self._json({"task": task})
+            return
+
+        if parsed.path.startswith("/api/agent/jobs/") and parsed.path.endswith(
+            "/output"
+        ):
+            payload = agent_payload
+            if agent_principal.role_tier != "tool_agent":
+                self._json(
+                    {"detail": "agent role not permitted", "action": "tool_output"},
+                    status=403,
+                )
+                return
+            task_id = payload.get("task_id")
+            if not isinstance(task_id, str) or not task_id:
+                self._json(
+                    {"detail": "validation failed", "errors": ["task_id is required"]},
+                    status=400,
+                )
+                return
+            job_id = parsed.path.split("/")[-2]
+            job = store.get_claimed_agent_job(
+                agent_principal.agent_id,
+                task_id,
+                job_id,
+                "tool_agent",
+                require_tool_role=True,
+            )
+            if job is None:
+                self._json({"detail": "active job ownership required"}, status=409)
+                return
+            errors = validate_tool_output_payload(
+                payload,
+                agent_output_contract_sections(job.get("output_contract")),
+            )
+            if self._validation_failed(errors):
+                return
+
+            event_payload = payload.get("event")
+            if event_payload is not None:
+                store.add_event(
+                    investigation_id=task_id,
+                    agent_id=agent_principal.agent_id,
+                    level=event_payload.get("level", "info"),
+                    message=event_payload["message"],
+                    metadata=event_payload.get("metadata", {}),
+                )
+            entities = [
+                store.add_entity(
+                    investigation_id=task_id,
+                    entity_type=item["type"],
+                    value=item["value"],
+                    source_tool=item["source_tool"],
+                    confidence=float(item["confidence"]),
+                )
+                for item in payload.get("entities", [])
+            ]
+            evidence = [
+                store.add_evidence(
+                    investigation_id=task_id,
+                    entity_value=item["entity_value"],
+                    evidence_kind=item["evidence_kind"],
+                    source_tool=item["source_tool"],
+                    snippet=item["snippet"],
+                )
+                for item in payload.get("evidence", [])
+            ]
+            relationships = [
+                store.add_relationship(
+                    investigation_id=task_id,
+                    from_value=item["from"],
+                    to_value=item["to"],
+                    relationship_type=item["relationship_type"],
+                    confidence=float(item["confidence"]),
+                )
+                for item in payload.get("relationships", [])
+            ]
+            store.update_job_status(job_id, "COMPLETED")
+            self._json(
+                {
+                    "job_id": job_id,
+                    "status": "COMPLETED",
+                    "created": {
+                        "entities": len(entities),
+                        "evidence": len(evidence),
+                        "relationships": len(relationships),
+                    },
+                },
+                status=201,
+            )
             return
 
         if parsed.path == "/api/agent/jobs/claim":
@@ -590,7 +688,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
             job = store.claim_job(
                 agent_id=agent_principal.agent_id,
-                capabilities=payload.get("capabilities", []),
+                capabilities=list(agent_principal.capabilities),
             )
             if job is None:
                 self._json({"job": None, "message": "no matching waiting job"})
@@ -601,7 +699,10 @@ class ApiHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/agent/events":
             payload = agent_payload
             if not self._agent_ownership_allowed(
-                agent_principal, payload.get("task_id")
+                agent_principal,
+                payload.get("task_id"),
+                job_id=payload.get("job_id"),
+                action="event",
             ):
                 return
             try:
@@ -795,12 +896,19 @@ class ApiHandler(BaseHTTPRequestHandler):
             )
             return False
         investigation_id = task_id if task_id is not None else payload.get("task_id")
-        return self._agent_ownership_allowed(principal, investigation_id)
+        return self._agent_ownership_allowed(
+            principal,
+            investigation_id,
+            job_id=payload.get("job_id"),
+            action=action,
+        )
 
     def _agent_ownership_allowed(
         self,
         principal: AgentPrincipal,
         investigation_id: object,
+        job_id: object = None,
+        action: str | None = None,
     ) -> bool:
         if not isinstance(investigation_id, str) or not investigation_id:
             return True
@@ -808,6 +916,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             principal.agent_id,
             investigation_id,
             principal.role_tier,
+            job_id=job_id if isinstance(job_id, str) else None,
+            action=action,
         ):
             return True
         self._json(

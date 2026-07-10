@@ -38,6 +38,57 @@ def validate_agent_payload(kind: str, payload: dict[str, Any]) -> list[str]:
     return validator(payload)
 
 
+def validate_tool_output_payload(
+    payload: dict[str, Any], allowed_outputs: frozenset[str]
+) -> list[str]:
+    errors = _require_strings(payload, ["task_id"])
+    allowed_keys = {
+        "task_id",
+        "agent_id",
+        "tool",
+        "event",
+        "entities",
+        "evidence",
+        "relationships",
+    }
+    unexpected = sorted(set(payload).difference(allowed_keys))
+    if unexpected:
+        errors.append(f"unexpected output fields: {', '.join(unexpected)}")
+
+    for section in ("entities", "evidence", "relationships"):
+        items = payload.get(section, [])
+        if not isinstance(items, list):
+            errors.append(f"{section} must be a list")
+            continue
+        if items and section not in allowed_outputs:
+            errors.append(f"{section} is not allowed by the job output contract")
+            continue
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                errors.append(f"{section}[{index}] must be an object")
+                continue
+            item_payload = {"task_id": payload.get("task_id"), **item}
+            if section == "entities":
+                section_errors = _validate_entities(
+                    {"task_id": payload.get("task_id"), "entities": [item]}
+                )
+            elif section == "evidence":
+                section_errors = _validate_evidence(item_payload)
+            else:
+                section_errors = _validate_relationship(item_payload)
+            errors.extend(f"{section}[{index}]: {error}" for error in section_errors)
+
+    event = payload.get("event")
+    if event is not None:
+        if not isinstance(event, dict):
+            errors.append("event must be an object")
+        else:
+            errors.extend(_require_strings(event, ["message"], prefix="event"))
+            if not isinstance(event.get("metadata", {}), dict):
+                errors.append("event.metadata must be an object")
+    return errors
+
+
 def _validate_entities(payload: dict[str, Any]) -> list[str]:
     errors = []
     errors.extend(_require_strings(payload, ["task_id"]))

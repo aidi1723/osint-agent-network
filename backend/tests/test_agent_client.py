@@ -228,6 +228,8 @@ class AgentClientCliTests(unittest.TestCase):
                     "complete",
                     "--task-id",
                     "task-1",
+                    "--job-id",
+                    "job-1",
                     "--agent-id",
                     "agent-1",
                     "--status",
@@ -286,6 +288,8 @@ class AgentClientCliTests(unittest.TestCase):
                         "example.com",
                         "--task-id",
                         "task-1",
+                        "--job-id",
+                        "job-1",
                         "--agent-id",
                         "agent-1",
                         "--input-file",
@@ -455,6 +459,8 @@ class AgentClientCliTests(unittest.TestCase):
                     "example.com",
                     "--task-id",
                     "task-1",
+                    "--job-id",
+                    "job-1",
                     "--agent-id",
                     "agent-1",
                     "--input-file",
@@ -465,11 +471,14 @@ class AgentClientCliTests(unittest.TestCase):
         finally:
             os.unlink(artifact_path)
 
-        paths = [path for path, _payload in calls]
-        self.assertEqual(paths[0], "/api/agent/events")
-        self.assertIn("/api/agent/entities", paths)
-        self.assertIn("/api/agent/evidence", paths)
-        self.assertIn("/api/agent/relationships", paths)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "/api/agent/jobs/job-1/output")
+        bounded_payload = calls[0][1]
+        self.assertEqual(bounded_payload["task_id"], "task-1")
+        self.assertEqual(bounded_payload["agent_id"], "agent-1")
+        self.assertEqual(len(bounded_payload["entities"]), 4)
+        self.assertEqual(len(bounded_payload["evidence"]), 2)
+        self.assertEqual(len(bounded_payload["relationships"]), 3)
         self.assertEqual(output["posted"]["entities"], 4)
         self.assertEqual(output["posted"]["evidence"], 2)
         self.assertEqual(output["posted"]["relationships"], 3)

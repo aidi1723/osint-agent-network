@@ -241,7 +241,7 @@ class AgentIdentityStoreContract:
                 }
             ],
         )
-        registration = self.register(capabilities=["company"])
+        registration = self.register(capabilities=["company", "reader"])
         agent_id = registration["id"]
 
         claimed_job = self.store.claim_job(agent_id, ["reader"])
@@ -250,11 +250,47 @@ class AgentIdentityStoreContract:
         self.assertIsNotNone(claimed_investigation)
         return agent_id, claimed, job_claimed, unrelated
 
+    def test_job_access_requires_exact_job_id_role_and_output_contract(self):
+        agent_id, _claimed, job_claimed, _unrelated = self.create_access_claims()
+
+        self.assertFalse(
+            self.store.agent_has_investigation_access(
+                agent_id, job_claimed.id, "reader"
+            )
+        )
+        self.assertTrue(
+            self.store.agent_has_investigation_access(
+                agent_id,
+                job_claimed.id,
+                "reader",
+                job_id="reader-job",
+                action="entities",
+            )
+        )
+        self.assertFalse(
+            self.store.agent_has_investigation_access(
+                agent_id,
+                job_claimed.id,
+                "reader",
+                job_id="missing-job",
+                action="entities",
+            )
+        )
+        self.assertFalse(
+            self.store.agent_has_investigation_access(
+                agent_id,
+                job_claimed.id,
+                "reader",
+                job_id="reader-job",
+                action="complete_task",
+            )
+        )
+
     def test_investigation_access_requires_exact_role_and_matching_claim(self):
         agent_id, claimed, job_claimed, unrelated = self.create_access_claims()
 
         self.assertTrue(self.store.agent_has_investigation_access(agent_id, claimed.id, "reader"))
-        self.assertTrue(self.store.agent_has_investigation_access(agent_id, job_claimed.id, "reader"))
+        self.assertFalse(self.store.agent_has_investigation_access(agent_id, job_claimed.id, "reader"))
         self.assertFalse(self.store.agent_has_investigation_access(agent_id, unrelated.id, "reader"))
         self.assertFalse(self.store.agent_has_investigation_access(agent_id, claimed.id, "verifier"))
         self.assertFalse(self.store.agent_has_investigation_access(agent_id, claimed.id, "Reader"))
@@ -294,7 +330,11 @@ class AgentIdentityStoreContract:
                 self.store.update_job_status("reader-job", active_status)
                 self.assertTrue(
                     self.store.agent_has_investigation_access(
-                        agent_id, job_claimed.id, "reader"
+                        agent_id,
+                        job_claimed.id,
+                        "reader",
+                        job_id="reader-job",
+                        action="entities",
                     )
                 )
                 self.assertFalse(
@@ -312,7 +352,11 @@ class AgentIdentityStoreContract:
                 self.store.update_job_status("reader-job", inactive_status)
                 self.assertFalse(
                     self.store.agent_has_investigation_access(
-                        agent_id, job_claimed.id, "reader"
+                        agent_id,
+                        job_claimed.id,
+                        "reader",
+                        job_id="reader-job",
+                        action="entities",
                     )
                 )
 
@@ -322,7 +366,11 @@ class AgentIdentityStoreContract:
                 self.store.set_investigation_status(job_claimed.id, parent_status)
                 self.assertTrue(
                     self.store.agent_has_investigation_access(
-                        agent_id, job_claimed.id, "reader"
+                        agent_id,
+                        job_claimed.id,
+                        "reader",
+                        job_id="reader-job",
+                        action="entities",
                     )
                 )
 
@@ -338,10 +386,154 @@ class AgentIdentityStoreContract:
                 self.store.set_investigation_status(job_claimed.id, parent_status)
                 self.assertFalse(
                     self.store.agent_has_investigation_access(
-                        agent_id, job_claimed.id, "reader"
+                        agent_id,
+                        job_claimed.id,
+                        "reader",
+                        job_id="reader-job",
+                        action="entities",
                     )
                 )
 
+    def test_claim_capabilities_cannot_expand_registered_task_or_job_authority(self):
+        registration = self.register(
+            name="email-only-reader",
+            role_tier="reader",
+            capabilities=["email"],
+        )
+        domain_task = self.store.create_investigation(
+            name="Domain escalation",
+            seed_type="domain",
+            seed_value="escalation.example",
+            strategy_name="quick",
+        )
+        job_task = self.store.create_investigation(
+            name="Job escalation",
+            seed_type="domain",
+            seed_value="job-escalation.example",
+            strategy_name="quick",
+        )
+        self.store.replace_jobs(
+            job_task.id,
+            [
+                {
+                    "id": "reader-escalation-job",
+                    "tool_name": "domain_reader",
+                    "target_type": "domain",
+                    "target_value": "job-escalation.example",
+                    "depth": 0,
+                    "agent_role": "reader",
+                }
+            ],
+        )
+
+        self.assertIsNone(
+            self.store.claim_task(registration["id"], ["domain"])
+        )
+        self.assertIsNone(
+            self.store.claim_job(registration["id"], ["reader", "domain_reader"])
+        )
+        self.assertEqual(
+            self.store.get_investigation(domain_task.id)["status"], "OPEN"
+        )
+        self.assertIsNone(
+            self.store.list_jobs(job_task.id)[0]["claimed_by_agent_id"]
+        )
+
+    def test_tool_agent_claims_only_compatible_tool_jobs(self):
+        tool_agent = self.register(
+            name="amass-tool-agent",
+            role_tier="tool_agent",
+            capabilities=["amass"],
+        )
+        investigation = self.store.create_investigation(
+            name="Tool claim scope",
+            seed_type="domain",
+            seed_value="tool-claim.example",
+            strategy_name="quick",
+        )
+        self.store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": "reader-amass-job",
+                    "tool_name": "amass",
+                    "target_type": "domain",
+                    "target_value": "tool-claim.example",
+                    "depth": 0,
+                    "agent_role": "reader",
+                },
+                {
+                    "id": "subfinder-tool-job",
+                    "tool_name": "subfinder",
+                    "target_type": "domain",
+                    "target_value": "tool-claim.example",
+                    "depth": 0,
+                    "agent_role": "tool_agent",
+                },
+                {
+                    "id": "amass-tool-job",
+                    "tool_name": "amass",
+                    "target_type": "domain",
+                    "target_value": "tool-claim.example",
+                    "depth": 0,
+                    "agent_role": "tool_agent",
+                },
+            ],
+        )
+
+        claimed = self.store.claim_job(tool_agent["id"], ["amass"])
+
+        self.assertIsNotNone(claimed)
+        self.assertEqual(claimed["id"], "amass-tool-job")
+        jobs = {job["id"]: job for job in self.store.list_jobs(investigation.id)}
+        self.assertIsNone(jobs["reader-amass-job"]["claimed_by_agent_id"])
+        self.assertIsNone(jobs["subfinder-tool-job"]["claimed_by_agent_id"])
+
+    def test_job_claim_rejects_cross_tier_roles_despite_registered_capability(self):
+        reporter = self.register(
+            name="cross-tier-reporter",
+            role_tier="reporter",
+            capabilities=["enterprise_intel_agent"],
+        )
+        reader = self.register(
+            name="cross-tier-reader",
+            role_tier="reader",
+            capabilities=["analysis_judgement_agent"],
+        )
+        investigation = self.store.create_investigation(
+            name="Cross-tier jobs",
+            seed_type="company",
+            seed_value="Cross Tier LLC",
+            strategy_name="quick",
+        )
+        self.store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": "reader-tier-job",
+                    "tool_name": "company_osint",
+                    "target_type": "company",
+                    "target_value": "Cross Tier LLC",
+                    "depth": 0,
+                    "agent_role": "enterprise_intel_agent",
+                },
+                {
+                    "id": "reporter-tier-job",
+                    "tool_name": "analysis_judgement",
+                    "target_type": "company",
+                    "target_value": "Cross Tier LLC",
+                    "depth": 1,
+                    "agent_role": "analysis_judgement_agent",
+                },
+            ],
+        )
+
+        self.assertIsNone(
+            self.store.claim_job(reporter["id"], ["enterprise_intel_agent"])
+        )
+        self.assertIsNone(
+            self.store.claim_job(reader["id"], ["analysis_judgement_agent"])
+        )
 
 class _MemoryStoreContext:
     def __enter__(self):
@@ -466,6 +658,33 @@ class SQLiteAgentIdentityTests(AgentIdentityStoreContract, unittest.TestCase):
 
 
 class AgentRegistrationHttpCompatibilityTests(unittest.TestCase):
+    def test_registration_never_falls_back_to_shared_agent_bearer(self):
+        store = MemoryStore()
+        env = {
+            "APP_ENV": "development",
+            "OSINT_REQUIRE_AUTH": "true",
+            "ADMIN_API_TOKEN": "",
+            "AGENT_API_TOKEN": "shared-agent-secret",
+            "READ_API_TOKEN": "read-secret",
+        }
+        with patch.object(app_main, "store", store), ApiTestServer() as server:
+            status, body, _headers = server.request(
+                "POST",
+                "/api/agents/register",
+                payload={
+                    "agent_name": "must-not-register",
+                    "agent_type": "test",
+                    "capabilities": ["domain"],
+                    "role_tier": "reader",
+                },
+                headers=[("Authorization", "Bearer shared-agent-secret")],
+                env=env,
+            )
+
+        self.assertEqual(status, 403)
+        self.assertEqual(json_payload(body), {"detail": "forbidden management request"})
+        self.assertEqual(store.list_agents(), [])
+
     def test_registration_endpoint_rejects_lone_surrogates_without_mutation(self):
         store = MemoryStore()
         headers = [("Authorization", "Bearer admin-secret")]
@@ -729,7 +948,7 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
         return self.store.register_agent(
             agent_name=f"{role_tier}-{self.counter}",
             agent_type="test",
-            capabilities=list(capabilities or []),
+            capabilities=["domain"] if capabilities is None else list(capabilities),
             role_tier=role_tier,
         )
 
@@ -905,7 +1124,11 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
 
         status, _body = self.post(
             "/api/agent/entities",
-            {"task_id": investigation.id, **self.ACTIONS["entities"][1]},
+            {
+                "task_id": investigation.id,
+                "job_id": "reader-job",
+                **self.ACTIONS["entities"][1],
+            },
             reader["agent_token"],
         )
         self.assertEqual(status, 201)
@@ -921,10 +1144,311 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
         self.store.update_job_status("reader-job", "COMPLETED")
         status, _body = self.post(
             "/api/agent/events",
-            {"task_id": investigation.id, "message": "late event"},
+            {
+                "task_id": investigation.id,
+                "job_id": "reader-job",
+                "message": "late event",
+            },
             reader["agent_token"],
         )
         self.assertEqual(status, 409)
+
+    def test_unrelated_reader_job_cannot_authorize_reporter_completion(self):
+        reporter = self.register("reporter", ["reader"])
+        investigation = self.store.create_investigation(
+            name="Reporter escalation",
+            seed_type="domain",
+            seed_value="reporter-escalation.example",
+            strategy_name="quick",
+        )
+        self.store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": "unrelated-reader-job",
+                    "tool_name": "reader_task",
+                    "target_type": "domain",
+                    "target_value": "reporter-escalation.example",
+                    "depth": 0,
+                    "agent_role": "reader",
+                    "output_contract": "entities,evidence,relationships",
+                }
+            ],
+        )
+        status, claim_body = self.post(
+            "/api/agent/jobs/claim",
+            {"capabilities": ["reader"]},
+            reporter["agent_token"],
+        )
+        self.assertEqual(status, 200)
+        self.assertIsNone(claim_body["job"])
+        job = self.store.jobs["unrelated-reader-job"]
+        job.status = "CLAIMED"
+        job.claimed_by_agent_id = reporter["id"]
+        self.store.set_investigation_status(investigation.id, "RUNNING")
+
+        status, _body = self.post(
+            f"/api/agent/tasks/{investigation.id}/complete",
+            {
+                "task_id": investigation.id,
+                "job_id": "unrelated-reader-job",
+                "summary": "forged completion",
+            },
+            reporter["agent_token"],
+        )
+        self.assertEqual(status, 409)
+        detail = self.store.get_investigation(investigation.id)
+        self.assertNotEqual(detail["summary"], "forged completion")
+
+    def test_job_derived_write_requires_exact_job_id_and_action_contract(self):
+        reader = self.register("reader", ["reader"])
+        investigation = self.store.create_investigation(
+            name="Output contract scope",
+            seed_type="domain",
+            seed_value="contract.example",
+            strategy_name="quick",
+        )
+        self.store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": "evidence-only-job",
+                    "tool_name": "reader_task",
+                    "target_type": "domain",
+                    "target_value": "contract.example",
+                    "depth": 0,
+                    "agent_role": "reader",
+                    "output_contract": "evidence",
+                }
+            ],
+        )
+        status, _body = self.post(
+            "/api/agent/jobs/claim",
+            {"capabilities": ["reader"]},
+            reader["agent_token"],
+        )
+        self.assertEqual(status, 200)
+
+        for job_id in (None, "wrong-job", "evidence-only-job"):
+            with self.subTest(job_id=job_id):
+                payload = {
+                    "task_id": investigation.id,
+                    **self.ACTIONS["entities"][1],
+                }
+                if job_id is not None:
+                    payload["job_id"] = job_id
+                status, _body = self.post(
+                    "/api/agent/entities", payload, reader["agent_token"]
+                )
+                self.assertEqual(status, 409)
+
+    def test_reader_tier_can_use_exact_enterprise_role_job_contract(self):
+        reader = self.register("reader", ["enterprise_intel_agent"])
+        investigation = self.store.create_investigation(
+            name="Enterprise reader job",
+            seed_type="company",
+            seed_value="Example LLC",
+            strategy_name="quick",
+        )
+        self.store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": "enterprise-reader-job",
+                    "tool_name": "company_osint",
+                    "target_type": "company",
+                    "target_value": "Example LLC",
+                    "depth": 0,
+                    "agent_role": "enterprise_intel_agent",
+                    "output_contract": "entities,evidence,relationships",
+                }
+            ],
+        )
+        status, _body = self.post(
+            "/api/agent/jobs/claim",
+            {"capabilities": ["enterprise_intel_agent"]},
+            reader["agent_token"],
+        )
+        self.assertEqual(status, 200)
+        status, _body = self.post(
+            "/api/agent/entities",
+            {
+                "task_id": investigation.id,
+                "job_id": "enterprise-reader-job",
+                **self.ACTIONS["entities"][1],
+            },
+            reader["agent_token"],
+        )
+        self.assertEqual(status, 201)
+
+    def test_http_tool_agent_claims_compatible_tool_job(self):
+        tool_agent = self.register("tool_agent", ["theharvester"])
+        investigation = self.store.create_investigation(
+            name="Tool claim",
+            seed_type="domain",
+            seed_value="tool-claim-http.example",
+            strategy_name="quick",
+        )
+        self.store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": "http-tool-claim-job",
+                    "tool_name": "theharvester",
+                    "target_type": "domain",
+                    "target_value": "tool-claim-http.example",
+                    "depth": 0,
+                    "agent_role": "tool_agent",
+                }
+            ],
+        )
+        status, body = self.post(
+            "/api/agent/jobs/claim", {}, tool_agent["agent_token"]
+        )
+        self.assertEqual(status, 200)
+        self.assertIsNotNone(body["job"])
+        self.assertEqual(body["job"]["id"], "http-tool-claim-job")
+
+    def test_tool_agent_submits_atomic_bounded_output_for_exact_job(self):
+        tool_agent = self.register("tool_agent", ["theharvester"])
+        other_tool_agent = self.register("tool_agent", ["theharvester"])
+        investigation = self.store.create_investigation(
+            name="Tool output",
+            seed_type="domain",
+            seed_value="tool-output.example",
+            strategy_name="quick",
+        )
+        self.store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": "theharvester-tool-job",
+                    "tool_name": "theharvester",
+                    "target_type": "domain",
+                    "target_value": "tool-output.example",
+                    "depth": 0,
+                    "agent_role": "tool_agent",
+                    "output_contract": "entities,evidence,relationships",
+                }
+            ],
+        )
+        job = self.store.jobs["theharvester-tool-job"]
+        job.status = "CLAIMED"
+        job.claimed_by_agent_id = tool_agent["id"]
+        self.store.set_investigation_status(investigation.id, "RUNNING")
+
+        invalid_payload = {
+            "task_id": investigation.id,
+            "entities": [
+                {
+                    "type": "email",
+                    "value": "admin@tool-output.example",
+                    "source_tool": "theharvester",
+                    "confidence": 0.8,
+                }
+            ],
+            "evidence": [],
+            "relationships": [
+                {
+                    "from": "tool-output.example",
+                    "to": "",
+                    "relationship_type": "domain_has_email",
+                    "confidence": 0.8,
+                }
+            ],
+        }
+        output_path = "/api/agent/jobs/theharvester-tool-job/output"
+        status, _body = self.post(
+            output_path, invalid_payload, tool_agent["agent_token"]
+        )
+        self.assertEqual(status, 400)
+        detail = self.store.get_investigation(investigation.id)
+        for section in ("entities", "evidence", "relationships", "events"):
+            self.assertEqual(detail[section], [])
+        self.assertEqual(
+            self.store.list_jobs(investigation.id)[0]["status"], "CLAIMED"
+        )
+
+        valid_payload = {
+            **invalid_payload,
+            "relationships": [
+                {
+                    "from": "tool-output.example",
+                    "to": "admin@tool-output.example",
+                    "relationship_type": "domain_has_email",
+                    "confidence": 0.8,
+                }
+            ],
+            "event": {
+                "message": "Tool output complete",
+                "metadata": {"tool": "theharvester"},
+            },
+        }
+        status, _body = self.post(
+            output_path, valid_payload, other_tool_agent["agent_token"]
+        )
+        self.assertEqual(status, 409)
+        status, body = self.post(
+            output_path, valid_payload, tool_agent["agent_token"]
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(body["created"], {"entities": 1, "evidence": 0, "relationships": 1})
+        detail = self.store.get_investigation(investigation.id)
+        self.assertEqual(len(detail["entities"]), 1)
+        self.assertEqual(len(detail["relationships"]), 1)
+        self.assertEqual(self.store.list_jobs(investigation.id)[0]["status"], "COMPLETED")
+
+        status, _body = self.post(
+            output_path, valid_payload, tool_agent["agent_token"]
+        )
+        self.assertEqual(status, 409)
+
+    def test_tool_output_rejects_sections_outside_job_contract_without_mutation(self):
+        tool_agent = self.register("tool_agent", ["amass"])
+        investigation = self.store.create_investigation(
+            name="Tool contract",
+            seed_type="domain",
+            seed_value="tool-contract.example",
+            strategy_name="quick",
+        )
+        self.store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": "entity-only-tool-job",
+                    "tool_name": "amass",
+                    "target_type": "domain",
+                    "target_value": "tool-contract.example",
+                    "depth": 0,
+                    "agent_role": "tool_agent",
+                    "output_contract": "entities",
+                }
+            ],
+        )
+        job = self.store.jobs["entity-only-tool-job"]
+        job.status = "CLAIMED"
+        job.claimed_by_agent_id = tool_agent["id"]
+        self.store.set_investigation_status(investigation.id, "RUNNING")
+        status, _body = self.post(
+            "/api/agent/jobs/entity-only-tool-job/output",
+            {
+                "task_id": investigation.id,
+                "entities": [],
+                "evidence": [
+                    {
+                        "entity_value": "tool-contract.example",
+                        "evidence_kind": "dns_resolution",
+                        "source_tool": "amass",
+                        "snippet": "Resolved publicly",
+                    }
+                ],
+                "relationships": [],
+            },
+            tool_agent["agent_token"],
+        )
+        self.assertEqual(status, 400)
+        detail = self.store.get_investigation(investigation.id)
+        self.assertEqual(detail["evidence"], [])
 
     def test_claim_endpoints_bind_identity_and_define_allowed_roles(self):
         for role in ("reader", "verifier", "reporter"):
@@ -954,7 +1478,10 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
         self.assertEqual(status, 403)
 
         job_investigation = self.store.create_investigation(
-            name="External job", seed_type="domain", seed_value="job.example", strategy_name="quick"
+            name="External job",
+            seed_type="domain",
+            seed_value="job.example",
+            strategy_name="quick",
         )
         self.store.replace_jobs(
             job_investigation.id,
@@ -965,7 +1492,7 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                     "target_type": "domain",
                     "target_value": "job.example",
                     "depth": 0,
-                    "agent_role": "reader",
+                    "agent_role": "tool_agent",
                 }
             ],
         )
@@ -990,6 +1517,53 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
             forged["agent_token"],
         )
         self.assertEqual(status, 403)
+
+    def test_http_claim_capabilities_cannot_expand_principal_authority(self):
+        reader = self.register("reader", ["email"])
+        domain_task = self.store.create_investigation(
+            name="HTTP task escalation",
+            seed_type="domain",
+            seed_value="http-escalation.example",
+            strategy_name="quick",
+        )
+        job_task = self.store.create_investigation(
+            name="HTTP job escalation",
+            seed_type="domain",
+            seed_value="http-job-escalation.example",
+            strategy_name="quick",
+        )
+        self.store.replace_jobs(
+            job_task.id,
+            [
+                {
+                    "id": "http-reader-escalation-job",
+                    "tool_name": "domain_reader",
+                    "target_type": "domain",
+                    "target_value": "http-job-escalation.example",
+                    "depth": 0,
+                    "agent_role": "reader",
+                }
+            ],
+        )
+
+        status, task_body = self.post(
+            "/api/agent/tasks/claim",
+            {"capabilities": ["domain"]},
+            reader["agent_token"],
+        )
+        self.assertEqual(status, 200)
+        self.assertIsNone(task_body["task"])
+        status, job_body = self.post(
+            "/api/agent/jobs/claim",
+            {"capabilities": ["reader", "domain_reader"]},
+            reader["agent_token"],
+        )
+        self.assertEqual(status, 200)
+        self.assertIsNone(job_body["job"])
+        self.assertEqual(self.store.get_investigation(domain_task.id)["status"], "OPEN")
+        self.assertIsNone(
+            self.store.list_jobs(job_task.id)[0]["claimed_by_agent_id"]
+        )
 
     def test_legacy_shared_token_requires_explicit_opt_in_and_registered_body_identity(self):
         reporter = self.register("reporter")

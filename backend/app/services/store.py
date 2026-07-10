@@ -10,11 +10,13 @@ from uuid import uuid4
 from app.core.agent_auth import (
     AGENT_ROLE_TIERS,
     AgentRegistration,
+    agent_output_contract_allows,
     generate_agent_token,
     hash_agent_token,
     validate_agent_registration,
     validate_agent_role_tier,
 )
+from app.core.agent_permissions import tier_for_role
 from app.core.ach_engine import EvidenceItem, Hypothesis, run_ach_analysis
 from app.core.completion_policy import build_completion_policy
 from app.core.cross_verification import build_cross_verification_matrix
@@ -316,6 +318,8 @@ class MemoryStore:
         agent_id: str,
         investigation_id: str,
         required_tier: str,
+        job_id: str | None = None,
+        action: str | None = None,
     ) -> bool:
         if required_tier not in AGENT_ROLE_TIERS:
             return False
@@ -335,11 +339,16 @@ class MemoryStore:
                 return False
             if investigation.claimed_by_agent_id == agent_id:
                 return True
-            return any(
-                job.investigation_id == investigation_id
+            if not job_id or not action:
+                return False
+            job = self.jobs.get(job_id)
+            return bool(
+                job is not None
+                and job.investigation_id == investigation_id
                 and job.claimed_by_agent_id == agent_id
                 and job.status in _AGENT_ACCESS_JOB_STATUSES
-                for job in self.jobs.values()
+                and tier_for_role(job.agent_role) == required_tier
+                and agent_output_contract_allows(job.output_contract, action)
             )
 
     def claim_task(self, agent_id: str, capabilities: list[str]) -> dict | None:
@@ -347,7 +356,9 @@ class MemoryStore:
             agent = self.agents.get(agent_id)
             if agent is None:
                 return None
-            capability_set = set(capabilities) | set(agent.capabilities)
+            capability_set = _narrow_agent_capabilities(
+                agent.capabilities, capabilities
+            )
             for investigation in self.investigations.values():
                 if investigation.status != "OPEN":
                     continue
@@ -367,14 +378,22 @@ class MemoryStore:
             agent = self.agents.get(agent_id)
             if agent is None:
                 return None
-            capability_set = set(capabilities) | set(agent.capabilities)
+            capability_set = _narrow_agent_capabilities(
+                agent.capabilities, capabilities
+            )
             for job in self.jobs.values():
                 if job.status not in {"WAITING_AGENT", "QUEUED"}:
                     continue
-                if job.agent_role == "tool_agent":
-                    continue
-                if job.agent_role not in capability_set and job.tool_name not in capability_set:
-                    continue
+                if agent.role_tier == "tool_agent":
+                    if job.agent_role != "tool_agent" or job.tool_name not in capability_set:
+                        continue
+                else:
+                    if job.agent_role == "tool_agent":
+                        continue
+                    if tier_for_role(job.agent_role) != agent.role_tier:
+                        continue
+                    if job.agent_role not in capability_set and job.tool_name not in capability_set:
+                        continue
                 now = _now()
                 job.status = "CLAIMED"
                 job.claimed_by_agent_id = agent.id
@@ -385,6 +404,34 @@ class MemoryStore:
                 self._touch_investigation(job.investigation_id, status="RUNNING")
                 return asdict(job)
             return None
+
+    def get_claimed_agent_job(
+        self,
+        agent_id: str,
+        investigation_id: str,
+        job_id: str,
+        required_tier: str,
+        *,
+        require_tool_role: bool = False,
+    ) -> dict | None:
+        with self.lock:
+            agent = self.agents.get(agent_id)
+            investigation = self.investigations.get(investigation_id)
+            job = self.jobs.get(job_id)
+            if (
+                agent is None
+                or agent.disabled_at is not None
+                or agent.role_tier != required_tier
+                or investigation is None
+                or investigation.status not in _AGENT_ACCESS_INVESTIGATION_STATUSES
+                or job is None
+                or job.investigation_id != investigation_id
+                or job.claimed_by_agent_id != agent_id
+                or job.status not in _AGENT_ACCESS_JOB_STATUSES
+                or (require_tool_role and job.agent_role != "tool_agent")
+            ):
+                return None
+            return asdict(job)
 
     def add_event(
         self,
@@ -1462,6 +1509,8 @@ class SQLiteStore:
         agent_id: str,
         investigation_id: str,
         required_tier: str,
+        job_id: str | None = None,
+        action: str | None = None,
     ) -> bool:
         if required_tier not in AGENT_ROLE_TIERS:
             return False
@@ -1489,25 +1538,33 @@ class SQLiteStore:
             ).fetchone()
             if investigation_claim is not None:
                 return True
+            if not job_id or not action:
+                return False
             job_claim = conn.execute(
                 """
-                SELECT 1 FROM jobs AS jobs
+                SELECT jobs.* FROM jobs AS jobs
                 JOIN investigations AS investigations
                   ON investigations.id = jobs.investigation_id
-                WHERE jobs.investigation_id = ?
+                WHERE jobs.id = ?
+                  AND jobs.investigation_id = ?
                   AND jobs.claimed_by_agent_id = ?
                   AND jobs.status IN (?, ?)
                   AND investigations.status IN (?, ?)
                 LIMIT 1
                 """,
                 (
+                    job_id,
                     investigation_id,
                     agent_id,
                     *_AGENT_ACCESS_JOB_STATUSES,
                     *_AGENT_ACCESS_INVESTIGATION_STATUSES,
                 ),
             ).fetchone()
-            return job_claim is not None
+            return bool(
+                job_claim is not None
+                and tier_for_role(job_claim["agent_role"]) == required_tier
+                and agent_output_contract_allows(job_claim["output_contract"], action)
+            )
 
     def claim_task(self, agent_id: str, capabilities: list[str]) -> dict | None:
         with self.lock, closing(self._connect()) as conn, conn:
@@ -1515,7 +1572,9 @@ class SQLiteStore:
             if agent_row is None:
                 return None
             agent = _agent_from_row(agent_row)
-            capability_set = set(capabilities) | set(agent["capabilities"])
+            capability_set = _narrow_agent_capabilities(
+                agent["capabilities"], capabilities
+            )
             rows = conn.execute(
                 "SELECT * FROM investigations WHERE status = ? ORDER BY created_at ASC",
                 ("OPEN",),
@@ -1548,20 +1607,31 @@ class SQLiteStore:
             if agent_row is None:
                 return None
             agent = _agent_from_row(agent_row)
-            capability_set = set(capabilities) | set(agent["capabilities"])
+            capability_set = _narrow_agent_capabilities(
+                agent["capabilities"], capabilities
+            )
             rows = conn.execute(
                 """
                 SELECT * FROM jobs
-                WHERE status IN (?, ?) AND agent_role != ?
+                WHERE status IN (?, ?)
                 ORDER BY rowid ASC
                 """,
-                ("WAITING_AGENT", "QUEUED", "tool_agent"),
+                ("WAITING_AGENT", "QUEUED"),
             ).fetchall()
             target = None
             for row in rows:
-                if row["agent_role"] in capability_set or row["tool_name"] in capability_set:
-                    target = row
-                    break
+                if agent["role_tier"] == "tool_agent":
+                    if row["agent_role"] != "tool_agent" or row["tool_name"] not in capability_set:
+                        continue
+                else:
+                    if row["agent_role"] == "tool_agent":
+                        continue
+                    if tier_for_role(row["agent_role"]) != agent["role_tier"]:
+                        continue
+                    if row["agent_role"] not in capability_set and row["tool_name"] not in capability_set:
+                        continue
+                target = row
+                break
             if target is None:
                 return None
             now = _now()
@@ -1578,6 +1648,40 @@ class SQLiteStore:
             self._touch_investigation(conn, target["investigation_id"], status="RUNNING")
             updated = conn.execute("SELECT * FROM jobs WHERE id = ?", (target["id"],)).fetchone()
         return _job_from_row(updated)
+
+    def get_claimed_agent_job(
+        self,
+        agent_id: str,
+        investigation_id: str,
+        job_id: str,
+        required_tier: str,
+        *,
+        require_tool_role: bool = False,
+    ) -> dict | None:
+        with self.lock, closing(self._connect()) as conn:
+            row = conn.execute(
+                """
+                SELECT jobs.*, agents.role_tier, agents.disabled_at,
+                       investigations.status AS investigation_status
+                FROM jobs
+                JOIN agents ON agents.id = jobs.claimed_by_agent_id
+                JOIN investigations ON investigations.id = jobs.investigation_id
+                WHERE jobs.id = ?
+                  AND jobs.investigation_id = ?
+                  AND jobs.claimed_by_agent_id = ?
+                """,
+                (job_id, investigation_id, agent_id),
+            ).fetchone()
+        if (
+            row is None
+            or row["disabled_at"] is not None
+            or row["role_tier"] != required_tier
+            or row["status"] not in _AGENT_ACCESS_JOB_STATUSES
+            or row["investigation_status"] not in _AGENT_ACCESS_INVESTIGATION_STATUSES
+            or (require_tool_role and row["agent_role"] != "tool_agent")
+        ):
+            return None
+        return _job_from_row(row)
 
     def add_event(
         self,
@@ -3238,6 +3342,17 @@ def _apply_core_v3(data: dict) -> None:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _narrow_agent_capabilities(
+    registered_capabilities: list[str], requested_capabilities: object
+) -> set[str]:
+    registered = set(registered_capabilities)
+    if not isinstance(requested_capabilities, list) or not requested_capabilities:
+        return registered
+    return registered.intersection(
+        item for item in requested_capabilities if isinstance(item, str)
+    )
 
 
 def _allocate_agent_token(existing_hashes: set[str]) -> tuple[str, str]:
