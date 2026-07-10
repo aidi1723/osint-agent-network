@@ -43,7 +43,7 @@ type ConfirmState = {
   onConfirm: () => void;
 } | null;
 
-function App() {
+export function App() {
   const [checkingSession, setCheckingSession] = useState(true);
   const [authRequired, setAuthRequired] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
@@ -808,4 +808,5 @@ function OperationsConsole({ csrfToken, onLogout }: OperationsConsoleProps) {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+const rootElement = document.getElementById("root");
+if (rootElement) createRoot(rootElement).render(<App />);

@@ -23,6 +23,8 @@ PRODUCTION_ENV = {
     "CORS_ALLOWED_ORIGINS": "https://hcs.test",
 }
 
+_NO_PAYLOAD = object()
+
 
 class ApiTestServer:
     def __enter__(self):
@@ -41,15 +43,15 @@ class ApiTestServer:
         method: str,
         path: str,
         *,
-        payload: dict | None = None,
+        payload: object = _NO_PAYLOAD,
         headers: list[tuple[str, str]] | None = None,
         env: dict[str, str] | None = None,
     ) -> tuple[int, bytes, list[tuple[str, str]]]:
-        body = json.dumps(payload).encode("utf-8") if payload is not None else b""
+        body = json.dumps(payload).encode("utf-8") if payload is not _NO_PAYLOAD else b""
         connection = http.client.HTTPConnection(*self.server.server_address, timeout=5)
         with patch.dict("os.environ", env or PRODUCTION_ENV, clear=True):
             connection.putrequest(method, path)
-            if payload is not None:
+            if payload is not _NO_PAYLOAD:
                 connection.putheader("Content-Type", "application/json")
                 connection.putheader("Content-Length", str(len(body)))
             for name, value in headers or []:
@@ -313,12 +315,19 @@ class BrowserAuthHttpTests(unittest.TestCase):
 
     def test_bearer_read_and_management_compatibility(self):
         with patch("app.main.store.list_agents", return_value=[]):
+            for token in ("read-secret", "admin-secret"):
+                with self.subTest(token=token):
+                    status, _body, _headers = self.server.request(
+                        "GET",
+                        "/api/agents",
+                        headers=[("Authorization", f"Bearer {token}")],
+                    )
+                    self.assertEqual(status, 200)
+
             status, _body, _headers = self.server.request(
-                "GET",
-                "/api/agents",
-                headers=[("Authorization", "Bearer read-secret")],
+                "GET", "/api/agents", headers=[("Authorization", "Bearer wrong")]
             )
-        self.assertEqual(status, 200)
+            self.assertEqual(status, 401)
 
         with patch("app.main.store.release_stale_claims", return_value=[]):
             status, _body, _headers = self.server.request(
@@ -328,6 +337,41 @@ class BrowserAuthHttpTests(unittest.TestCase):
                 headers=[("Authorization", "Bearer admin-secret")],
             )
         self.assertEqual(status, 200)
+
+        status, _body, _headers = self.server.request(
+            "POST",
+            "/api/investigations/release-stale",
+            payload={},
+            headers=[("Authorization", "Bearer read-secret")],
+        )
+        self.assertEqual(status, 401)
+
+        agent_fallback_env = {
+            **PRODUCTION_ENV,
+            "ADMIN_API_TOKEN": "",
+            "READ_API_TOKEN": "",
+        }
+        with patch("app.main.store.list_agents", return_value=[]):
+            status, _body, _headers = self.server.request(
+                "GET",
+                "/api/agents",
+                headers=[("Authorization", "Bearer agent-secret")],
+                env=agent_fallback_env,
+            )
+        self.assertEqual(status, 200)
+
+    def test_login_rejects_non_object_json_with_safe_json_error(self):
+        for supplied in ([], "scalar-value", None):
+            with self.subTest(supplied=supplied):
+                status, body, headers = self.server.request(
+                    "POST", "/api/auth/login", payload=supplied
+                )
+                self.assertEqual(status, 400)
+                payload = json_payload(body)
+                self.assertEqual(payload, {"detail": "json body must be an object"})
+                self.assertNotIn("admin-secret", json.dumps(payload))
+                self.assertNotIn("scalar-value", json.dumps(payload))
+                assert_security_headers(self, headers)
 
     def test_development_management_requests_remain_usable_without_auth(self):
         with patch("app.main.store.release_stale_claims", return_value=[]):

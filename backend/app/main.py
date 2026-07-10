@@ -1,4 +1,6 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -45,12 +47,17 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._json(payload)
             return
 
-        read_token = os.getenv("READ_API_TOKEN", "") or os.getenv("ADMIN_API_TOKEN", "") or os.getenv("AGENT_API_TOKEN", "")
+        read_tokens = _configured_read_bearer_tokens()
         require_token = authentication_required_for_environment()
-        if not read_request_authorized(parsed.path, dict(self.headers), read_token, require_token=require_token):
+        if not read_request_authorized_for_tokens(
+            parsed.path,
+            dict(self.headers),
+            read_tokens,
+            require_token=require_token,
+        ):
             authorization_status = browser_or_bearer_authorization(
                 self.headers,
-                expected_token=read_token,
+                expected_tokens=read_tokens,
                 require_token=require_token,
                 session_manager=session_manager,
                 allowed_origins=_get_allowed_origins(),
@@ -273,7 +280,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             expected_token = os.getenv("ADMIN_API_TOKEN", "") or os.getenv("AGENT_API_TOKEN", "")
             authorization_status = browser_or_bearer_authorization(
                 self.headers,
-                expected_token=expected_token,
+                expected_tokens=(expected_token,) if expected_token else (),
                 require_token=authentication_required_for_environment(),
                 session_manager=session_manager,
                 allowed_origins=allowed_origins,
@@ -643,9 +650,12 @@ class ApiHandler(BaseHTTPRequestHandler):
         if not body:
             return {}
         try:
-            return json.loads(body)
+            payload = json.loads(body)
         except json.JSONDecodeError:
             raise RequestJsonError({"detail": "invalid json body"}, 400)
+        if not isinstance(payload, dict):
+            raise RequestJsonError({"detail": "json body must be an object"}, 400)
+        return payload
 
     def _validation_failed(self, errors: list[str]) -> bool:
         if not errors:
@@ -728,23 +738,52 @@ def agent_request_authorized(headers: dict, expected_token: str, require_token: 
 
 
 def request_authorized(headers: dict, expected_token: str, require_token: bool = False) -> bool:
-    if not expected_token:
+    expected_tokens = (expected_token,) if expected_token else ()
+    return request_authorized_for_tokens(
+        headers, expected_tokens, require_token=require_token
+    )
+
+
+def request_authorized_for_tokens(
+    headers: dict,
+    expected_tokens: tuple[str, ...],
+    require_token: bool = False,
+) -> bool:
+    configured_tokens = tuple(token for token in expected_tokens if token)
+    if not configured_tokens:
         return not require_token
     authorization = headers.get("Authorization") or headers.get("authorization") or ""
-    return authorization == f"Bearer {expected_token}"
+    prefix = "Bearer "
+    if not authorization.startswith(prefix):
+        return False
+    supplied_token = authorization[len(prefix):]
+    supplied_digest = hashlib.sha256(
+        supplied_token.encode("utf-8", errors="surrogatepass")
+    ).digest()
+    matches = [
+        hmac.compare_digest(
+            hashlib.sha256(
+                expected_token.encode("utf-8", errors="surrogatepass")
+            ).digest(),
+            supplied_digest,
+        )
+        for expected_token in configured_tokens
+    ]
+    return any(matches)
 
 
 def browser_or_bearer_authorization(
     headers,
     *,
-    expected_token: str,
+    expected_tokens: tuple[str, ...],
     require_token: bool,
     session_manager: BrowserSessionManager,
     allowed_origins: tuple[str, ...],
     mutation: bool,
 ) -> int:
-    authorization = headers.get("Authorization") or headers.get("authorization") or ""
-    if expected_token and authorization == f"Bearer {expected_token}":
+    if request_authorized_for_tokens(
+        headers, expected_tokens, require_token=True
+    ):
         return 200
 
     browser_principal = session_manager.authorize_session(
@@ -757,7 +796,7 @@ def browser_or_bearer_authorization(
             return 403
         return 200
 
-    if not expected_token and not require_token:
+    if not any(expected_tokens) and not require_token:
         return 200
     return 401
 
@@ -768,6 +807,19 @@ def read_request_authorized(path: str, headers: dict, expected_token: str, requi
     if path == "/api/tools/health":
         return True
     return request_authorized(headers, expected_token, require_token=require_token)
+
+
+def read_request_authorized_for_tokens(
+    path: str,
+    headers: dict,
+    expected_tokens: tuple[str, ...],
+    require_token: bool = False,
+) -> bool:
+    if path in {"/api/health", "/api/tools/health"}:
+        return True
+    return request_authorized_for_tokens(
+        headers, expected_tokens, require_token=require_token
+    )
 
 
 def authentication_required_for_environment(env: dict | None = None) -> bool:
@@ -793,6 +845,21 @@ def _get_allowed_origins() -> tuple[str, ...]:
     if env_value:
         return tuple(origin.strip() for origin in env_value.split(",") if origin.strip())
     return ("http://127.0.0.1:3008", "http://localhost:3008")
+
+
+def _configured_read_bearer_tokens() -> tuple[str, ...]:
+    read_and_admin_tokens = tuple(
+        token
+        for token in (
+            os.getenv("READ_API_TOKEN", ""),
+            os.getenv("ADMIN_API_TOKEN", ""),
+        )
+        if token
+    )
+    if read_and_admin_tokens:
+        return read_and_admin_tokens
+    agent_token = os.getenv("AGENT_API_TOKEN", "")
+    return (agent_token,) if agent_token else ()
 
 
 def browser_session_manager() -> BrowserSessionManager:
