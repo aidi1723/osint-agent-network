@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -1644,32 +1645,40 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
             "event": {"message": "amass completed", "metadata": {}},
         }
         request_barrier = Barrier(2)
-        ownership_barrier = Barrier(2)
-        original_get_claimed_job = self.store.get_claimed_agent_job
+        environment_keys = (
+            "APP_ENV",
+            "ADMIN_API_TOKEN",
+            "AGENT_API_TOKEN",
+            "READ_API_TOKEN",
+            "OSINT_REQUIRE_AUTH",
+            "OSINT_ALLOW_LEGACY_AGENT_TOKEN",
+            "CORS_ALLOWED_ORIGINS",
+            "OSINT_COOKIE_SECURE",
+        )
+        environment_before = {key: os.environ.get(key) for key in environment_keys}
+        results = []
+        try:
+            with patch.dict("os.environ", self.ENV, clear=True), ApiTestServer() as server:
+                def submit():
+                    request_barrier.wait(timeout=5)
+                    status, body, _headers = server.request_in_current_environment(
+                        "POST",
+                        "/api/agent/jobs/concurrent-http-amass-job/output",
+                        payload=payload,
+                        headers=[
+                            (
+                                "Authorization",
+                                f"Bearer {tool_agent['agent_token']}",
+                            )
+                        ],
+                    )
+                    return status, json_payload(body)
 
-        def synchronized_ownership_check(*args, **kwargs):
-            # Keep the historical split check synchronized if route logic regresses.
-            job = original_get_claimed_job(*args, **kwargs)
-            ownership_barrier.wait(timeout=5)
-            return job
-
-        def submit():
-            request_barrier.wait(timeout=5)
-            return self.post(
-                "/api/agent/jobs/concurrent-http-amass-job/output",
-                payload,
-                tool_agent["agent_token"],
-            )
-
-        with (
-            patch.object(
-                self.store,
-                "get_claimed_agent_job",
-                side_effect=synchronized_ownership_check,
-            ),
-            ThreadPoolExecutor(max_workers=2) as executor,
-        ):
-            results = list(executor.map(lambda _index: submit(), range(2)))
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    results = list(executor.map(lambda _index: submit(), range(2)))
+        finally:
+            environment_after = {key: os.environ.get(key) for key in environment_keys}
+            self.assertEqual(environment_after, environment_before)
 
         self.assertEqual(sorted(status for status, _body in results), [201, 409])
         detail = self.store.get_investigation(investigation.id)

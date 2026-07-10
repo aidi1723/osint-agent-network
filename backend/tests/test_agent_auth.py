@@ -51,9 +51,25 @@ class ApiTestServer:
         headers: list[tuple[str, str]] | None = None,
         env: dict[str, str] | None = None,
     ) -> tuple[int, bytes, list[tuple[str, str]]]:
+        with patch.dict("os.environ", env or PRODUCTION_ENV, clear=True):
+            return self.request_in_current_environment(
+                method,
+                path,
+                payload=payload,
+                headers=headers,
+            )
+
+    def request_in_current_environment(
+        self,
+        method: str,
+        path: str,
+        *,
+        payload: object = _NO_PAYLOAD,
+        headers: list[tuple[str, str]] | None = None,
+    ) -> tuple[int, bytes, list[tuple[str, str]]]:
         body = json.dumps(payload).encode("utf-8") if payload is not _NO_PAYLOAD else b""
         connection = http.client.HTTPConnection(*self.server.server_address, timeout=5)
-        with patch.dict("os.environ", env or PRODUCTION_ENV, clear=True):
+        try:
             connection.putrequest(method, path)
             if payload is not _NO_PAYLOAD:
                 connection.putheader("Content-Type", "application/json")
@@ -64,8 +80,9 @@ class ApiTestServer:
             response = connection.getresponse()
             response_body = response.read()
             response_headers = response.getheaders()
-        connection.close()
-        return response.status, response_body, response_headers
+            return response.status, response_body, response_headers
+        finally:
+            connection.close()
 
     def request_bytes(
         self,
