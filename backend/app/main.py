@@ -15,15 +15,11 @@ from urllib.parse import parse_qs, urlparse
 from app.core.agent_auth import (
     AgentPrincipal,
     agent_action_allowed,
-    agent_output_contract_sections,
     agent_principal_from_record,
     legacy_agent_token_allowed,
     legacy_agent_token_matches,
 )
-from app.core.agent_payload_validation import (
-    validate_agent_payload,
-    validate_tool_output_payload,
-)
+from app.core.agent_payload_validation import validate_agent_payload
 from app.core.browser_auth import BrowserSessionManager
 from app.core.intel_gateway import build_intel_plan
 from app.core.mcp_descriptor import build_mcp_descriptor, load_mcp_resource
@@ -35,7 +31,7 @@ from app.services.llm import LLMClient
 from app.services.report_export import build_report_payload, render_report_html, render_report_markdown
 from app.services.report_pdf import PDF_UNAVAILABLE_DETAIL, ReportPdfDependencyError, render_report_pdf
 from app.services.job_queue import job_queue
-from app.services.store import store
+from app.services.store import ToolOutputValidationError, store
 from app.services.worker import run_investigation_jobs
 
 
@@ -371,7 +367,11 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self.headers,
                 expected_tokens=(expected_token,) if expected_token else (),
                 known_tokens=_configured_known_bearer_tokens(),
-                require_token=authentication_required_for_environment(),
+                require_token=(
+                    True
+                    if parsed.path == "/api/agents/register"
+                    else authentication_required_for_environment()
+                ),
                 session_manager=session_manager,
                 allowed_origins=allowed_origins,
                 mutation=True,
@@ -602,75 +602,20 @@ class ApiHandler(BaseHTTPRequestHandler):
                 )
                 return
             job_id = parsed.path.split("/")[-2]
-            job = store.get_claimed_agent_job(
-                agent_principal.agent_id,
-                task_id,
-                job_id,
-                "tool_agent",
-                require_tool_role=True,
-            )
-            if job is None:
+            try:
+                result = store.submit_tool_job_output(
+                    agent_principal.agent_id,
+                    task_id,
+                    job_id,
+                    payload,
+                )
+            except ToolOutputValidationError as exc:
+                self._validation_failed(exc.errors)
+                return
+            if result is None:
                 self._json({"detail": "active job ownership required"}, status=409)
                 return
-            errors = validate_tool_output_payload(
-                payload,
-                agent_output_contract_sections(job.get("output_contract")),
-            )
-            if self._validation_failed(errors):
-                return
-
-            event_payload = payload.get("event")
-            if event_payload is not None:
-                store.add_event(
-                    investigation_id=task_id,
-                    agent_id=agent_principal.agent_id,
-                    level=event_payload.get("level", "info"),
-                    message=event_payload["message"],
-                    metadata=event_payload.get("metadata", {}),
-                )
-            entities = [
-                store.add_entity(
-                    investigation_id=task_id,
-                    entity_type=item["type"],
-                    value=item["value"],
-                    source_tool=item["source_tool"],
-                    confidence=float(item["confidence"]),
-                )
-                for item in payload.get("entities", [])
-            ]
-            evidence = [
-                store.add_evidence(
-                    investigation_id=task_id,
-                    entity_value=item["entity_value"],
-                    evidence_kind=item["evidence_kind"],
-                    source_tool=item["source_tool"],
-                    snippet=item["snippet"],
-                )
-                for item in payload.get("evidence", [])
-            ]
-            relationships = [
-                store.add_relationship(
-                    investigation_id=task_id,
-                    from_value=item["from"],
-                    to_value=item["to"],
-                    relationship_type=item["relationship_type"],
-                    confidence=float(item["confidence"]),
-                )
-                for item in payload.get("relationships", [])
-            ]
-            store.update_job_status(job_id, "COMPLETED")
-            self._json(
-                {
-                    "job_id": job_id,
-                    "status": "COMPLETED",
-                    "created": {
-                        "entities": len(entities),
-                        "evidence": len(evidence),
-                        "relationships": len(relationships),
-                    },
-                },
-                status=201,
-            )
+            self._json(result, status=201)
             return
 
         if parsed.path == "/api/agent/jobs/claim":

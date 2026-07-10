@@ -1,11 +1,20 @@
 import sqlite3
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Barrier
 from unittest.mock import patch
 
-from backend.tests.test_agent_auth import ApiTestServer, PRODUCTION_ENV, json_payload
+from backend.tests.test_agent_auth import (
+    ApiTestServer,
+    PRODUCTION_ENV,
+    cookie_from_set_cookie,
+    header_value,
+    json_payload,
+)
 from app import main as app_main
 from app.core.agent_auth import (
     AGENT_ACTION_TIERS,
@@ -52,6 +61,72 @@ class AgentIdentityStoreContract:
 
     def internal_agent_state(self, agent_id):
         raise NotImplementedError
+
+    def tool_output_storage_failure(self):
+        raise NotImplementedError
+
+    def tool_output_submission_stores(self):
+        return (self.store, self.store)
+
+    def create_tool_output_claim(self, suffix):
+        registration = self.register(
+            name=f"amass-tool-{suffix}",
+            role_tier="tool_agent",
+            capabilities=["amass"],
+        )
+        investigation = self.store.create_investigation(
+            name=f"Atomic tool output {suffix}",
+            seed_type="domain",
+            seed_value=f"{suffix}.example",
+            strategy_name="quick",
+        )
+        job_id = f"amass-{suffix}-job"
+        self.store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": job_id,
+                    "tool_name": "amass",
+                    "target_type": "domain",
+                    "target_value": f"{suffix}.example",
+                    "depth": 0,
+                    "agent_role": "tool_agent",
+                    "output_contract": "entities,evidence,relationships",
+                }
+            ],
+        )
+        claimed = self.store.claim_job(registration["id"], ["amass"])
+        self.assertEqual(claimed["id"], job_id)
+        payload = {
+            "task_id": investigation.id,
+            "tool": "amass",
+            "event": {"level": "info", "message": "amass completed", "metadata": {}},
+            "entities": [
+                {
+                    "type": "domain",
+                    "value": f"found.{suffix}.example",
+                    "source_tool": "amass",
+                    "confidence": 0.8,
+                }
+            ],
+            "evidence": [
+                {
+                    "entity_value": f"found.{suffix}.example",
+                    "evidence_kind": "dns_resolution",
+                    "source_tool": "amass",
+                    "snippet": "Resolved publicly",
+                }
+            ],
+            "relationships": [
+                {
+                    "from": f"{suffix}.example",
+                    "to": f"found.{suffix}.example",
+                    "relationship_type": "domain_has_subdomain",
+                    "confidence": 0.8,
+                }
+            ],
+        }
+        return registration, investigation, job_id, payload
 
     def test_registration_validates_identity_fields_and_capabilities_before_token_generation(self):
         invalid_registrations = (
@@ -535,6 +610,46 @@ class AgentIdentityStoreContract:
             self.store.claim_job(reader["id"], ["analysis_judgement_agent"])
         )
 
+    def test_tool_output_batch_is_one_shot_under_concurrent_submission(self):
+        registration, investigation, job_id, payload = self.create_tool_output_claim(
+            "concurrent"
+        )
+        barrier = Barrier(2)
+        submission_stores = self.tool_output_submission_stores()
+
+        def submit(index):
+            barrier.wait(timeout=5)
+            return submission_stores[index].submit_tool_job_output(
+                registration["id"], investigation.id, job_id, payload
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(submit, range(2)))
+
+        self.assertEqual(sum(result is not None for result in results), 1)
+        detail = self.store.get_investigation(investigation.id)
+        self.assertEqual(len(detail["events"]), 1)
+        self.assertEqual(len(detail["entities"]), 1)
+        self.assertEqual(len(detail["evidence"]), 1)
+        self.assertEqual(len(detail["relationships"]), 1)
+        self.assertEqual(self.store.list_jobs(investigation.id)[0]["status"], "COMPLETED")
+
+    def test_tool_output_batch_rolls_back_every_write_on_storage_failure(self):
+        registration, investigation, job_id, payload = self.create_tool_output_claim(
+            "rollback"
+        )
+
+        with self.tool_output_storage_failure() as expected_error:
+            with self.assertRaises(expected_error):
+                self.store.submit_tool_job_output(
+                    registration["id"], investigation.id, job_id, payload
+                )
+
+        detail = self.store.get_investigation(investigation.id)
+        for section in ("events", "entities", "evidence", "relationships"):
+            self.assertEqual(detail[section], [])
+        self.assertEqual(self.store.list_jobs(investigation.id)[0]["status"], "CLAIMED")
+
 class _MemoryStoreContext:
     def __enter__(self):
         return MemoryStore()
@@ -569,6 +684,20 @@ class MemoryAgentIdentityTests(AgentIdentityStoreContract, unittest.TestCase):
             agent.token_created_at,
             agent.disabled_at,
         )
+
+    @contextmanager
+    def tool_output_storage_failure(self):
+        class FailingRelationships(dict):
+            def __setitem__(self, _key, _value):
+                raise RuntimeError("forced relationship storage failure")
+
+        original = self.store.relationships
+        self.store.relationships = FailingRelationships(original)
+        try:
+            yield RuntimeError
+        finally:
+            if isinstance(self.store.relationships, FailingRelationships):
+                self.store.relationships = original
 
 
 class _SQLiteStoreContext:
@@ -619,6 +748,27 @@ class SQLiteAgentIdentityTests(AgentIdentityStoreContract, unittest.TestCase):
                 (agent_id,),
             ).fetchone()
 
+    def tool_output_submission_stores(self):
+        return (self.store, SQLiteStore(self.store.db_path))
+
+    @contextmanager
+    def tool_output_storage_failure(self):
+        with sqlite3.connect(self.store.db_path) as conn:
+            conn.execute(
+                """
+                CREATE TRIGGER fail_tool_relationship_insert
+                BEFORE INSERT ON relationships
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced relationship storage failure');
+                END
+                """
+            )
+        try:
+            yield sqlite3.IntegrityError
+        finally:
+            with sqlite3.connect(self.store.db_path) as conn:
+                conn.execute("DROP TRIGGER IF EXISTS fail_tool_relationship_insert")
+
     def test_import_agent_preserves_existing_credentials_and_safe_lifecycle_fields(self):
         registration = self.register()
         self.store.import_agent(
@@ -658,6 +808,74 @@ class SQLiteAgentIdentityTests(AgentIdentityStoreContract, unittest.TestCase):
 
 
 class AgentRegistrationHttpCompatibilityTests(unittest.TestCase):
+    REGISTRATION_PAYLOAD = {
+        "agent_name": "admin-created-reader",
+        "agent_type": "test",
+        "capabilities": ["domain"],
+        "role_tier": "reader",
+    }
+
+    def test_registration_rejects_anonymous_default_development_without_mutation(self):
+        store = MemoryStore()
+        with patch.object(app_main, "store", store), ApiTestServer() as server:
+            status, body, _headers = server.request(
+                "POST",
+                "/api/agents/register",
+                payload=self.REGISTRATION_PAYLOAD,
+                env={"APP_ENV": "development"},
+            )
+
+        self.assertEqual(status, 401)
+        self.assertEqual(
+            json_payload(body), {"detail": "unauthorized management request"}
+        )
+        self.assertEqual(store.list_agents(), [])
+
+    def test_registration_accepts_admin_bearer(self):
+        store = MemoryStore()
+        with patch.object(app_main, "store", store), ApiTestServer() as server:
+            status, body, _headers = server.request(
+                "POST",
+                "/api/agents/register",
+                payload=self.REGISTRATION_PAYLOAD,
+                headers=[("Authorization", "Bearer admin-secret")],
+                env=PRODUCTION_ENV,
+            )
+
+        self.assertEqual(status, 201)
+        self.assertEqual(json_payload(body)["role_tier"], "reader")
+        self.assertEqual(len(store.list_agents()), 1)
+
+    def test_registration_accepts_admin_browser_session_with_mutation_protection(self):
+        store = MemoryStore()
+        with patch.object(app_main, "store", store), ApiTestServer() as server:
+            login_status, login_body, login_headers = server.request(
+                "POST",
+                "/api/auth/login",
+                payload={"admin_token": "admin-secret"},
+                env=PRODUCTION_ENV,
+            )
+            self.assertEqual(login_status, 200)
+            cookie = cookie_from_set_cookie(
+                header_value(login_headers, "Set-Cookie") or ""
+            )
+            csrf_token = json_payload(login_body)["csrf_token"]
+            status, body, _headers = server.request(
+                "POST",
+                "/api/agents/register",
+                payload=self.REGISTRATION_PAYLOAD,
+                headers=[
+                    ("Cookie", cookie),
+                    ("Origin", PRODUCTION_ENV["CORS_ALLOWED_ORIGINS"]),
+                    ("X-CSRF-Token", csrf_token),
+                ],
+                env=PRODUCTION_ENV,
+            )
+
+        self.assertEqual(status, 201)
+        self.assertEqual(json_payload(body)["role_tier"], "reader")
+        self.assertEqual(len(store.list_agents()), 1)
+
     def test_registration_never_falls_back_to_shared_agent_bearer(self):
         store = MemoryStore()
         env = {
@@ -1309,6 +1527,155 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
         self.assertIsNotNone(body["job"])
         self.assertEqual(body["job"]["id"], "http-tool-claim-job")
 
+    def test_tool_output_requires_content_and_exact_claimed_tool_provenance(self):
+        cases = (
+            ("empty", {"task_id": None}),
+            (
+                "mismatched-tool",
+                {
+                    "task_id": None,
+                    "tool": "theharvester",
+                    "entities": [
+                        {
+                            "type": "domain",
+                            "value": "found.example",
+                            "source_tool": "theharvester",
+                            "confidence": 0.8,
+                        }
+                    ],
+                },
+            ),
+            (
+                "mismatched-evidence-provenance",
+                {
+                    "task_id": None,
+                    "tool": "amass",
+                    "evidence": [
+                        {
+                            "entity_value": "found.example",
+                            "evidence_kind": "dns_resolution",
+                            "source_tool": "theharvester",
+                            "snippet": "Resolved publicly",
+                        }
+                    ],
+                },
+            ),
+            (
+                "invalid-tool-type",
+                {
+                    "task_id": None,
+                    "tool": {"name": "amass"},
+                    "event": {"message": "Tool completed", "metadata": {}},
+                },
+            ),
+        )
+        for label, raw_payload in cases:
+            with self.subTest(label=label):
+                tool_agent = self.register("tool_agent", ["amass"])
+                investigation = self.store.create_investigation(
+                    name=f"Tool validation {label}",
+                    seed_type="domain",
+                    seed_value=f"{label}.example",
+                    strategy_name="quick",
+                )
+                job_id = f"amass-{label}-job"
+                self.store.replace_jobs(
+                    investigation.id,
+                    [
+                        {
+                            "id": job_id,
+                            "tool_name": "amass",
+                            "target_type": "domain",
+                            "target_value": f"{label}.example",
+                            "depth": 0,
+                            "agent_role": "tool_agent",
+                            "output_contract": "entities,evidence,relationships",
+                        }
+                    ],
+                )
+                claimed = self.store.claim_job(tool_agent["id"], ["amass"])
+                self.assertEqual(claimed["id"], job_id)
+                payload = {
+                    **raw_payload,
+                    "task_id": investigation.id,
+                }
+
+                status, body = self.post(
+                    f"/api/agent/jobs/{job_id}/output",
+                    payload,
+                    tool_agent["agent_token"],
+                )
+
+                self.assertEqual(status, 400, body)
+                detail = self.store.get_investigation(investigation.id)
+                for section in ("events", "entities", "evidence", "relationships"):
+                    self.assertEqual(detail[section], [])
+                self.assertEqual(
+                    self.store.list_jobs(investigation.id)[0]["status"], "CLAIMED"
+                )
+
+    def test_tool_output_http_accepts_exactly_one_concurrent_submission(self):
+        tool_agent = self.register("tool_agent", ["amass"])
+        investigation = self.store.create_investigation(
+            name="Concurrent HTTP tool output",
+            seed_type="domain",
+            seed_value="concurrent-http.example",
+            strategy_name="quick",
+        )
+        self.store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": "concurrent-http-amass-job",
+                    "tool_name": "amass",
+                    "target_type": "domain",
+                    "target_value": "concurrent-http.example",
+                    "depth": 0,
+                    "agent_role": "tool_agent",
+                    "output_contract": "entities,evidence,relationships",
+                }
+            ],
+        )
+        claimed = self.store.claim_job(tool_agent["id"], ["amass"])
+        self.assertEqual(claimed["id"], "concurrent-http-amass-job")
+        payload = {
+            "task_id": investigation.id,
+            "tool": "amass",
+            "event": {"message": "amass completed", "metadata": {}},
+        }
+        request_barrier = Barrier(2)
+        ownership_barrier = Barrier(2)
+        original_get_claimed_job = self.store.get_claimed_agent_job
+
+        def synchronized_ownership_check(*args, **kwargs):
+            # Keep the historical split check synchronized if route logic regresses.
+            job = original_get_claimed_job(*args, **kwargs)
+            ownership_barrier.wait(timeout=5)
+            return job
+
+        def submit():
+            request_barrier.wait(timeout=5)
+            return self.post(
+                "/api/agent/jobs/concurrent-http-amass-job/output",
+                payload,
+                tool_agent["agent_token"],
+            )
+
+        with (
+            patch.object(
+                self.store,
+                "get_claimed_agent_job",
+                side_effect=synchronized_ownership_check,
+            ),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            results = list(executor.map(lambda _index: submit(), range(2)))
+
+        self.assertEqual(sorted(status for status, _body in results), [201, 409])
+        detail = self.store.get_investigation(investigation.id)
+        self.assertEqual(len(detail["events"]), 1)
+        self.assertEqual(self.store.list_jobs(investigation.id)[0]["status"], "COMPLETED")
+
     def test_tool_agent_submits_atomic_bounded_output_for_exact_job(self):
         tool_agent = self.register("tool_agent", ["theharvester"])
         other_tool_agent = self.register("tool_agent", ["theharvester"])
@@ -1339,6 +1706,7 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
 
         invalid_payload = {
             "task_id": investigation.id,
+            "tool": "theharvester",
             "entities": [
                 {
                     "type": "email",

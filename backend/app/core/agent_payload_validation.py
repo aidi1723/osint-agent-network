@@ -39,9 +39,16 @@ def validate_agent_payload(kind: str, payload: dict[str, Any]) -> list[str]:
 
 
 def validate_tool_output_payload(
-    payload: dict[str, Any], allowed_outputs: frozenset[str]
+    payload: dict[str, Any], allowed_outputs: frozenset[str], claimed_tool: str
 ) -> list[str]:
-    errors = _require_strings(payload, ["task_id"])
+    errors = _require_strings(payload, ["task_id", "tool"])
+    submitted_tool = payload.get("tool")
+    if (
+        isinstance(submitted_tool, str)
+        and submitted_tool.strip()
+        and submitted_tool != claimed_tool
+    ):
+        errors.append("tool must match the claimed job tool")
     allowed_keys = {
         "task_id",
         "agent_id",
@@ -55,6 +62,7 @@ def validate_tool_output_payload(
     if unexpected:
         errors.append(f"unexpected output fields: {', '.join(unexpected)}")
 
+    has_meaningful_output = False
     for section in ("entities", "evidence", "relationships"):
         items = payload.get(section, [])
         if not isinstance(items, list):
@@ -63,6 +71,8 @@ def validate_tool_output_payload(
         if items and section not in allowed_outputs:
             errors.append(f"{section} is not allowed by the job output contract")
             continue
+        if items:
+            has_meaningful_output = True
         for index, item in enumerate(items):
             if not isinstance(item, dict):
                 errors.append(f"{section}[{index}] must be an object")
@@ -76,6 +86,11 @@ def validate_tool_output_payload(
                 section_errors = _validate_evidence(item_payload)
             else:
                 section_errors = _validate_relationship(item_payload)
+            if (
+                section in {"entities", "evidence"}
+                and item.get("source_tool") != claimed_tool
+            ):
+                section_errors.append("source_tool must match the claimed job tool")
             errors.extend(f"{section}[{index}]: {error}" for error in section_errors)
 
     event = payload.get("event")
@@ -83,9 +98,18 @@ def validate_tool_output_payload(
         if not isinstance(event, dict):
             errors.append("event must be an object")
         else:
-            errors.extend(_require_strings(event, ["message"], prefix="event"))
+            event_errors = _require_strings(event, ["message"], prefix="event")
+            if "level" in event and (
+                not isinstance(event["level"], str) or not event["level"].strip()
+            ):
+                event_errors.append("event.level must be a non-empty string")
             if not isinstance(event.get("metadata", {}), dict):
-                errors.append("event.metadata must be an object")
+                event_errors.append("event.metadata must be an object")
+            errors.extend(event_errors)
+            if not event_errors:
+                has_meaningful_output = True
+    if not has_meaningful_output:
+        errors.append("tool output must include an event or at least one allowed output item")
     return errors
 
 

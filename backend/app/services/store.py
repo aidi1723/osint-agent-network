@@ -11,11 +11,13 @@ from app.core.agent_auth import (
     AGENT_ROLE_TIERS,
     AgentRegistration,
     agent_output_contract_allows,
+    agent_output_contract_sections,
     generate_agent_token,
     hash_agent_token,
     validate_agent_registration,
     validate_agent_role_tier,
 )
+from app.core.agent_payload_validation import validate_tool_output_payload
 from app.core.agent_permissions import tier_for_role
 from app.core.ach_engine import EvidenceItem, Hypothesis, run_ach_analysis
 from app.core.completion_policy import build_completion_policy
@@ -34,6 +36,12 @@ from app.core.registry import default_tool_registry
 _AGENT_TOKEN_GENERATION_ATTEMPTS = 5
 _AGENT_ACCESS_INVESTIGATION_STATUSES = frozenset({"CLAIMED", "RUNNING"})
 _AGENT_ACCESS_JOB_STATUSES = frozenset({"CLAIMED", "RUNNING"})
+
+
+class ToolOutputValidationError(ValueError):
+    def __init__(self, errors: list[str]):
+        super().__init__("invalid tool output")
+        self.errors = errors
 
 
 @dataclass
@@ -432,6 +440,71 @@ class MemoryStore:
             ):
                 return None
             return asdict(job)
+
+    def submit_tool_job_output(
+        self,
+        agent_id: str,
+        investigation_id: str,
+        job_id: str,
+        payload: dict,
+    ) -> dict | None:
+        with self.lock:
+            agent = self.agents.get(agent_id)
+            investigation = self.investigations.get(investigation_id)
+            job = self.jobs.get(job_id)
+            if (
+                agent is None
+                or agent.disabled_at is not None
+                or agent.role_tier != "tool_agent"
+                or investigation is None
+                or investigation.status not in _AGENT_ACCESS_INVESTIGATION_STATUSES
+                or job is None
+                or job.investigation_id != investigation_id
+                or job.claimed_by_agent_id != agent_id
+                or job.status not in _AGENT_ACCESS_JOB_STATUSES
+                or job.agent_role != "tool_agent"
+            ):
+                return None
+            errors = validate_tool_output_payload(
+                payload,
+                agent_output_contract_sections(job.output_contract),
+                job.tool_name,
+            )
+            if errors:
+                raise ToolOutputValidationError(errors)
+
+            event, entities, evidence, relationships = _build_tool_output_records(
+                investigation_id, agent_id, payload
+            )
+            original_status = job.status
+            original_investigation_status = investigation.status
+            original_updated_at = investigation.updated_at
+            inserted: list[tuple[dict, str]] = []
+            try:
+                if event is not None:
+                    self.events[event.id] = event
+                    inserted.append((self.events, event.id))
+                for entity in entities:
+                    self.entities[entity.id] = entity
+                    inserted.append((self.entities, entity.id))
+                for item in evidence:
+                    self.evidence[item.id] = item
+                    inserted.append((self.evidence, item.id))
+                for relationship in relationships:
+                    self.relationships[relationship.id] = relationship
+                    inserted.append((self.relationships, relationship.id))
+                job.status = "COMPLETED"
+                self._touch_investigation(investigation_id, status="RUNNING")
+            except Exception:
+                for collection, item_id in reversed(inserted):
+                    collection.pop(item_id, None)
+                job.status = original_status
+                investigation.status = original_investigation_status
+                investigation.updated_at = original_updated_at
+                raise
+            return _tool_output_result(
+                job_id, entities, evidence, relationships
+            )
 
     def add_event(
         self,
@@ -1682,6 +1755,91 @@ class SQLiteStore:
         ):
             return None
         return _job_from_row(row)
+
+    def submit_tool_job_output(
+        self,
+        agent_id: str,
+        investigation_id: str,
+        job_id: str,
+        payload: dict,
+    ) -> dict | None:
+        with self.lock, closing(self._connect()) as conn, conn:
+            row = conn.execute(
+                """
+                SELECT jobs.*, agents.role_tier, agents.disabled_at,
+                       investigations.status AS investigation_status
+                FROM jobs
+                JOIN agents ON agents.id = jobs.claimed_by_agent_id
+                JOIN investigations ON investigations.id = jobs.investigation_id
+                WHERE jobs.id = ?
+                  AND jobs.investigation_id = ?
+                  AND jobs.claimed_by_agent_id = ?
+                """,
+                (job_id, investigation_id, agent_id),
+            ).fetchone()
+            if (
+                row is None
+                or row["disabled_at"] is not None
+                or row["role_tier"] != "tool_agent"
+                or row["investigation_status"]
+                not in _AGENT_ACCESS_INVESTIGATION_STATUSES
+                or row["status"] not in _AGENT_ACCESS_JOB_STATUSES
+                or row["agent_role"] != "tool_agent"
+            ):
+                return None
+            errors = validate_tool_output_payload(
+                payload,
+                agent_output_contract_sections(row["output_contract"]),
+                row["tool_name"],
+            )
+            if errors:
+                raise ToolOutputValidationError(errors)
+
+            event, entities, evidence, relationships = _build_tool_output_records(
+                investigation_id, agent_id, payload
+            )
+            completed = conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'COMPLETED'
+                WHERE id = ?
+                  AND investigation_id = ?
+                  AND claimed_by_agent_id = ?
+                  AND status IN (?, ?)
+                  AND agent_role = 'tool_agent'
+                  AND tool_name = ?
+                  AND output_contract = ?
+                  AND EXISTS (
+                      SELECT 1 FROM investigations
+                      WHERE investigations.id = jobs.investigation_id
+                        AND investigations.status IN (?, ?)
+                  )
+                  AND EXISTS (
+                      SELECT 1 FROM agents
+                      WHERE agents.id = jobs.claimed_by_agent_id
+                        AND agents.role_tier = 'tool_agent'
+                        AND agents.disabled_at IS NULL
+                  )
+                """,
+                (
+                    job_id,
+                    investigation_id,
+                    agent_id,
+                    *_AGENT_ACCESS_JOB_STATUSES,
+                    row["tool_name"],
+                    row["output_contract"],
+                    *_AGENT_ACCESS_INVESTIGATION_STATUSES,
+                ),
+            )
+            if completed.rowcount != 1:
+                return None
+            _insert_tool_output_records(
+                conn, event, entities, evidence, relationships
+            )
+            self._touch_investigation(conn, investigation_id, status="RUNNING")
+            return _tool_output_result(
+                job_id, entities, evidence, relationships
+            )
 
     def add_event(
         self,
@@ -3338,6 +3496,173 @@ def _apply_core_v3(data: dict) -> None:
         matrix,
         data.get("facts") or [],
     )
+
+
+def _build_tool_output_records(
+    investigation_id: str,
+    agent_id: str,
+    payload: dict,
+) -> tuple[
+    AgentEvent | None,
+    list[Entity],
+    list[Evidence],
+    list[Relationship],
+]:
+    now = _now()
+    event_payload = payload.get("event")
+    event = (
+        AgentEvent(
+            id=str(uuid4()),
+            investigation_id=investigation_id,
+            agent_id=agent_id,
+            level=event_payload.get("level", "info"),
+            message=event_payload["message"],
+            metadata=event_payload.get("metadata", {}),
+            created_at=now,
+        )
+        if event_payload is not None
+        else None
+    )
+    entities = [
+        Entity(
+            id=str(uuid4()),
+            investigation_id=investigation_id,
+            type=item["type"],
+            value=item["value"],
+            source_tool=item["source_tool"],
+            confidence=float(item["confidence"]),
+            created_at=now,
+        )
+        for item in payload.get("entities", [])
+    ]
+    evidence = [
+        Evidence(
+            id=str(uuid4()),
+            investigation_id=investigation_id,
+            entity_value=item["entity_value"],
+            evidence_kind=item["evidence_kind"],
+            source_tool=item["source_tool"],
+            snippet=item["snippet"],
+            created_at=now,
+        )
+        for item in payload.get("evidence", [])
+    ]
+    relationships = [
+        Relationship(
+            id=str(uuid4()),
+            investigation_id=investigation_id,
+            from_value=item["from"],
+            to_value=item["to"],
+            relationship_type=item["relationship_type"],
+            confidence=float(item["confidence"]),
+            created_at=now,
+        )
+        for item in payload.get("relationships", [])
+    ]
+    return event, entities, evidence, relationships
+
+
+def _insert_tool_output_records(
+    conn: sqlite3.Connection,
+    event: AgentEvent | None,
+    entities: list[Entity],
+    evidence: list[Evidence],
+    relationships: list[Relationship],
+) -> None:
+    if event is not None:
+        conn.execute(
+            """
+            INSERT INTO events (
+                id, investigation_id, agent_id, level, message, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.id,
+                event.investigation_id,
+                event.agent_id,
+                event.level,
+                event.message,
+                json.dumps(event.metadata, ensure_ascii=False),
+                event.created_at,
+            ),
+        )
+    for entity in entities:
+        conn.execute(
+            """
+            INSERT INTO entities (
+                id, investigation_id, type, value, source_tool, confidence, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(investigation_id, type, value, source_tool) DO UPDATE SET
+                confidence = MAX(confidence, excluded.confidence),
+                created_at = excluded.created_at
+            """,
+            (
+                entity.id,
+                entity.investigation_id,
+                entity.type,
+                entity.value,
+                entity.source_tool,
+                entity.confidence,
+                entity.created_at,
+            ),
+        )
+    for item in evidence:
+        conn.execute(
+            """
+            INSERT INTO evidence (
+                id, investigation_id, entity_value, evidence_kind, source_tool, snippet, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(investigation_id, entity_value, evidence_kind, source_tool) DO UPDATE SET
+                snippet = excluded.snippet,
+                created_at = excluded.created_at
+            """,
+            (
+                item.id,
+                item.investigation_id,
+                item.entity_value,
+                item.evidence_kind,
+                item.source_tool,
+                item.snippet,
+                item.created_at,
+            ),
+        )
+    for relationship in relationships:
+        conn.execute(
+            """
+            INSERT INTO relationships (
+                id, investigation_id, from_value, to_value, relationship_type, confidence, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(investigation_id, from_value, to_value, relationship_type) DO UPDATE SET
+                confidence = MAX(confidence, excluded.confidence),
+                created_at = excluded.created_at
+            """,
+            (
+                relationship.id,
+                relationship.investigation_id,
+                relationship.from_value,
+                relationship.to_value,
+                relationship.relationship_type,
+                relationship.confidence,
+                relationship.created_at,
+            ),
+        )
+
+
+def _tool_output_result(
+    job_id: str,
+    entities: list[Entity],
+    evidence: list[Evidence],
+    relationships: list[Relationship],
+) -> dict:
+    return {
+        "job_id": job_id,
+        "status": "COMPLETED",
+        "created": {
+            "entities": len(entities),
+            "evidence": len(evidence),
+            "relationships": len(relationships),
+        },
+    }
 
 
 def _now() -> str:
