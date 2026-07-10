@@ -12,6 +12,7 @@ from app.core.agent_auth import (
     AgentRegistration,
     generate_agent_token,
     hash_agent_token,
+    validate_agent_registration,
     validate_agent_role_tier,
 )
 from app.core.ach_engine import EvidenceItem, Hypothesis, run_ach_analysis
@@ -224,6 +225,9 @@ class MemoryStore:
         role_tier: str,
     ) -> dict:
         validated_tier = validate_agent_role_tier(role_tier)
+        agent_name, agent_type, capabilities = validate_agent_registration(
+            agent_name, agent_type, capabilities
+        )
         with self.lock:
             token, token_hash = _allocate_agent_token(
                 {agent.token_hash for agent in self.agents.values() if agent.token_hash}
@@ -258,7 +262,11 @@ class MemoryStore:
     def heartbeat_agent(self, agent_id: str) -> dict | None:
         with self.lock:
             agent = self.agents.get(agent_id)
-            if agent is None:
+            if (
+                agent is None
+                or agent.disabled_at is not None
+                or agent.role_tier not in AGENT_ROLE_TIERS
+            ):
                 return None
             agent.last_seen_at = _now()
             agent.status = "ONLINE"
@@ -287,7 +295,11 @@ class MemoryStore:
     def rotate_agent_token(self, agent_id: str) -> dict | None:
         with self.lock:
             agent = self.agents.get(agent_id)
-            if agent is None:
+            if (
+                agent is None
+                or agent.disabled_at is not None
+                or agent.role_tier not in AGENT_ROLE_TIERS
+            ):
                 return None
             token, token_hash = _allocate_agent_token(
                 {item.token_hash for item in self.agents.values() if item.token_hash}
@@ -1300,6 +1312,9 @@ class SQLiteStore:
         role_tier: str,
     ) -> dict:
         validated_tier = validate_agent_role_tier(role_tier)
+        agent_name, agent_type, capabilities = validate_agent_registration(
+            agent_name, agent_type, capabilities
+        )
         with self.lock, closing(self._connect()) as conn, conn:
             conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
@@ -1377,7 +1392,11 @@ class SQLiteStore:
         now = _now()
         with self.lock, closing(self._connect()) as conn, conn:
             row = conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)).fetchone()
-            if row is None:
+            if (
+                row is None
+                or row["disabled_at"] is not None
+                or row["role_tier"] not in AGENT_ROLE_TIERS
+            ):
                 return None
             conn.execute(
                 "UPDATE agents SET last_seen_at = ?, status = ? WHERE id = ?",
@@ -1411,8 +1430,15 @@ class SQLiteStore:
     def rotate_agent_token(self, agent_id: str) -> dict | None:
         with self.lock, closing(self._connect()) as conn, conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT id FROM agents WHERE id = ?", (agent_id,)).fetchone()
-            if row is None:
+            row = conn.execute(
+                "SELECT id, role_tier, disabled_at FROM agents WHERE id = ?",
+                (agent_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row["disabled_at"] is not None
+                or row["role_tier"] not in AGENT_ROLE_TIERS
+            ):
                 return None
             token, token_hash = _allocate_agent_token(
                 {
@@ -2820,6 +2846,7 @@ class SQLiteStore:
                     ON worker_queue_runs(investigation_id, status);
                 """
             )
+            conn.execute("BEGIN IMMEDIATE")
             columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(investigations)").fetchall()
@@ -2890,25 +2917,45 @@ class SQLiteStore:
             _record_schema_migration(conn, "20260522_core_v3")
             _record_schema_migration(conn, "20260522_stability_pack")
             _record_schema_migration(conn, "20260706_persistent_background_queue")
-            _record_schema_migration(conn, "20260710_agent_credentials")
             _dedupe_agent_token_hashes(conn)
             _dedupe_existing_rows(conn)
-            conn.executescript(
+            conn.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_unique_signal
-                    ON entities(investigation_id, type, value, source_tool);
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_evidence_unique_signal
-                    ON evidence(investigation_id, entity_value, evidence_kind, source_tool);
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_relationships_unique_signal
-                    ON relationships(investigation_id, from_value, to_value, relationship_type);
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_evidence_ledger_unique_hash
-                    ON evidence_ledger(investigation_id, content_hash);
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_unique_claim
-                    ON facts(investigation_id, subject, predicate, object_value);
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_unique_token_hash
-                    ON agents(token_hash) WHERE token_hash IS NOT NULL;
+                    ON entities(investigation_id, type, value, source_tool)
                 """
             )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_evidence_unique_signal
+                    ON evidence(investigation_id, entity_value, evidence_kind, source_tool)
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_relationships_unique_signal
+                    ON relationships(investigation_id, from_value, to_value, relationship_type)
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_evidence_ledger_unique_hash
+                    ON evidence_ledger(investigation_id, content_hash)
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_unique_claim
+                    ON facts(investigation_id, subject, predicate, object_value)
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_unique_token_hash
+                    ON agents(token_hash) WHERE token_hash IS NOT NULL
+                """
+            )
+            _record_schema_migration(conn, "20260710_agent_credentials")
 
     def _touch_investigation(
         self,
@@ -2994,7 +3041,7 @@ def _policy_status_for_detail(detail: dict, requested_status: str) -> str:
 
 
 def _dedupe_existing_rows(conn: sqlite3.Connection) -> None:
-    conn.executescript(
+    statements = (
         """
         DELETE FROM entities
         WHERE rowid NOT IN (
@@ -3007,8 +3054,9 @@ def _dedupe_existing_rows(conn: sqlite3.Connection) -> None:
                 FROM entities
             )
             WHERE rn = 1
-        );
-
+        )
+        """,
+        """
         DELETE FROM evidence
         WHERE rowid NOT IN (
             SELECT rowid FROM (
@@ -3020,8 +3068,9 @@ def _dedupe_existing_rows(conn: sqlite3.Connection) -> None:
                 FROM evidence
             )
             WHERE rn = 1
-        );
-
+        )
+        """,
+        """
         DELETE FROM relationships
         WHERE rowid NOT IN (
             SELECT rowid FROM (
@@ -3033,8 +3082,9 @@ def _dedupe_existing_rows(conn: sqlite3.Connection) -> None:
                 FROM relationships
             )
             WHERE rn = 1
-        );
-
+        )
+        """,
+        """
         DELETE FROM evidence_ledger
         WHERE rowid NOT IN (
             SELECT rowid FROM (
@@ -3046,8 +3096,9 @@ def _dedupe_existing_rows(conn: sqlite3.Connection) -> None:
                 FROM evidence_ledger
             )
             WHERE rn = 1
-        );
-
+        )
+        """,
+        """
         DELETE FROM facts
         WHERE rowid NOT IN (
             SELECT rowid FROM (
@@ -3069,9 +3120,11 @@ def _dedupe_existing_rows(conn: sqlite3.Connection) -> None:
                 FROM facts
             )
             WHERE rn = 1
-        );
-        """
+        )
+        """,
     )
+    for statement in statements:
+        conn.execute(statement)
 
 
 def _record_schema_migration(conn: sqlite3.Connection, version: str) -> None:
@@ -3082,23 +3135,17 @@ def _record_schema_migration(conn: sqlite3.Connection, version: str) -> None:
 
 
 def _dedupe_agent_token_hashes(conn: sqlite3.Connection) -> None:
-    duplicate_hashes = conn.execute(
+    conn.execute(
         """
-        SELECT token_hash FROM agents
-        WHERE token_hash IS NOT NULL
-        GROUP BY token_hash HAVING COUNT(*) > 1
+        UPDATE agents
+        SET token_hash = NULL, token_created_at = NULL
+        WHERE token_hash IN (
+            SELECT token_hash FROM agents
+            WHERE token_hash IS NOT NULL
+            GROUP BY token_hash HAVING COUNT(*) > 1
+        )
         """
-    ).fetchall()
-    for duplicate in duplicate_hashes:
-        rows = conn.execute(
-            """
-            SELECT id FROM agents WHERE token_hash = ?
-            ORDER BY registered_at ASC, id ASC
-            """,
-            (duplicate["token_hash"],),
-        ).fetchall()
-        for row in rows[1:]:
-            conn.execute("UPDATE agents SET token_hash = NULL WHERE id = ?", (row["id"],))
+    )
 
 
 def _worker_queue_pending_from_row(row: sqlite3.Row) -> dict:

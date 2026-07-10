@@ -28,7 +28,7 @@ class AgentIdentityStoreContract:
         return self.store.register_agent(
             agent_name=name,
             agent_type="codex",
-            capabilities=capabilities or ["company"],
+            capabilities=["company"] if capabilities is None else capabilities,
             role_tier=role_tier,
         )
 
@@ -40,6 +40,47 @@ class AgentIdentityStoreContract:
 
     def clear_agent_token(self, agent_id):
         raise NotImplementedError
+
+    def clear_agent_role(self, agent_id):
+        raise NotImplementedError
+
+    def internal_agent_state(self, agent_id):
+        raise NotImplementedError
+
+    def test_registration_validates_identity_fields_and_capabilities_before_token_generation(self):
+        invalid_registrations = (
+            {"agent_name": "", "agent_type": "codex", "capabilities": []},
+            {"agent_name": "   ", "agent_type": "codex", "capabilities": []},
+            {"agent_name": " padded ", "agent_type": "codex", "capabilities": []},
+            {"agent_name": 7, "agent_type": "codex", "capabilities": []},
+            {"agent_name": "n" * 129, "agent_type": "codex", "capabilities": []},
+            {"agent_name": "valid", "agent_type": "", "capabilities": []},
+            {"agent_name": "valid", "agent_type": "   ", "capabilities": []},
+            {"agent_name": "valid", "agent_type": " padded ", "capabilities": []},
+            {"agent_name": "valid", "agent_type": None, "capabilities": []},
+            {"agent_name": "valid", "agent_type": "t" * 129, "capabilities": []},
+            {"agent_name": "valid", "agent_type": "codex", "capabilities": "company"},
+            {"agent_name": "valid", "agent_type": "codex", "capabilities": 1},
+            {"agent_name": "valid", "agent_type": "codex", "capabilities": {}},
+            {"agent_name": "valid", "agent_type": "codex", "capabilities": [1]},
+            {"agent_name": "valid", "agent_type": "codex", "capabilities": [["company"]]},
+            {"agent_name": "valid", "agent_type": "codex", "capabilities": [""]},
+            {"agent_name": "valid", "agent_type": "codex", "capabilities": ["   "]},
+            {"agent_name": "valid", "agent_type": "codex", "capabilities": [" padded "]},
+            {"agent_name": "valid", "agent_type": "codex", "capabilities": ["c" * 129]},
+            {"agent_name": "valid", "agent_type": "codex", "capabilities": ["c"] * 65},
+        )
+        with patch("app.services.store.generate_agent_token") as generate_token:
+            for registration in invalid_registrations:
+                with self.subTest(registration=registration):
+                    with self.assertRaisesRegex(ValueError, "agent|capabilit") as context:
+                        self.store.register_agent(role_tier="reader", **registration)
+                    self.assertNotIn(str(registration), str(context.exception))
+
+        generate_token.assert_not_called()
+        self.assertEqual(self.store.list_agents(), [])
+        valid = self.register(name="no-capabilities", capabilities=[])
+        self.assertEqual(valid["capabilities"], [])
 
     def test_registration_requires_an_explicit_exact_role_tier(self):
         for invalid in (None, "", " reader", "reader ", "Reader", "admin", 1):
@@ -129,15 +170,41 @@ class AgentIdentityStoreContract:
     def test_reregistering_same_name_reuses_identity_and_invalidates_old_token(self):
         first = self.register(name="stable-name", role_tier="reader")
         second = self.register(name="stable-name", role_tier="reporter")
+        case_variant = self.register(name="Stable-name", role_tier="reader")
 
         self.assertEqual(second["id"], first["id"])
+        self.assertNotEqual(case_variant["id"], first["id"])
         self.assertEqual(second["role_tier"], "reporter")
-        self.assertEqual(len(self.store.list_agents()), 1)
+        self.assertEqual(len(self.store.list_agents()), 2)
         self.assertIsNone(self.store.resolve_agent_token(first["agent_token"]))
         self.assertEqual(
             self.store.resolve_agent_token(second["agent_token"])["id"],
             first["id"],
         )
+
+    def test_disabled_and_legacy_agents_cannot_heartbeat_or_rotate(self):
+        disabled = self.register(name="disabled")
+        self.disable_agent(disabled["id"])
+        disabled_before = self.internal_agent_state(disabled["id"])
+
+        legacy = self.register(name="legacy-roleless")
+        self.clear_agent_role(legacy["id"])
+        legacy_before = self.internal_agent_state(legacy["id"])
+
+        with patch("app.services.store.generate_agent_token") as generate_token:
+            self.assertIsNone(self.store.heartbeat_agent(disabled["id"]))
+            self.assertIsNone(self.store.rotate_agent_token(disabled["id"]))
+            self.assertIsNone(self.store.heartbeat_agent(legacy["id"]))
+            self.assertIsNone(self.store.rotate_agent_token(legacy["id"]))
+
+        generate_token.assert_not_called()
+        self.assertEqual(self.internal_agent_state(disabled["id"]), disabled_before)
+        self.assertEqual(self.internal_agent_state(legacy["id"]), legacy_before)
+
+        reenabled = self.register(name="disabled", role_tier="verifier")
+        self.assertEqual(reenabled["id"], disabled["id"])
+        self.assertIsNotNone(self.store.heartbeat_agent(disabled["id"]))
+        self.assertIsNotNone(self.store.rotate_agent_token(disabled["id"]))
 
     def create_access_claims(self):
         job_claimed = self.store.create_investigation(
@@ -285,6 +352,20 @@ class MemoryAgentIdentityTests(AgentIdentityStoreContract, unittest.TestCase):
     def clear_agent_token(self, agent_id):
         self.store.agents[agent_id].token_hash = None
 
+    def clear_agent_role(self, agent_id):
+        self.store.agents[agent_id].role_tier = None
+
+    def internal_agent_state(self, agent_id):
+        agent = self.store.agents[agent_id]
+        return (
+            agent.status,
+            agent.last_seen_at,
+            agent.role_tier,
+            agent.token_hash,
+            agent.token_created_at,
+            agent.disabled_at,
+        )
+
 
 class _SQLiteStoreContext:
     def __init__(self):
@@ -318,6 +399,21 @@ class SQLiteAgentIdentityTests(AgentIdentityStoreContract, unittest.TestCase):
     def clear_agent_token(self, agent_id):
         with sqlite3.connect(self.store.db_path) as conn:
             conn.execute("UPDATE agents SET token_hash = NULL WHERE id = ?", (agent_id,))
+
+    def clear_agent_role(self, agent_id):
+        with sqlite3.connect(self.store.db_path) as conn:
+            conn.execute("UPDATE agents SET role_tier = NULL WHERE id = ?", (agent_id,))
+
+    def internal_agent_state(self, agent_id):
+        with sqlite3.connect(self.store.db_path) as conn:
+            return conn.execute(
+                """
+                SELECT status, last_seen_at, role_tier, token_hash,
+                       token_created_at, disabled_at
+                FROM agents WHERE id = ?
+                """,
+                (agent_id,),
+            ).fetchone()
 
     def test_import_agent_preserves_existing_credentials_and_safe_lifecycle_fields(self):
         registration = self.register()
@@ -358,6 +454,59 @@ class SQLiteAgentIdentityTests(AgentIdentityStoreContract, unittest.TestCase):
 
 
 class AgentRegistrationHttpCompatibilityTests(unittest.TestCase):
+    def test_registration_endpoint_rejects_invalid_shapes_without_echoing_values(self):
+        store = MemoryStore()
+        headers = [("Authorization", "Bearer admin-secret")]
+        marker = "sensitive-invalid-agent-value"
+        invalid_payloads = (
+            {
+                "agent_name": marker * 10,
+                "agent_type": "codex",
+                "capabilities": [],
+                "role_tier": "reader",
+            },
+            {
+                "agent_name": "valid",
+                "agent_type": {"unexpected": marker},
+                "capabilities": [],
+                "role_tier": "reader",
+            },
+            {
+                "agent_name": "valid",
+                "agent_type": "codex",
+                "capabilities": marker,
+                "role_tier": "reader",
+            },
+            {
+                "agent_name": "valid",
+                "agent_type": "codex",
+                "capabilities": [[marker]],
+                "role_tier": "reader",
+            },
+        )
+
+        with (
+            patch.object(app_main, "store", store),
+            patch("app.services.store.generate_agent_token") as generate_token,
+            ApiTestServer() as server,
+        ):
+            for payload in invalid_payloads:
+                with self.subTest(payload=payload):
+                    status, body, _ = server.request(
+                        "POST",
+                        "/api/agents/register",
+                        payload=payload,
+                        headers=headers,
+                        env=PRODUCTION_ENV,
+                    )
+                    response = json_payload(body)
+                    self.assertEqual(status, 400)
+                    self.assertIsInstance(response.get("detail"), str)
+                    self.assertNotIn(marker, body.decode("utf-8"))
+
+        generate_token.assert_not_called()
+        self.assertEqual(store.list_agents(), [])
+
     def test_registration_endpoint_serializes_mapping_and_validates_role(self):
         store = MemoryStore()
         headers = [("Authorization", "Bearer admin-secret")]

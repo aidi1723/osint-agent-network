@@ -1,12 +1,197 @@
 import unittest
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Barrier
+from unittest.mock import patch
 
+from app.core.agent_auth import hash_agent_token
 from app.services.store import MemoryStore, SQLiteStore
 
 
+class _MigrationBarrierConnection:
+    def __init__(self, connection, barrier):
+        object.__setattr__(self, "_connection", connection)
+        object.__setattr__(self, "_barrier", barrier)
+        object.__setattr__(self, "_has_write_lock", False)
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+    def __setattr__(self, name, value):
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._connection, name, value)
+
+    def __enter__(self):
+        self._connection.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        return self._connection.__exit__(*args)
+
+    def execute(self, sql, *args):
+        normalized = " ".join(sql.upper().split())
+        if normalized == "BEGIN IMMEDIATE":
+            result = self._connection.execute(sql, *args)
+            self._has_write_lock = True
+            return result
+        if normalized == "PRAGMA TABLE_INFO(AGENTS)" and not self._has_write_lock:
+            self._barrier.wait(timeout=5)
+        return self._connection.execute(sql, *args)
+
+
+def _prepare_legacy_agent_schema(db_path):
+    SQLiteStore(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP INDEX IF EXISTS idx_agents_unique_token_hash")
+        conn.execute("ALTER TABLE agents RENAME TO agents_with_credentials")
+        conn.execute(
+            """
+            CREATE TABLE agents (
+                id TEXT PRIMARY KEY,
+                agent_name TEXT NOT NULL,
+                agent_type TEXT NOT NULL,
+                capabilities_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                registered_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("DROP TABLE agents_with_credentials")
+        conn.execute(
+            "DELETE FROM schema_migrations WHERE version = ?",
+            ("20260710_agent_credentials",),
+        )
+
+
 class SQLiteDedupTests(unittest.TestCase):
+    def test_sqlite_store_invalidates_every_ambiguous_duplicate_agent_token(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "duplicate-agent-token.sqlite")
+            SQLiteStore(db_path)
+            shared_hash = hash_agent_token("shared-token")
+            with sqlite3.connect(db_path) as conn:
+                conn.execute("DROP INDEX idx_agents_unique_token_hash")
+                conn.executemany(
+                    """
+                    INSERT INTO agents (
+                        id, agent_name, agent_type, capabilities_json, status,
+                        registered_at, last_seen_at, role_tier, token_hash,
+                        token_created_at, disabled_at
+                    ) VALUES (?, ?, 'cli', '["company"]', 'ONLINE', ?, ?,
+                              'reader', ?, ?, NULL)
+                    """,
+                    (
+                        (
+                            "duplicate-a",
+                            "duplicate-a",
+                            "2026-07-10T00:00:00+00:00",
+                            "2026-07-10T00:01:00+00:00",
+                            shared_hash,
+                            "2026-07-10T00:00:30+00:00",
+                        ),
+                        (
+                            "duplicate-b",
+                            "duplicate-b",
+                            "2026-07-10T00:02:00+00:00",
+                            "2026-07-10T00:03:00+00:00",
+                            shared_hash,
+                            "2026-07-10T00:02:30+00:00",
+                        ),
+                    ),
+                )
+                conn.execute(
+                    "DELETE FROM schema_migrations WHERE version = ?",
+                    ("20260710_agent_credentials",),
+                )
+
+            first = SQLiteStore(db_path)
+            self.assertIsNone(first.resolve_agent_token("shared-token"))
+            SQLiteStore(db_path)
+
+            with sqlite3.connect(db_path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT id, agent_name, status, role_tier, token_hash, token_created_at
+                    FROM agents ORDER BY id
+                    """
+                ).fetchall()
+                unique_index = conn.execute(
+                    """
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'index' AND name = 'idx_agents_unique_token_hash'
+                    """
+                ).fetchone()
+
+        self.assertEqual([row[1] for row in rows], ["duplicate-a", "duplicate-b"])
+        self.assertTrue(all(row[2] == "ONLINE" and row[3] == "reader" for row in rows))
+        self.assertTrue(all(row[4] is None and row[5] is None for row in rows))
+        self.assertIsNotNone(unique_index)
+
+    def test_sqlite_store_serializes_concurrent_legacy_agent_migrations(self):
+        original_connect = sqlite3.connect
+        with TemporaryDirectory() as tmpdir:
+            for attempt in range(3):
+                with self.subTest(attempt=attempt):
+                    db_path = str(Path(tmpdir) / f"concurrent-{attempt}.sqlite")
+                    _prepare_legacy_agent_schema(db_path)
+                    barrier = Barrier(2)
+
+                    def connect_with_barrier(*args, **kwargs):
+                        return _MigrationBarrierConnection(
+                            original_connect(*args, **kwargs), barrier
+                        )
+
+                    with (
+                        patch(
+                            "app.services.store.sqlite3.connect",
+                            side_effect=connect_with_barrier,
+                        ),
+                        ThreadPoolExecutor(max_workers=2) as executor,
+                    ):
+                        futures = [executor.submit(SQLiteStore, db_path) for _ in range(2)]
+                        stores = [future.result(timeout=10) for future in futures]
+
+                    self.assertEqual(len(stores), 2)
+                    with original_connect(db_path) as conn:
+                        columns = {
+                            row[1] for row in conn.execute("PRAGMA table_info(agents)")
+                        }
+                        marker_count = conn.execute(
+                            """
+                            SELECT COUNT(*) FROM schema_migrations WHERE version = ?
+                            """,
+                            ("20260710_agent_credentials",),
+                        ).fetchone()[0]
+                    self.assertTrue(
+                        {"role_tier", "token_hash", "token_created_at", "disabled_at"}
+                        <= columns
+                    )
+                    self.assertEqual(marker_count, 1)
+
+    def test_failed_agent_migration_does_not_record_success_marker(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "failed-agent-migration.sqlite")
+            _prepare_legacy_agent_schema(db_path)
+
+            with patch(
+                "app.services.store._dedupe_existing_rows",
+                side_effect=RuntimeError("forced migration failure"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "forced migration failure"):
+                    SQLiteStore(db_path)
+
+            with sqlite3.connect(db_path) as conn:
+                marker = conn.execute(
+                    "SELECT 1 FROM schema_migrations WHERE version = ?",
+                    ("20260710_agent_credentials",),
+                ).fetchone()
+        self.assertIsNone(marker)
+
     def test_sqlite_store_migrates_legacy_agent_identity_columns_idempotently(self):
         with TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "legacy-agent.sqlite")
