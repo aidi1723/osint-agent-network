@@ -576,7 +576,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
             task = store.claim_task(
                 agent_id=agent_principal.agent_id,
-                capabilities=list(agent_principal.capabilities),
+                capabilities=payload.get("capabilities"),
             )
             if task is None:
                 self._json({"task": None, "message": "no matching open task"})
@@ -633,7 +633,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
             job = store.claim_job(
                 agent_id=agent_principal.agent_id,
-                capabilities=list(agent_principal.capabilities),
+                capabilities=payload.get("capabilities"),
             )
             if job is None:
                 self._json({"job": None, "message": "no matching waiting job"})

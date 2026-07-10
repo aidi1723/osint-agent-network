@@ -60,6 +60,9 @@ class AgentIdentityStoreContract:
     def clear_agent_role(self, agent_id):
         raise NotImplementedError
 
+    def set_agent_role(self, agent_id, role_tier):
+        raise NotImplementedError
+
     def internal_agent_state(self, agent_id):
         raise NotImplementedError
 
@@ -515,6 +518,78 @@ class AgentIdentityStoreContract:
             self.store.list_jobs(job_task.id)[0]["claimed_by_agent_id"]
         )
 
+    def test_task_claim_rejects_disabled_roleless_invalid_and_ineligible_agents(self):
+        cases = ("disabled", "roleless", "invalid", "tool_agent")
+        for index, agent_state in enumerate(cases):
+            with self.subTest(agent_state=agent_state):
+                role_tier = "tool_agent" if agent_state == "tool_agent" else "reader"
+                registration = self.register(
+                    name=f"task-claim-{agent_state}",
+                    role_tier=role_tier,
+                    capabilities=["domain"],
+                )
+                investigation = self.store.create_investigation(
+                    name=f"Task claim lifecycle {agent_state}",
+                    seed_type="domain",
+                    seed_value=f"task-claim-{index}.example",
+                    strategy_name="quick",
+                )
+                if agent_state == "disabled":
+                    self.disable_agent(registration["id"])
+                elif agent_state == "roleless":
+                    self.clear_agent_role(registration["id"])
+                elif agent_state == "invalid":
+                    self.set_agent_role(registration["id"], "admin")
+
+                self.assertIsNone(
+                    self.store.claim_task(registration["id"], ["domain"])
+                )
+                self.assertEqual(
+                    self.store.get_investigation(investigation.id)["status"], "OPEN"
+                )
+
+    def test_job_claim_rejects_disabled_roleless_and_invalid_agents(self):
+        for index, agent_state in enumerate(("disabled", "roleless", "invalid")):
+            with self.subTest(agent_state=agent_state):
+                registration = self.register(
+                    name=f"job-claim-{agent_state}",
+                    role_tier="reader",
+                    capabilities=["domain"],
+                )
+                investigation = self.store.create_investigation(
+                    name=f"Job claim lifecycle {agent_state}",
+                    seed_type="domain",
+                    seed_value=f"job-claim-{index}.example",
+                    strategy_name="quick",
+                )
+                job_id = f"job-claim-{agent_state}"
+                self.store.replace_jobs(
+                    investigation.id,
+                    [
+                        {
+                            "id": job_id,
+                            "tool_name": "domain",
+                            "target_type": "domain",
+                            "target_value": f"job-claim-{index}.example",
+                            "depth": 0,
+                            "agent_role": "reader",
+                        }
+                    ],
+                )
+                if agent_state == "disabled":
+                    self.disable_agent(registration["id"])
+                elif agent_state == "roleless":
+                    self.clear_agent_role(registration["id"])
+                else:
+                    self.set_agent_role(registration["id"], "admin")
+
+                self.assertIsNone(
+                    self.store.claim_job(registration["id"], ["domain"])
+                )
+                self.assertIsNone(
+                    self.store.list_jobs(investigation.id)[0]["claimed_by_agent_id"]
+                )
+
     def test_tool_agent_claims_only_compatible_tool_jobs(self):
         tool_agent = self.register(
             name="amass-tool-agent",
@@ -675,6 +750,9 @@ class MemoryAgentIdentityTests(AgentIdentityStoreContract, unittest.TestCase):
     def clear_agent_role(self, agent_id):
         self.store.agents[agent_id].role_tier = None
 
+    def set_agent_role(self, agent_id, role_tier):
+        self.store.agents[agent_id].role_tier = role_tier
+
     def internal_agent_state(self, agent_id):
         agent = self.store.agents[agent_id]
         return (
@@ -737,6 +815,12 @@ class SQLiteAgentIdentityTests(AgentIdentityStoreContract, unittest.TestCase):
     def clear_agent_role(self, agent_id):
         with sqlite3.connect(self.store.db_path) as conn:
             conn.execute("UPDATE agents SET role_tier = NULL WHERE id = ?", (agent_id,))
+
+    def set_agent_role(self, agent_id, role_tier):
+        with sqlite3.connect(self.store.db_path) as conn:
+            conn.execute(
+                "UPDATE agents SET role_tier = ? WHERE id = ?", (role_tier, agent_id)
+            )
 
     def internal_agent_state(self, agent_id):
         with sqlite3.connect(self.store.db_path) as conn:
@@ -1219,7 +1303,15 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                     continue
                 with self.subTest(action=action, wrong_role=wrong_role):
                     denied = self.register(wrong_role)
-                    investigation = self.claimed_task(denied)
+                    if wrong_role == "tool_agent":
+                        investigation = self.store.create_investigation(
+                            name=f"Denied tool task {self.counter}",
+                            seed_type="domain",
+                            seed_value=f"denied-tool-{self.counter}.example",
+                            strategy_name="quick",
+                        )
+                    else:
+                        investigation = self.claimed_task(denied)
                     path = path_template.format(task_id=investigation.id)
                     status, _body = self.post(
                         path,
@@ -1227,6 +1319,8 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                         denied["agent_token"],
                     )
                     self.assertEqual(status, 403)
+                    if wrong_role == "tool_agent":
+                        self.store.cancel_task(investigation.id)
 
     def test_unknown_disabled_legacy_null_and_management_credentials_are_401(self):
         registration = self.register("reporter")
@@ -1941,6 +2035,137 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
         self.assertIsNone(
             self.store.list_jobs(job_task.id)[0]["claimed_by_agent_id"]
         )
+
+    def test_http_task_claim_uses_requested_capability_narrowing(self):
+        reader = self.register("reader", ["email", "domain"])
+        email_task = self.store.create_investigation(
+            name="Earlier email task",
+            seed_type="email",
+            seed_value="earlier@example.com",
+            strategy_name="quick",
+        )
+        domain_task = self.store.create_investigation(
+            name="Later domain task",
+            seed_type="domain",
+            seed_value="later.example",
+            strategy_name="quick",
+        )
+
+        status, body = self.post(
+            "/api/agent/tasks/claim",
+            {"capabilities": ["domain"]},
+            reader["agent_token"],
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["task"]["id"], domain_task.id)
+        self.assertEqual(self.store.get_investigation(email_task.id)["status"], "OPEN")
+
+        status, body = self.post(
+            "/api/agent/tasks/claim",
+            {"capabilities": ["phone"]},
+            reader["agent_token"],
+        )
+        self.assertEqual(status, 200)
+        self.assertIsNone(body["task"])
+        self.assertEqual(self.store.get_investigation(email_task.id)["status"], "OPEN")
+
+    def test_http_job_claim_uses_requested_capability_narrowing(self):
+        reader = self.register("reader", ["email", "domain"])
+        investigation = self.store.create_investigation(
+            name="Requested job narrowing",
+            seed_type="domain",
+            seed_value="job-narrowing.example",
+            strategy_name="quick",
+        )
+        self.store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": "earlier-email-job",
+                    "tool_name": "email",
+                    "target_type": "email",
+                    "target_value": "earlier@example.com",
+                    "depth": 0,
+                    "agent_role": "reader",
+                },
+                {
+                    "id": "later-domain-job",
+                    "tool_name": "domain",
+                    "target_type": "domain",
+                    "target_value": "job-narrowing.example",
+                    "depth": 0,
+                    "agent_role": "reader",
+                },
+            ],
+        )
+
+        status, body = self.post(
+            "/api/agent/jobs/claim",
+            {"capabilities": ["domain"]},
+            reader["agent_token"],
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["job"]["id"], "later-domain-job")
+        jobs = {job["id"]: job for job in self.store.list_jobs(investigation.id)}
+        self.assertIsNone(jobs["earlier-email-job"]["claimed_by_agent_id"])
+
+        status, body = self.post(
+            "/api/agent/jobs/claim",
+            {"capabilities": ["phone"]},
+            reader["agent_token"],
+        )
+        self.assertEqual(status, 200)
+        self.assertIsNone(body["job"])
+        jobs = {job["id"]: job for job in self.store.list_jobs(investigation.id)}
+        self.assertIsNone(jobs["earlier-email-job"]["claimed_by_agent_id"])
+
+    def test_http_claim_omitted_and_empty_capabilities_keep_registered_fallback(self):
+        payloads = ({}, {"capabilities": []})
+        for index, payload in enumerate(payloads):
+            with self.subTest(endpoint="task", payload=payload):
+                reader = self.register("reader", ["domain"])
+                investigation = self.store.create_investigation(
+                    name=f"Task capability fallback {index}",
+                    seed_type="domain",
+                    seed_value=f"task-fallback-{index}.example",
+                    strategy_name="quick",
+                )
+                status, body = self.post(
+                    "/api/agent/tasks/claim", payload, reader["agent_token"]
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(body["task"]["id"], investigation.id)
+
+        for index, payload in enumerate(payloads):
+            with self.subTest(endpoint="job", payload=payload):
+                reader = self.register("reader", ["domain"])
+                investigation = self.store.create_investigation(
+                    name=f"Job capability fallback {index}",
+                    seed_type="domain",
+                    seed_value=f"job-fallback-{index}.example",
+                    strategy_name="quick",
+                )
+                job_id = f"job-fallback-{index}"
+                self.store.replace_jobs(
+                    investigation.id,
+                    [
+                        {
+                            "id": job_id,
+                            "tool_name": "domain",
+                            "target_type": "domain",
+                            "target_value": f"job-fallback-{index}.example",
+                            "depth": 0,
+                            "agent_role": "reader",
+                        }
+                    ],
+                )
+                status, body = self.post(
+                    "/api/agent/jobs/claim", payload, reader["agent_token"]
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(body["job"]["id"], job_id)
 
     def test_legacy_shared_token_requires_explicit_opt_in_and_registered_body_identity(self):
         reporter = self.register("reporter")

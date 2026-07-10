@@ -359,10 +359,14 @@ class MemoryStore:
                 and agent_output_contract_allows(job.output_contract, action)
             )
 
-    def claim_task(self, agent_id: str, capabilities: list[str]) -> dict | None:
+    def claim_task(self, agent_id: str, capabilities: object) -> dict | None:
         with self.lock:
             agent = self.agents.get(agent_id)
-            if agent is None:
+            if (
+                agent is None
+                or agent.disabled_at is not None
+                or agent.role_tier not in {"reader", "verifier", "reporter"}
+            ):
                 return None
             capability_set = _narrow_agent_capabilities(
                 agent.capabilities, capabilities
@@ -381,10 +385,14 @@ class MemoryStore:
                 return self._investigation_detail(investigation.id)
             return None
 
-    def claim_job(self, agent_id: str, capabilities: list[str]) -> dict | None:
+    def claim_job(self, agent_id: str, capabilities: object) -> dict | None:
         with self.lock:
             agent = self.agents.get(agent_id)
-            if agent is None:
+            if (
+                agent is None
+                or agent.disabled_at is not None
+                or agent.role_tier not in AGENT_ROLE_TIERS
+            ):
                 return None
             capability_set = _narrow_agent_capabilities(
                 agent.capabilities, capabilities
@@ -1639,10 +1647,14 @@ class SQLiteStore:
                 and agent_output_contract_allows(job_claim["output_contract"], action)
             )
 
-    def claim_task(self, agent_id: str, capabilities: list[str]) -> dict | None:
+    def claim_task(self, agent_id: str, capabilities: object) -> dict | None:
         with self.lock, closing(self._connect()) as conn, conn:
             agent_row = conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)).fetchone()
-            if agent_row is None:
+            if (
+                agent_row is None
+                or agent_row["disabled_at"] is not None
+                or agent_row["role_tier"] not in {"reader", "verifier", "reporter"}
+            ):
                 return None
             agent = _agent_from_row(agent_row)
             capability_set = _narrow_agent_capabilities(
@@ -1674,10 +1686,14 @@ class SQLiteStore:
             )
         return self.get_investigation(target["id"])
 
-    def claim_job(self, agent_id: str, capabilities: list[str]) -> dict | None:
+    def claim_job(self, agent_id: str, capabilities: object) -> dict | None:
         with self.lock, closing(self._connect()) as conn, conn:
             agent_row = conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)).fetchone()
-            if agent_row is None:
+            if (
+                agent_row is None
+                or agent_row["disabled_at"] is not None
+                or agent_row["role_tier"] not in AGENT_ROLE_TIERS
+            ):
                 return None
             agent = _agent_from_row(agent_row)
             capability_set = _narrow_agent_capabilities(
