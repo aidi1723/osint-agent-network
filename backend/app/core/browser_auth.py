@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import hmac
 import secrets
 import threading
@@ -50,9 +51,7 @@ class BrowserSessionManager:
         self._lock = threading.Lock()
 
     def login(self, supplied_token: str) -> LoginResult | None:
-        if not isinstance(supplied_token, str) or not isinstance(self._admin_token, str):
-            return None
-        if not hmac.compare_digest(self._admin_token, supplied_token):
+        if not self._secrets_match(self._admin_token, supplied_token):
             return None
 
         session_id = self._token_urlsafe(32)
@@ -73,15 +72,23 @@ class BrowserSessionManager:
         )
 
     def session_payload(self, headers: Mapping[str, str]) -> dict[str, object]:
-        resolved = self._resolve_session(headers)
-        if resolved is None:
+        session_id = self._validated_session_id(headers)
+        if session_id is None:
             return {"authenticated": False}
-        _session_id, session = resolved
-        return {
-            "authenticated": True,
-            "role": "administrator",
-            "csrf_token": session.csrf_token,
-        }
+
+        timestamp = self._now()
+        with self._lock:
+            session = self._live_session(session_id, timestamp)
+            if session is None:
+                return {"authenticated": False}
+            csrf_token = self._fresh_csrf_token(session.csrf_token)
+            session.csrf_token = csrf_token
+            session.last_seen_at = timestamp
+            return {
+                "authenticated": True,
+                "role": "administrator",
+                "csrf_token": csrf_token,
+            }
 
     def authorize_session(
         self,
@@ -89,20 +96,27 @@ class BrowserSessionManager:
         allowed_origins: Iterable[str],
         mutation: bool,
     ) -> BrowserPrincipal | None:
-        resolved = self._resolve_session(headers)
-        if resolved is None:
+        session_id = self._validated_session_id(headers)
+        if session_id is None:
             return None
-        session_id, session = resolved
 
+        supplied_csrf: str | None = None
         if mutation:
             origin = self._header(headers, "origin")
             supplied_csrf = self._header(headers, "x-csrf-token")
             if origin is None or origin not in allowed_origins:
                 return None
-            if supplied_csrf is None or not hmac.compare_digest(
+
+        timestamp = self._now()
+        with self._lock:
+            session = self._live_session(session_id, timestamp)
+            if session is None:
+                return None
+            if mutation and not self._secrets_match(
                 session.csrf_token, supplied_csrf
             ):
                 return None
+            session.last_seen_at = timestamp
 
         return BrowserPrincipal(role="administrator", session_id=session_id)
 
@@ -117,9 +131,7 @@ class BrowserSessionManager:
             expires="Thu, 01 Jan 1970 00:00:00 GMT",
         )
 
-    def _resolve_session(
-        self, headers: Mapping[str, str]
-    ) -> tuple[str, _Session] | None:
+    def _validated_session_id(self, headers: Mapping[str, str]) -> str | None:
         parsed_session_id = self._parsed_session_id(headers)
         session_ids, malformed = self._cookie_session_ids(headers)
         if (
@@ -128,18 +140,23 @@ class BrowserSessionManager:
             or session_ids != [parsed_session_id]
         ):
             return None
+        return parsed_session_id
 
-        session_id = parsed_session_id
-        timestamp = self._now()
-        with self._lock:
-            session = self._sessions.get(session_id)
-            if session is None:
-                return None
-            if timestamp >= session.expires_at:
-                self._sessions.pop(session_id, None)
-                return None
-            session.last_seen_at = timestamp
-            return session_id, session
+    def _live_session(self, session_id: str, timestamp: float) -> _Session | None:
+        session = self._sessions.get(session_id)
+        if session is None:
+            return None
+        if timestamp >= session.expires_at:
+            self._sessions.pop(session_id, None)
+            return None
+        return session
+
+    def _fresh_csrf_token(self, previous_token: str) -> str:
+        for _attempt in range(3):
+            candidate = self._token_urlsafe(32)
+            if not self._secrets_match(previous_token, candidate):
+                return candidate
+        raise RuntimeError("unable to generate a fresh CSRF token")
 
     def _parsed_session_id(self, headers: Mapping[str, str]) -> str | None:
         raw_cookie = self._header(headers, "cookie")
@@ -208,3 +225,15 @@ class BrowserSessionManager:
             if key.casefold() == expected and isinstance(value, str):
                 return value
         return None
+
+    @staticmethod
+    def _secrets_match(expected: object, supplied: object) -> bool:
+        if not isinstance(expected, str) or not isinstance(supplied, str):
+            return False
+        expected_digest = hashlib.sha256(
+            expected.encode("utf-8", errors="surrogatepass")
+        ).digest()
+        supplied_digest = hashlib.sha256(
+            supplied.encode("utf-8", errors="surrogatepass")
+        ).digest()
+        return hmac.compare_digest(expected_digest, supplied_digest)
