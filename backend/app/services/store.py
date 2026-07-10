@@ -29,6 +29,8 @@ from app.core.registry import default_tool_registry
 
 
 _AGENT_TOKEN_GENERATION_ATTEMPTS = 5
+_AGENT_ACCESS_INVESTIGATION_STATUSES = frozenset({"CLAIMED", "RUNNING"})
+_AGENT_ACCESS_JOB_STATUSES = frozenset({"CLAIMED", "RUNNING"})
 
 
 @dataclass
@@ -314,13 +316,17 @@ class MemoryStore:
             ):
                 return False
             investigation = self.investigations.get(investigation_id)
-            if investigation is None:
+            if (
+                investigation is None
+                or investigation.status not in _AGENT_ACCESS_INVESTIGATION_STATUSES
+            ):
                 return False
             if investigation.claimed_by_agent_id == agent_id:
                 return True
             return any(
                 job.investigation_id == investigation_id
                 and job.claimed_by_agent_id == agent_id
+                and job.status in _AGENT_ACCESS_JOB_STATUSES
                 for job in self.jobs.values()
             )
 
@@ -1447,19 +1453,33 @@ class SQLiteStore:
             investigation_claim = conn.execute(
                 """
                 SELECT 1 FROM investigations
-                WHERE id = ? AND claimed_by_agent_id = ?
+                WHERE id = ? AND claimed_by_agent_id = ? AND status IN (?, ?)
                 """,
-                (investigation_id, agent_id),
+                (
+                    investigation_id,
+                    agent_id,
+                    *_AGENT_ACCESS_INVESTIGATION_STATUSES,
+                ),
             ).fetchone()
             if investigation_claim is not None:
                 return True
             job_claim = conn.execute(
                 """
-                SELECT 1 FROM jobs
-                WHERE investigation_id = ? AND claimed_by_agent_id = ?
+                SELECT 1 FROM jobs AS jobs
+                JOIN investigations AS investigations
+                  ON investigations.id = jobs.investigation_id
+                WHERE jobs.investigation_id = ?
+                  AND jobs.claimed_by_agent_id = ?
+                  AND jobs.status IN (?, ?)
+                  AND investigations.status IN (?, ?)
                 LIMIT 1
                 """,
-                (investigation_id, agent_id),
+                (
+                    investigation_id,
+                    agent_id,
+                    *_AGENT_ACCESS_JOB_STATUSES,
+                    *_AGENT_ACCESS_INVESTIGATION_STATUSES,
+                ),
             ).fetchone()
             return job_claim is not None
 

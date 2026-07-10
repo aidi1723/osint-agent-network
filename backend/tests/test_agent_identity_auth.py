@@ -139,7 +139,7 @@ class AgentIdentityStoreContract:
             first["id"],
         )
 
-    def test_investigation_access_requires_exact_role_and_investigation_or_job_claim(self):
+    def create_access_claims(self):
         job_claimed = self.store.create_investigation(
             name="Job claimed", seed_type="domain", seed_value="example.com", strategy_name="standard"
         )
@@ -165,8 +165,14 @@ class AgentIdentityStoreContract:
         registration = self.register(capabilities=["company"])
         agent_id = registration["id"]
 
-        self.store.claim_job(agent_id, ["reader"])
-        self.store.claim_task(agent_id, ["company"])
+        claimed_job = self.store.claim_job(agent_id, ["reader"])
+        claimed_investigation = self.store.claim_task(agent_id, ["company"])
+        self.assertIsNotNone(claimed_job)
+        self.assertIsNotNone(claimed_investigation)
+        return agent_id, claimed, job_claimed, unrelated
+
+    def test_investigation_access_requires_exact_role_and_matching_claim(self):
+        agent_id, claimed, job_claimed, unrelated = self.create_access_claims()
 
         self.assertTrue(self.store.agent_has_investigation_access(agent_id, claimed.id, "reader"))
         self.assertTrue(self.store.agent_has_investigation_access(agent_id, job_claimed.id, "reader"))
@@ -176,6 +182,86 @@ class AgentIdentityStoreContract:
         self.assertFalse(self.store.agent_has_investigation_access("missing", claimed.id, "reader"))
         self.disable_agent(agent_id)
         self.assertFalse(self.store.agent_has_investigation_access(agent_id, claimed.id, "reader"))
+
+    def test_investigation_claim_grants_access_only_while_parent_is_active(self):
+        agent_id, claimed, _job_claimed, _unrelated = self.create_access_claims()
+
+        for active_status in ("CLAIMED", "RUNNING"):
+            with self.subTest(active_status=active_status):
+                self.store.set_investigation_status(claimed.id, active_status)
+                self.assertTrue(
+                    self.store.agent_has_investigation_access(agent_id, claimed.id, "reader")
+                )
+
+        for inactive_status in (
+            "COMPLETED",
+            "CANCELLED",
+            "ARCHIVED",
+            "OPEN",
+            "FAILED",
+            "BLOCKED",
+        ):
+            with self.subTest(inactive_status=inactive_status):
+                self.store.set_investigation_status(claimed.id, inactive_status)
+                self.assertFalse(
+                    self.store.agent_has_investigation_access(agent_id, claimed.id, "reader")
+                )
+
+    def test_job_claim_requires_active_job_and_active_parent(self):
+        agent_id, _claimed, job_claimed, unrelated = self.create_access_claims()
+
+        for active_status in ("CLAIMED", "RUNNING"):
+            with self.subTest(active_job_status=active_status):
+                self.store.update_job_status("reader-job", active_status)
+                self.assertTrue(
+                    self.store.agent_has_investigation_access(
+                        agent_id, job_claimed.id, "reader"
+                    )
+                )
+                self.assertFalse(
+                    self.store.agent_has_investigation_access(agent_id, unrelated.id, "reader")
+                )
+
+        for inactive_status in (
+            "COMPLETED",
+            "FAILED",
+            "CANCELLED",
+            "QUEUED",
+            "WAITING_AGENT",
+        ):
+            with self.subTest(inactive_job_status=inactive_status):
+                self.store.update_job_status("reader-job", inactive_status)
+                self.assertFalse(
+                    self.store.agent_has_investigation_access(
+                        agent_id, job_claimed.id, "reader"
+                    )
+                )
+
+        self.store.update_job_status("reader-job", "CLAIMED")
+        for parent_status in ("CLAIMED", "RUNNING"):
+            with self.subTest(active_parent_status=parent_status):
+                self.store.set_investigation_status(job_claimed.id, parent_status)
+                self.assertTrue(
+                    self.store.agent_has_investigation_access(
+                        agent_id, job_claimed.id, "reader"
+                    )
+                )
+
+        for parent_status in (
+            "COMPLETED",
+            "CANCELLED",
+            "ARCHIVED",
+            "OPEN",
+            "FAILED",
+            "BLOCKED",
+        ):
+            with self.subTest(inactive_parent_status=parent_status):
+                self.store.set_investigation_status(job_claimed.id, parent_status)
+                self.assertFalse(
+                    self.store.agent_has_investigation_access(
+                        agent_id, job_claimed.id, "reader"
+                    )
+                )
 
 
 class _MemoryStoreContext:
