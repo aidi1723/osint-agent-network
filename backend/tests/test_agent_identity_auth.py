@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from backend.tests.test_agent_auth import ApiTestServer, PRODUCTION_ENV, json_payload
 from app import main as app_main
-from app.core.agent_auth import hash_agent_token
+from app.core.agent_auth import generate_agent_token, hash_agent_token
 from app.services.store import MemoryStore, SQLiteStore
 
 
@@ -69,6 +69,12 @@ class AgentIdentityStoreContract:
             {"agent_name": "valid", "agent_type": "codex", "capabilities": [" padded "]},
             {"agent_name": "valid", "agent_type": "codex", "capabilities": ["c" * 129]},
             {"agent_name": "valid", "agent_type": "codex", "capabilities": ["c"] * 65},
+            {"agent_name": "\ud800", "agent_type": "codex", "capabilities": []},
+            {"agent_name": "\udc00", "agent_type": "codex", "capabilities": []},
+            {"agent_name": "valid", "agent_type": "\ud800", "capabilities": []},
+            {"agent_name": "valid", "agent_type": "\udc00", "capabilities": []},
+            {"agent_name": "valid", "agent_type": "codex", "capabilities": ["\ud800"]},
+            {"agent_name": "valid", "agent_type": "codex", "capabilities": ["\udc00"]},
         )
         with patch("app.services.store.generate_agent_token") as generate_token:
             for registration in invalid_registrations:
@@ -454,6 +460,44 @@ class SQLiteAgentIdentityTests(AgentIdentityStoreContract, unittest.TestCase):
 
 
 class AgentRegistrationHttpCompatibilityTests(unittest.TestCase):
+    def test_registration_endpoint_rejects_lone_surrogates_without_mutation(self):
+        store = MemoryStore()
+        headers = [("Authorization", "Bearer admin-secret")]
+        invalid_payloads = (
+            {"agent_name": "\ud800", "agent_type": "codex", "capabilities": []},
+            {"agent_name": "\udc00", "agent_type": "codex", "capabilities": []},
+            {"agent_name": "valid", "agent_type": "\ud800", "capabilities": []},
+            {"agent_name": "valid", "agent_type": "\udc00", "capabilities": []},
+            {"agent_name": "valid", "agent_type": "codex", "capabilities": ["\ud800"]},
+            {"agent_name": "valid", "agent_type": "codex", "capabilities": ["\udc00"]},
+        )
+
+        with (
+            patch.object(app_main, "store", store),
+            patch(
+                "app.services.store.generate_agent_token",
+                wraps=generate_agent_token,
+            ) as token_generator,
+            ApiTestServer() as server,
+        ):
+            for invalid in invalid_payloads:
+                with self.subTest(invalid=invalid):
+                    status, body, _ = server.request(
+                        "POST",
+                        "/api/agents/register",
+                        payload={**invalid, "role_tier": "reader"},
+                        headers=headers,
+                        env=PRODUCTION_ENV,
+                    )
+                    response = json_payload(body)
+                    self.assertEqual(status, 400)
+                    self.assertIsInstance(response.get("detail"), str)
+                    self.assertNotIn("\\ud800", body.decode("utf-8"))
+                    self.assertNotIn("\\udc00", body.decode("utf-8"))
+
+        token_generator.assert_not_called()
+        self.assertEqual(store.list_agents(), [])
+
     def test_registration_endpoint_rejects_invalid_shapes_without_echoing_values(self):
         store = MemoryStore()
         headers = [("Authorization", "Bearer admin-secret")]

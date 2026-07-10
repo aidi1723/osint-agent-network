@@ -41,6 +41,7 @@ def validate_agent_registration(
         or not item
         or item != item.strip()
         or len(item) > MAX_AGENT_CAPABILITY_LENGTH
+        or not _is_strict_utf8(item)
         for item in capabilities
     ):
         raise ValueError("invalid agent capabilities")
@@ -53,9 +54,18 @@ def _validate_identity_field(value: object, error: str, maximum_length: int) -> 
         or not value
         or value != value.strip()
         or len(value) > maximum_length
+        or not _is_strict_utf8(value)
     ):
         raise ValueError(error)
     return value
+
+
+def _is_strict_utf8(value: str) -> bool:
+    try:
+        value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 class AgentRegistration(dict):
