@@ -199,8 +199,80 @@ class SafeHttpValidationTests(unittest.TestCase):
 
         self.assertEqual(connector_calls, [])
 
+    def test_rejects_nine_duplicate_raw_answers_before_connector(self):
+        connector_calls = []
+
+        with self.assertRaisesRegex(InvalidHttpTarget, "^too many resolved addresses$"):
+            safe_fetch(
+                "https://example.com/",
+                timeout_seconds=1,
+                max_bytes=10,
+                resolver=resolver_for(*([PUBLIC_IP] * 9)),
+                connector=lambda *args: connector_calls.append(args),
+            )
+
+        self.assertEqual(connector_calls, [])
+
+    def test_resolver_worker_consumes_at_most_nine_answers_and_recovers(self):
+        yielded = 0
+        generator_closed = threading.Event()
+
+        def resolver(host, port, *args, **kwargs):
+            def excessive_answers():
+                nonlocal yielded
+                try:
+                    while True:
+                        yielded += 1
+                        if yielded > 9:
+                            raise AssertionError("resolver generator was over-consumed")
+                        yield (socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC_IP, port))
+                finally:
+                    generator_closed.set()
+
+            return excessive_answers()
+
+        with self.assertRaisesRegex(InvalidHttpTarget, "^too many resolved addresses$"):
+            safe_fetch(
+                "https://example.com/",
+                timeout_seconds=1,
+                max_bytes=10,
+                resolver=resolver,
+                connector=lambda *args: self.fail("connector must not run"),
+            )
+
+        self.assertEqual(yielded, 9)
+        self.assertTrue(generator_closed.wait(0.1))
+        recovered = safe_fetch(
+            "https://example.com/",
+            timeout_seconds=1,
+            max_bytes=10,
+            resolver=resolver_for(PUBLIC_IP),
+            connector=lambda *args: (FakeResponse(body=b"recovered"), FakeConnection()),
+        )
+        self.assertEqual(recovered.body, b"recovered")
+
+    def test_accepts_exactly_eight_valid_raw_answers(self):
+        addresses = tuple(f"8.8.8.{index}" for index in range(1, 9))
+
+        target = validate_public_url("https://example.com/", resolver=resolver_for(*addresses))
+
+        self.assertEqual(len(target.validated_ips), 8)
+
+    def test_expired_deadline_never_invokes_or_enqueues_resolver(self):
+        calls = []
+
+        with self.assertRaisesRegex(SafeHttpError, "^HTTP fetch timed out$"):
+            validate_public_url(
+                "https://example.com/",
+                resolver=lambda *args, **kwargs: calls.append(args) or resolver_for(PUBLIC_IP)(*args),
+                deadline=time.monotonic() - 1,
+            )
+        time.sleep(0.02)
+
+        self.assertEqual(calls, [])
+
     def test_excessive_answers_with_private_member_remain_blocked(self):
-        addresses = tuple(f"8.8.8.{index}" for index in range(1, 10)) + ("10.0.0.1",)
+        addresses = tuple(f"8.8.8.{index}" for index in range(1, 8)) + ("10.0.0.1", "8.8.8.8")
 
         with self.assertRaises(BlockedNetworkTarget):
             validate_public_url("https://example.com/", resolver=resolver_for(*addresses))

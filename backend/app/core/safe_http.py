@@ -59,7 +59,8 @@ Resolver = Callable[..., list[tuple]]
 Connector = Callable[[ValidatedTarget, float, Mapping[str, str]], tuple[object, object]]
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
-MAX_VALIDATED_ADDRESSES = 8  # Bound DNS fan-out and sequential connection failover.
+MAX_RESOLVED_ADDRESSES = 8  # Bound raw DNS fan-out before deduplication.
+MAX_VALIDATED_ADDRESSES = 8  # Bound sequential connection failover.
 _RESOLVER_WORKERS = 4
 _RESOLVER_QUEUE: queue.Queue = queue.Queue(maxsize=32)
 
@@ -69,8 +70,7 @@ def _resolver_worker() -> None:
         future, resolver, hostname, port = _RESOLVER_QUEUE.get()
         if future.set_running_or_notify_cancel():
             try:
-                answers = resolver(hostname, port, type=socket.SOCK_STREAM)
-                future.set_result(list(answers))
+                future.set_result(_collect_resolver_answers(resolver, hostname, port))
             except BaseException as exc:
                 future.set_exception(exc)
         _RESOLVER_QUEUE.task_done()
@@ -263,18 +263,40 @@ def connect_pinned(
 
 def _resolve_answers(resolver: Resolver, hostname: str, port: int, deadline: float | None) -> list[tuple]:
     if deadline is None:
-        return list(resolver(hostname, port, type=socket.SOCK_STREAM))
+        return _collect_resolver_answers(resolver, hostname, port)
 
+    remaining = _remaining(deadline)
     future: Future = Future()
     try:
         _RESOLVER_QUEUE.put_nowait((future, resolver, hostname, port))
     except queue.Full:
+        future.cancel()
         raise SafeHttpError("HTTP fetch timed out") from None
     try:
-        return future.result(timeout=_remaining(deadline))
+        remaining = min(remaining, _remaining(deadline))
+        return future.result(timeout=remaining)
     except TimeoutError:
         future.cancel()
         raise SafeHttpError("HTTP fetch timed out") from None
+    except BaseException:
+        future.cancel()
+        raise
+
+
+def _collect_resolver_answers(resolver: Resolver, hostname: str, port: int) -> list[tuple]:
+    answers = resolver(hostname, port, type=socket.SOCK_STREAM)
+    collected = []
+    try:
+        for answer in answers:
+            collected.append(answer)
+            if len(collected) > MAX_RESOLVED_ADDRESSES:
+                resolved = [ipaddress.ip_address(item[4][0]) for item in collected]
+                if any(not _is_global_address(address) for address in resolved):
+                    raise BlockedNetworkTarget("network target is blocked")
+                raise InvalidHttpTarget("too many resolved addresses")
+    finally:
+        _close(answers)
+    return collected
 
 
 def _remaining(deadline: float) -> float:
