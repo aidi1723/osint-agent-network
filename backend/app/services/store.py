@@ -753,6 +753,13 @@ class MemoryStore:
             for job in self.jobs.values():
                 if job.status not in {"WAITING_AGENT", "QUEUED"}:
                     continue
+                investigation = self.investigations.get(job.investigation_id)
+                if (
+                    investigation is None
+                    or investigation.status
+                    not in _AGENT_ACCESS_INVESTIGATION_STATUSES
+                ):
+                    continue
                 if agent.role_tier == "tool_agent":
                     if job.agent_role != "tool_agent" or job.tool_name not in capability_set:
                         continue
@@ -2526,6 +2533,7 @@ class SQLiteStore:
 
     def claim_task(self, agent_id: str, capabilities: object) -> dict | None:
         with self.lock, closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
             agent_row = conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)).fetchone()
             if (
                 agent_row is None
@@ -2538,7 +2546,11 @@ class SQLiteStore:
                 agent["capabilities"], capabilities
             )
             rows = conn.execute(
-                "SELECT * FROM investigations WHERE status = ? ORDER BY created_at ASC",
+                """
+                SELECT * FROM investigations
+                WHERE status = ? AND claimed_by_agent_id IS NULL
+                ORDER BY created_at ASC
+                """,
                 ("OPEN",),
             ).fetchall()
             target = None
@@ -2549,14 +2561,23 @@ class SQLiteStore:
             if target is None:
                 return None
             now = _now()
-            conn.execute(
+            updated = conn.execute(
                 """
                 UPDATE investigations
                 SET status = ?, claimed_by_agent_id = ?, claimed_by_agent_name = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND status = ? AND claimed_by_agent_id IS NULL
                 """,
-                ("CLAIMED", agent_id, agent["agent_name"], now, target["id"]),
+                (
+                    "CLAIMED",
+                    agent_id,
+                    agent["agent_name"],
+                    now,
+                    target["id"],
+                    "OPEN",
+                ),
             )
+            if updated.rowcount != 1:
+                return None
             conn.execute(
                 "UPDATE agents SET last_seen_at = ? WHERE id = ?",
                 (now, agent_id),
@@ -2565,6 +2586,7 @@ class SQLiteStore:
 
     def claim_job(self, agent_id: str, capabilities: object) -> dict | None:
         with self.lock, closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
             agent_row = conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)).fetchone()
             if (
                 agent_row is None
@@ -2578,11 +2600,18 @@ class SQLiteStore:
             )
             rows = conn.execute(
                 """
-                SELECT * FROM jobs
-                WHERE status IN (?, ?)
-                ORDER BY rowid ASC
+                SELECT jobs.* FROM jobs
+                JOIN investigations ON investigations.id = jobs.investigation_id
+                WHERE jobs.status IN (?, ?)
+                  AND jobs.claimed_by_agent_id IS NULL
+                  AND investigations.status IN (?, ?)
+                ORDER BY jobs.rowid ASC
                 """,
-                ("WAITING_AGENT", "QUEUED"),
+                (
+                    "WAITING_AGENT",
+                    "QUEUED",
+                    *_AGENT_ACCESS_INVESTIGATION_STATUSES,
+                ),
             ).fetchall()
             target = None
             for row in rows:
@@ -2601,15 +2630,34 @@ class SQLiteStore:
             if target is None:
                 return None
             now = _now()
-            conn.execute(
+            updated = conn.execute(
                 """
                 UPDATE jobs
                 SET status = ?, claimed_by_agent_id = ?, claimed_by_agent_name = ?,
                     claimed_at = ?, heartbeat_at = ?
                 WHERE id = ?
+                  AND status IN (?, ?)
+                  AND claimed_by_agent_id IS NULL
+                  AND EXISTS (
+                      SELECT 1 FROM investigations
+                      WHERE investigations.id = jobs.investigation_id
+                        AND investigations.status IN (?, ?)
+                  )
                 """,
-                ("CLAIMED", agent_id, agent["agent_name"], now, now, target["id"]),
+                (
+                    "CLAIMED",
+                    agent_id,
+                    agent["agent_name"],
+                    now,
+                    now,
+                    target["id"],
+                    "WAITING_AGENT",
+                    "QUEUED",
+                    *_AGENT_ACCESS_INVESTIGATION_STATUSES,
+                ),
             )
+            if updated.rowcount != 1:
+                return None
             conn.execute("UPDATE agents SET last_seen_at = ? WHERE id = ?", (now, agent_id))
             self._touch_investigation(conn, target["investigation_id"], status="RUNNING")
             updated = conn.execute("SELECT * FROM jobs WHERE id = ?", (target["id"],)).fetchone()

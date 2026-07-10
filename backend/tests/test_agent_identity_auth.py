@@ -29,6 +29,47 @@ from app.services.store import MemoryStore, SQLiteStore
 VALID_TIERS = ("reader", "verifier", "reporter", "tool_agent")
 
 
+class _ClaimBarrierConnection:
+    def __init__(self, connection, barrier):
+        object.__setattr__(self, "_connection", connection)
+        object.__setattr__(self, "_barrier", barrier)
+        object.__setattr__(self, "_has_write_lock", False)
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+    def __setattr__(self, name, value):
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._connection, name, value)
+
+    def __enter__(self):
+        self._connection.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        return self._connection.__exit__(*args)
+
+    def execute(self, sql, *args):
+        normalized = " ".join(sql.upper().split())
+        if normalized == "BEGIN IMMEDIATE":
+            result = self._connection.execute(sql, *args)
+            self._has_write_lock = True
+            return result
+        claim_selection = (
+            normalized.startswith(
+                "SELECT * FROM INVESTIGATIONS WHERE STATUS = ?"
+            )
+            or normalized.startswith(
+                "SELECT JOBS.* FROM JOBS JOIN INVESTIGATIONS ON "
+            )
+        )
+        if claim_selection and not self._has_write_lock:
+            self._barrier.wait(timeout=5)
+        return self._connection.execute(sql, *args)
+
+
 class AgentIdentityStoreContract:
     def make_store(self):
         raise NotImplementedError
@@ -102,6 +143,7 @@ class AgentIdentityStoreContract:
                 }
             ],
         )
+        self.store.set_investigation_status(investigation.id, "CLAIMED")
         claimed = self.store.claim_job(registration["id"], ["amass"])
         self.assertEqual(claimed["id"], job_id)
         payload = {
@@ -323,6 +365,7 @@ class AgentIdentityStoreContract:
                 }
             ],
         )
+        self.store.set_investigation_status(job_claimed.id, "CLAIMED")
         registration = self.register(capabilities=["company", "reader"])
         agent_id = registration["id"]
 
@@ -507,6 +550,7 @@ class AgentIdentityStoreContract:
                 }
             ],
         )
+        self.store.set_investigation_status(job_task.id, "CLAIMED")
 
         self.assertIsNone(
             self.store.claim_task(registration["id"], ["domain"])
@@ -579,6 +623,7 @@ class AgentIdentityStoreContract:
                         }
                     ],
                 )
+                self.store.set_investigation_status(investigation.id, "CLAIMED")
                 if agent_state == "disabled":
                     self.disable_agent(registration["id"])
                 elif agent_state == "roleless":
@@ -592,6 +637,121 @@ class AgentIdentityStoreContract:
                 self.assertIsNone(
                     self.store.list_jobs(investigation.id)[0]["claimed_by_agent_id"]
                 )
+
+    def test_job_claim_rejects_inactive_parent_investigations(self):
+        cases = (
+            ("reader", "domain_reader", ["domain_reader"]),
+            ("tool_agent", "amass", ["amass"]),
+        )
+        inactive_statuses = (
+            "OPEN",
+            "CANCELLED",
+            "COMPLETED",
+            "ARCHIVED",
+            "FAILED",
+            "BLOCKED",
+        )
+        for parent_status in inactive_statuses:
+            for job_status in ("QUEUED", "WAITING_AGENT"):
+                for agent_role, tool_name, capabilities in cases:
+                    with self.subTest(
+                        parent_status=parent_status,
+                        job_status=job_status,
+                        agent_role=agent_role,
+                    ):
+                        role_slug = agent_role.replace("_", "-")
+                        job_status_slug = job_status.lower().replace("_", "-")
+                        suffix = f"{parent_status.lower()}-{job_status_slug}-{role_slug}"
+                        registration = self.register(
+                            name=f"inactive-parent-{suffix}",
+                            role_tier=agent_role,
+                            capabilities=capabilities,
+                        )
+                        investigation = self.store.create_investigation(
+                            name=f"Inactive parent {suffix}",
+                            seed_type="domain",
+                            seed_value=f"{suffix}.example",
+                            strategy_name="quick",
+                        )
+                        job_id = f"inactive-parent-job-{suffix}"
+                        self.store.replace_jobs(
+                            investigation.id,
+                            [
+                                {
+                                    "id": job_id,
+                                    "tool_name": tool_name,
+                                    "target_type": "domain",
+                                    "target_value": f"{suffix}.example",
+                                    "depth": 0,
+                                    "status": job_status,
+                                    "agent_role": agent_role,
+                                }
+                            ],
+                        )
+                        self.store.set_investigation_status(
+                            investigation.id, parent_status
+                        )
+
+                        self.assertIsNone(
+                            self.store.claim_job(registration["id"], capabilities)
+                        )
+                        stored_job = self.store.list_jobs(investigation.id)[0]
+                        self.assertEqual(stored_job["status"], job_status)
+                        self.assertIsNone(stored_job["claimed_by_agent_id"])
+
+    def test_job_claim_allows_active_parent_investigations(self):
+        cases = (
+            ("reader", "domain_reader", ["domain_reader"]),
+            ("tool_agent", "amass", ["amass"]),
+        )
+        for parent_status in ("CLAIMED", "RUNNING"):
+            for job_status in ("QUEUED", "WAITING_AGENT"):
+                for agent_role, tool_name, capabilities in cases:
+                    with self.subTest(
+                        parent_status=parent_status,
+                        job_status=job_status,
+                        agent_role=agent_role,
+                    ):
+                        role_slug = agent_role.replace("_", "-")
+                        job_status_slug = job_status.lower().replace("_", "-")
+                        suffix = f"{parent_status.lower()}-{job_status_slug}-{role_slug}"
+                        registration = self.register(
+                            name=f"active-parent-{suffix}",
+                            role_tier=agent_role,
+                            capabilities=capabilities,
+                        )
+                        investigation = self.store.create_investigation(
+                            name=f"Active parent {suffix}",
+                            seed_type="domain",
+                            seed_value=f"{suffix}.example",
+                            strategy_name="quick",
+                        )
+                        job_id = f"active-parent-job-{suffix}"
+                        self.store.replace_jobs(
+                            investigation.id,
+                            [
+                                {
+                                    "id": job_id,
+                                    "tool_name": tool_name,
+                                    "target_type": "domain",
+                                    "target_value": f"{suffix}.example",
+                                    "depth": 0,
+                                    "status": job_status,
+                                    "agent_role": agent_role,
+                                }
+                            ],
+                        )
+                        self.store.set_investigation_status(
+                            investigation.id, parent_status
+                        )
+
+                        claimed = self.store.claim_job(
+                            registration["id"], capabilities
+                        )
+
+                        self.assertIsNotNone(claimed)
+                        self.assertEqual(claimed["id"], job_id)
+                        self.assertEqual(claimed["claimed_by_agent_id"], registration["id"])
 
     def test_tool_agent_claims_only_compatible_tool_jobs(self):
         tool_agent = self.register(
@@ -634,6 +794,7 @@ class AgentIdentityStoreContract:
                 },
             ],
         )
+        self.store.set_investigation_status(investigation.id, "CLAIMED")
 
         claimed = self.store.claim_job(tool_agent["id"], ["amass"])
 
@@ -681,6 +842,7 @@ class AgentIdentityStoreContract:
                 },
             ],
         )
+        self.store.set_investigation_status(investigation.id, "CLAIMED")
 
         self.assertIsNone(
             self.store.claim_job(reporter["id"], ["enterprise_intel_agent"])
@@ -977,6 +1139,7 @@ class AgentIdentityStoreContract:
                 }
             ],
         )
+        self.store.set_investigation_status(investigation.id, "CLAIMED")
         claimed_job = self.store.claim_job(registration["id"], ["reader_task"])
         self.assertEqual(claimed_job["id"], "atomic-completed-reader-job")
         self.store.update_job_status("atomic-completed-reader-job", "COMPLETED")
@@ -1151,6 +1314,112 @@ class SQLiteAgentIdentityTests(AgentIdentityStoreContract, unittest.TestCase):
 
     def tool_output_submission_stores(self):
         return (self.store, SQLiteStore(self.store.db_path))
+
+    def test_claim_task_is_atomic_across_independent_sqlite_stores(self):
+        agents = (
+            self.register(name="task-racer-a", capabilities=["domain"]),
+            self.register(name="task-racer-b", capabilities=["domain"]),
+        )
+        investigation = self.store.create_investigation(
+            name="Atomic task claim",
+            seed_type="domain",
+            seed_value="atomic-task-claim.example",
+            strategy_name="quick",
+        )
+        stores = (self.store, SQLiteStore(self.store.db_path))
+        barrier = Barrier(2)
+        original_connect = sqlite3.connect
+
+        def connect_with_barrier(*args, **kwargs):
+            return _ClaimBarrierConnection(
+                original_connect(*args, **kwargs), barrier
+            )
+
+        with (
+            patch(
+                "app.services.store.sqlite3.connect",
+                side_effect=connect_with_barrier,
+            ),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            futures = [
+                executor.submit(stores[index].claim_task, agents[index]["id"], ["domain"])
+                for index in range(2)
+            ]
+            results = [future.result(timeout=10) for future in futures]
+
+        winners = [result for result in results if result is not None]
+        self.assertEqual(len(winners), 1)
+        persisted = self.store.get_investigation(investigation.id)
+        self.assertEqual(
+            persisted["claimed_by_agent_id"], winners[0]["claimed_by_agent_id"]
+        )
+
+    def test_claim_job_is_atomic_across_independent_sqlite_stores(self):
+        agents = (
+            self.register(
+                name="job-racer-a",
+                capabilities=["domain_reader"],
+            ),
+            self.register(
+                name="job-racer-b",
+                capabilities=["domain_reader"],
+            ),
+        )
+        investigation = self.store.create_investigation(
+            name="Atomic job claim",
+            seed_type="domain",
+            seed_value="atomic-job-claim.example",
+            strategy_name="quick",
+        )
+        job_id = "atomic-reader-job"
+        self.store.replace_jobs(
+            investigation.id,
+            [
+                {
+                    "id": job_id,
+                    "tool_name": "domain_reader",
+                    "target_type": "domain",
+                    "target_value": "atomic-job-claim.example",
+                    "depth": 0,
+                    "agent_role": "reader",
+                }
+            ],
+        )
+        self.store.set_investigation_status(investigation.id, "CLAIMED")
+        stores = (self.store, SQLiteStore(self.store.db_path))
+        barrier = Barrier(2)
+        original_connect = sqlite3.connect
+
+        def connect_with_barrier(*args, **kwargs):
+            return _ClaimBarrierConnection(
+                original_connect(*args, **kwargs), barrier
+            )
+
+        with (
+            patch(
+                "app.services.store.sqlite3.connect",
+                side_effect=connect_with_barrier,
+            ),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            futures = [
+                executor.submit(
+                    stores[index].claim_job,
+                    agents[index]["id"],
+                    ["domain_reader"],
+                )
+                for index in range(2)
+            ]
+            results = [future.result(timeout=10) for future in futures]
+
+        winners = [result for result in results if result is not None]
+        self.assertEqual(len(winners), 1)
+        persisted = self.store.list_jobs(investigation.id)[0]
+        self.assertEqual(persisted["id"], job_id)
+        self.assertEqual(
+            persisted["claimed_by_agent_id"], winners[0]["claimed_by_agent_id"]
+        )
 
     @contextmanager
     def tool_output_storage_failure(self):
@@ -1766,6 +2035,7 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                 }
             ],
         )
+        self.store.set_investigation_status(investigation.id, "CLAIMED")
         claimed = self.store.claim_job(reader["id"], ["reader_task"])
         self.assertEqual(claimed["id"], "reader-job")
 
@@ -1822,6 +2092,7 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                 }
             ],
         )
+        self.store.set_investigation_status(investigation.id, "CLAIMED")
         status, claim_body = self.post(
             "/api/agent/jobs/claim",
             {"capabilities": ["reader"]},
@@ -1869,6 +2140,7 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                 }
             ],
         )
+        self.store.set_investigation_status(investigation.id, "CLAIMED")
         status, _body = self.post(
             "/api/agent/jobs/claim",
             {"capabilities": ["reader"]},
@@ -1911,6 +2183,7 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                 }
             ],
         )
+        self.store.set_investigation_status(investigation.id, "CLAIMED")
         status, _body = self.post(
             "/api/agent/jobs/claim",
             {"capabilities": ["enterprise_intel_agent"]},
@@ -1949,6 +2222,7 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                 }
             ],
         )
+        self.store.set_investigation_status(investigation.id, "CLAIMED")
         status, body = self.post(
             "/api/agent/jobs/claim", {}, tool_agent["agent_token"]
         )
@@ -2022,6 +2296,7 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                         }
                     ],
                 )
+                self.store.set_investigation_status(investigation.id, "CLAIMED")
                 claimed = self.store.claim_job(tool_agent["id"], ["amass"])
                 self.assertEqual(claimed["id"], job_id)
                 payload = {
@@ -2065,6 +2340,7 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                 }
             ],
         )
+        self.store.set_investigation_status(investigation.id, "CLAIMED")
         claimed = self.store.claim_job(tool_agent["id"], ["amass"])
         self.assertEqual(claimed["id"], "concurrent-http-amass-job")
         payload = {
@@ -2301,6 +2577,7 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                 }
             ],
         )
+        self.store.set_investigation_status(job_investigation.id, "CLAIMED")
         status, body = self.post(
             "/api/agent/jobs/claim",
             {"agent_id": tool_agent["id"], "capabilities": ["external_tool"]},
@@ -2350,6 +2627,7 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                 }
             ],
         )
+        self.store.set_investigation_status(job_task.id, "CLAIMED")
 
         status, task_body = self.post(
             "/api/agent/tasks/claim",
@@ -2433,6 +2711,7 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                 },
             ],
         )
+        self.store.set_investigation_status(investigation.id, "CLAIMED")
 
         status, body = self.post(
             "/api/agent/jobs/claim",
@@ -2495,6 +2774,7 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                         }
                     ],
                 )
+                self.store.set_investigation_status(investigation.id, "CLAIMED")
                 status, body = self.post(
                     "/api/agent/jobs/claim", payload, reader["agent_token"]
                 )
