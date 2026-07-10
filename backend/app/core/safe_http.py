@@ -221,8 +221,6 @@ def _literal_address(hostname: str) -> ipaddress.IPv4Address | ipaddress.IPv6Add
         return ipaddress.ip_address(hostname)
     except ValueError:
         pass
-    if not hostname or any(char not in "0123456789." for char in hostname):
-        return None
     try:
         return ipaddress.IPv4Address(socket.inet_aton(hostname))
     except OSError:

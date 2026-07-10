@@ -105,6 +105,8 @@ class SafeHttpValidationTests(unittest.TestCase):
             "http://127.1/",
             "http://2130706433/",
             "http://0177.0.0.1/",
+            "http://0x7f000001/",
+            "http://0x7f.1/",
         )
         for url in private_urls:
             calls = []
@@ -129,6 +131,18 @@ class SafeHttpValidationTests(unittest.TestCase):
         self.assertEqual(target.validated_ips, (PUBLIC_IP,))
         self.assertEqual(calls, [])
 
+    def test_public_hexadecimal_literal_is_canonicalized_without_resolver(self):
+        calls = []
+
+        target = validate_public_url(
+            "https://0x08080808/path",
+            resolver=lambda *args, **kwargs: calls.append(args) or resolver_for("1.1.1.1")(*args),
+        )
+
+        self.assertEqual(target.original_hostname, "0x08080808")
+        self.assertEqual(target.validated_ips, (PUBLIC_IP,))
+        self.assertEqual(calls, [])
+
     def test_lazy_resolver_failure_is_stable_and_non_reflective(self):
         def lazy_answers():
             yield (socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC_IP, 443))
@@ -149,7 +163,14 @@ class SafeHttpValidationTests(unittest.TestCase):
                     )
 
     def test_normalization_rejects_non_global_and_legacy_ip_literals(self):
-        for url in ("http://10.0.0.1/", "http://[::1]/", "http://127.1/", "http://2130706433/"):
+        for url in (
+            "http://10.0.0.1/",
+            "http://[::1]/",
+            "http://127.1/",
+            "http://2130706433/",
+            "http://0x7f000001/",
+            "http://0x7f.1/",
+        ):
             with self.subTest(url=url):
                 with self.assertRaises(NormalizationError):
                     normalize_target("url", url)

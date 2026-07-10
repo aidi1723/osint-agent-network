@@ -85,8 +85,6 @@ def normalize_target(target_type: str, value: str) -> str:
 
 
 def _legacy_ipv4_address(hostname: str) -> ipaddress.IPv4Address | None:
-    if not hostname or any(char not in "0123456789." for char in hostname):
-        return None
     try:
         return ipaddress.IPv4Address(socket.inet_aton(hostname))
     except OSError:
