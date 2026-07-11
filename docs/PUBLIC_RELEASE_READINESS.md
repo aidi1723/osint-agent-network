@@ -4,13 +4,14 @@ This repository is prepared for public release under GNU GPL v3.
 
 Latest engineering closure: [STAGE_CLOSURE_2026-07-07.md](STAGE_CLOSURE_2026-07-07.md).
 
-Previous verified baseline (the current security-hardening branch remains `implemented` until the full verification gate is rerun):
+Latest verified baseline (2026-07-11 security-hardening closure):
 
-- `bash scripts/verify.sh` passed.
-- Backend unittest discovery: `411 tests OK`.
+- `bash scripts/verify.sh` passed before and after integration.
+- Backend unittest discovery: `731 tests OK`.
 - Regression smoke: `4` cases / `0` failed.
-- Frontend helper checks, Vitest `9` tests, and production build passed.
-- Added-line privacy scan before the latest push produced no matches.
+- Frontend helper checks, Vitest `45` tests, and the Vite 8.1.4 production build passed.
+- Official-registry production and full npm audits each reported `0` vulnerabilities.
+- Public release self-scan and final personal-path scan produced no findings.
 
 ## GPLv3 release gate
 
