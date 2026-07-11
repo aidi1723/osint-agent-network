@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { compactGraphLabel, nextSelectedNode } from "./graph-labels";
 
@@ -11,7 +11,7 @@ describe("compactGraphLabel", () => {
     expect(compactGraphLabel("短中文", 12)).toBe("短中文");
   });
 
-  it("counts Unicode code points instead of UTF-16 code units", () => {
+  it("counts Unicode graphemes instead of UTF-16 code units", () => {
     expect(compactGraphLabel("A😀BC", 3)).toBe("A😀…");
   });
 
@@ -26,6 +26,30 @@ describe("compactGraphLabel", () => {
   it("handles exact and minimum display limits", () => {
     expect(compactGraphLabel("Exact", 5)).toBe("Exact");
     expect(compactGraphLabel("Long", 1)).toBe("…");
+  });
+
+  it("rejects non-finite and fractional grapheme limits", () => {
+    expect(() => compactGraphLabel("Label", Number.NaN)).toThrow(RangeError);
+    expect(() => compactGraphLabel("Label", Number.POSITIVE_INFINITY)).toThrow(RangeError);
+    expect(() => compactGraphLabel("Label", 2.5)).toThrow(RangeError);
+  });
+
+  it("loads and preserves grapheme clusters when Intl.Segmenter is unavailable", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(Intl, "Segmenter");
+    vi.resetModules();
+    Object.defineProperty(Intl, "Segmenter", { configurable: true, value: undefined });
+    try {
+      const fallbackModule = await import("./graph-labels");
+      expect(fallbackModule.compactGraphLabel("e\u0301xy", 2)).toBe("e\u0301…");
+      expect(fallbackModule.compactGraphLabel("✈️AB", 2)).toBe("✈️…");
+      expect(fallbackModule.compactGraphLabel("👍🏽AB", 2)).toBe("👍🏽…");
+      expect(fallbackModule.compactGraphLabel("👨‍👩‍👧‍👦AB", 2)).toBe("👨‍👩‍👧‍👦…");
+      expect(fallbackModule.compactGraphLabel("🇨🇳AB", 2)).toBe("🇨🇳…");
+    } finally {
+      if (descriptor) Object.defineProperty(Intl, "Segmenter", descriptor);
+      else Reflect.deleteProperty(Intl, "Segmenter");
+      vi.resetModules();
+    }
   });
 });
 
