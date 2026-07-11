@@ -21,21 +21,42 @@ GENERATED_DEPENDENCY_DIRS = frozenset(
 )
 RUNTIME_SUFFIXES = frozenset({".db", ".sqlite", ".sqlite3"})
 RUNTIME_PATH_PREFIXES = (
+    "backups/",
     "data/artifacts/",
+    "data/backups/",
     "data/jobs/",
     "data/screenshots/",
     "data/snapshots/",
     "frontend/dist/",
+    "logs/",
     "reports/",
+    "runtime/",
 )
+RUNTIME_DATABASE_RE = re.compile(
+    r"(?:\.db|\.sqlite|\.sqlite3)(?:-(?:wal|shm|journal))?$", re.IGNORECASE
+)
+RUNTIME_BACKUP_RE = re.compile(r"(?:\.bak|\.backup|\.old|~)$", re.IGNORECASE)
+RUNTIME_LOG_RE = re.compile(r"\.log(?:\.\d+)?$", re.IGNORECASE)
 PRIVATE_NETWORK_RE = re.compile(
     r"(?<![0-9.])(?:10(?:\.[0-9]{1,3}){3}|172\.(?:1[6-9]|2[0-9]|3[01])(?:\.[0-9]{1,3}){2}|192\.168(?:\.[0-9]{1,3}){2})(?![0-9.])"
 )
 PERSONAL_PATH_RE = re.compile(
-    r"(?<![A-Za-z0-9_])/(?P<home>home|Users)/(?P<user>[A-Za-z0-9._-]+)/"
+    r"(?<!\w)/(?P<home>home|users)/(?P<user>[\w.<>-]+)(?:/|(?=$))",
+    re.IGNORECASE,
 )
-CREDENTIAL_ASSIGNMENT_RE = re.compile(
-    r"(?:^|[\s'\"`])(?P<name>(?:[A-Z][A-Z0-9_]*_(?:TOKEN|PASSWORD|PASSWD|SECRET|API_KEY|AUTHORIZATION|COOKIE)|TOKEN|PASSWORD|PASSWD|SECRET|API_KEY|AUTHORIZATION|COOKIE))\s*=\s*(?P<value>[^#]+?)\s*$"
+ASSIGNMENT_START_RE = re.compile(
+    r"(?:^|[\s,{;])(?:export\s+)?(?P<quote>['\"]?)(?P<key>[A-Za-z_][\w.-]*)(?P=quote)\s*(?P<separator>=|:(?!-))\s*",
+    re.IGNORECASE,
+)
+BEARER_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])Bearer\s+(?P<value>[^\s'\"`,;)\]}]+)", re.IGNORECASE
+)
+PRIVATE_KEY_RE = re.compile(
+    r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----", re.IGNORECASE
+)
+URL_USERINFO_RE = re.compile(
+    r"\bhttps?://(?P<username>[A-Za-z0-9._~-]+):(?P<password>[A-Za-z0-9._~-]+)@",
+    re.IGNORECASE,
 )
 PLACEHOLDER_VALUES = frozenset(
     {
@@ -49,7 +70,17 @@ PLACEHOLDER_VALUES = frozenset(
         "true",
         "xxx",
         "your-token",
+        "your_token_here",
     }
+)
+ANGLE_PLACEHOLDER_RE = re.compile(
+    r"(?:<redacted>|<(?=[A-Za-z0-9_-]*(?:token|password|passwd|secret|api-key|authorization|cookie))[A-Za-z0-9_-]+>)",
+    re.IGNORECASE,
+)
+GENERATED_TOKEN_RE = re.compile(
+    r"\$\((?:openssl\s+rand\s+(?:-hex|-base64)\s+\d+|uuidgen)\)"
+    r"(?:['\"]?\s*>>?\s*[^\s]+)?",
+    re.IGNORECASE,
 )
 
 # Exact source fixtures and policy examples may describe forbidden values without
@@ -57,14 +88,7 @@ PLACEHOLDER_VALUES = frozenset(
 # source line, so moved lines remain valid but changed or adjacent lines do not.
 SELF_SCAN_ALLOWLIST: frozenset[tuple[str, str, str]] = frozenset(
     {
-        ("backend/tests/test_healthcheck_script.py", "PUBLIC_CREDENTIAL_VALUE", "4868556b195cb2dc9945a2cb9428269b76052da3030fd7370bc132e871803c00"),
-        ("backend/tests/test_public_release_check.py", "PUBLIC_PERSONAL_PATH", "a4979e261bbb89eff270cd17c74d301765a0289894d39c5459683414436e8499"),
-        ("backend/tests/test_public_release_check.py", "PUBLIC_PRIVATE_NETWORK", "bc1c869cfcaf049634a0f0ac114e0295ee701892afb7ce2817a483449dfd5a86"),
-        ("backend/tests/test_public_release_check.py", "PUBLIC_PRIVATE_NETWORK", "5c8e4502e364ae27a4e70fd4593d9e3c7966953c46ce59f3df6ad1d3ab8dc2a2"),
-        ("backend/tests/test_public_release_check.py", "PUBLIC_PRIVATE_NETWORK", "07281272aec8164806527f3103c3e868a6ab2314d844a0eda57d5a9b031eb1dc"),
-        ("backend/tests/test_public_release_check.py", "PUBLIC_PRIVATE_NETWORK", "7c7f595bd95b0e752de46ed4ce9dbec2136abe4af26531553e21f10a17c6f9fe"),
-        ("backend/tests/test_public_release_check.py", "PUBLIC_CREDENTIAL_VALUE", "a37ec874dd9f0a21ed88f37c90e27237713b71766e53fdb8a12ab5d4cd67a0bb"),
-        ("backend/tests/test_public_release_check.py", "PUBLIC_PERSONAL_PATH", "7301613e71d19a59f35cd43234fc4879cec45f338bf2dce147616c39c9604158"),
+        ("docs/N100_DEPLOYMENT_RUNBOOK.md", "PUBLIC_CREDENTIAL_VALUE", "58eee1816a7f98ea69283d327a1a435bb007e71d36f6e248f190f70fdca422c0"),
         ("backend/tests/test_report_export.py", "PUBLIC_PERSONAL_PATH", "eaf2495d0d7da16fced50337c73544172b1ad9c13d91574f1290e45976013d24"),
         ("backend/tests/test_report_export.py", "PUBLIC_PERSONAL_PATH", "0b235e1705399d615707d3509b5e87c1dcb8bd82b37ed8f67f9c9cc094baa40c"),
         ("backend/tests/test_safe_http.py", "PUBLIC_PRIVATE_NETWORK", "d830cd3a19a2874a470fa5fb2e166aa00cccd114ca12e46bf7295ba6f3bcda2c"),
@@ -84,12 +108,19 @@ SELF_SCAN_ALLOWLIST: frozenset[tuple[str, str, str]] = frozenset(
         ("docs/superpowers/plans/2026-07-10-security-hardening.md", "PUBLIC_PERSONAL_PATH", "eec3b2985ebb2a61e346a61cf359d9af83522124daa99dda22c57555918d9a6e"),
         ("docs/superpowers/plans/2026-07-10-security-hardening.md", "PUBLIC_PRIVATE_NETWORK", "eec3b2985ebb2a61e346a61cf359d9af83522124daa99dda22c57555918d9a6e"),
         ("docs/superpowers/plans/2026-07-10-security-hardening.md", "PUBLIC_PERSONAL_PATH", "ffaae90d211e141c8a885984cb869e1638d16d678fc51ce43e9cfa9e79349776"),
-        ("docs/superpowers/plans/2026-07-10-security-hardening.md", "PUBLIC_CREDENTIAL_VALUE", "f84e9d82d95f2d0086f8d2c93e66195536b28cc12290cf02dafadd55cb17c2ce"),
+        ("docs/superpowers/plans/2026-07-10-security-hardening.md", "PUBLIC_CREDENTIAL_VALUE", "145998fab18dfdc17bab8148777f121cf95f00ae7ca47ff30a7431bb92547810"),
+        ("docs/superpowers/plans/2026-07-10-security-hardening.md", "PUBLIC_CREDENTIAL_VALUE", "1b2874b8c012ce36ff1297bcd0f8d9f009c68b61567fee546e1805d2b88036ad"),
+        ("docs/superpowers/plans/2026-07-10-security-hardening.md", "PUBLIC_CREDENTIAL_VALUE", "404b8f849a7c3dfaf4759b8bd19ead961884972c2ca460881af6047d6489e4b0"),
+        ("docs/superpowers/plans/2026-07-10-security-hardening.md", "PUBLIC_CREDENTIAL_VALUE", "6d96b7b5b3b0a0186e8b32f982e362d32ef960966d523a7c69392e3ca15d399e"),
+        ("docs/superpowers/plans/2026-07-10-security-hardening.md", "PUBLIC_CREDENTIAL_VALUE", "c07f7f5e0a1b9fcf8e5adb6668ba6e8eed00ccedb3b1f33be94ae53f441e5fbb"),
+        ("docs/superpowers/plans/2026-07-10-security-hardening.md", "PUBLIC_CREDENTIAL_VALUE", "c70e0010fd4d2865f535b6fd7b8b6f4a1cdfe2b73a4a03836aa47dd3d606cf61"),
+        ("docs/superpowers/plans/2026-07-10-security-hardening.md", "PUBLIC_CREDENTIAL_VALUE", "dbb54072756e8bcc2d35aab16cd24407ed026aacfeb670fc43bccfd732eb6c41"),
         ("docs/superpowers/plans/2026-07-10-security-hardening.md", "PUBLIC_PERSONAL_PATH", "8e63ddaeaa11c75773763e2f8c9f1f048f620eb6b3241a822c82609c68b16e91"),
         ("docs/superpowers/plans/2026-07-10-security-hardening.md", "PUBLIC_PERSONAL_PATH", "f6fd0a0bd7038033de901e8351cca8fb93ab5f664ddc6540c90b68e173cddc78"),
         ("docs/superpowers/plans/2026-07-10-security-hardening.md", "PUBLIC_PERSONAL_PATH", "323b505f31ff017233ce2671724499baf90244b9aa0e03f52010ddc4a8a0534a"),
         ("docs/superpowers/plans/2026-07-10-security-hardening.md", "PUBLIC_PERSONAL_PATH", "e18e93a10eb49a76f98110ae971e8d07b140d2307260a06318db20822efc8e17"),
         ("docs/superpowers/plans/2026-07-10-security-hardening.md", "PUBLIC_PERSONAL_PATH", "f6ac32f009360730bb7bd76a61d4f3602153c415fb009e560fbad52f64b27521"),
+        ("scripts/healthcheck.sh", "PUBLIC_CREDENTIAL_VALUE", "f80543686d8a036596e05da4ed5c9600922737b01101a19f24205ffdb0132c4e"),
     }
 )
 
@@ -158,12 +189,14 @@ def _safe_regular_file(root: Path, relative: Path) -> bool:
 def scan_public_text(relative_path: Path | str, text: str) -> list[ReleaseFinding]:
     path = Path(relative_path).as_posix()
     findings: list[ReleaseFinding] = []
-    for line_number, line in enumerate(text.splitlines(), start=1):
+    lines = text.splitlines()
+    for line_number, line in enumerate(lines, start=1):
         for match in PERSONAL_PATH_RE.finditer(line):
-            if match.group("home") == "home" and match.group("user") == "osint":
+            if match.group(0).startswith("/home/osint") and match.group("user") == "osint":
                 continue
-            remainder = line[match.end() :]
-            if re.match(r"^\.\.\.(?:$|[\s`'\"),.;:])", remainder):
+            if _named_home_placeholder(match):
+                continue
+            if _ellipsized_home_placeholder(line, match):
                 continue
             _append_finding(
                 findings,
@@ -183,8 +216,22 @@ def scan_public_text(relative_path: Path | str, text: str) -> list[ReleaseFindin
                     "Private network address is not allowed in a public release.",
                     line,
                 )
-        for match in CREDENTIAL_ASSIGNMENT_RE.finditer(line):
-            if not _placeholder_credential(match.group("value")):
+        for key, separator, value in _credential_assignments(line):
+            if separator == ":" and _block_scalar_indicator(value):
+                block_value = _yaml_block_value(lines, line_number - 1)
+                if block_value and not _placeholder_credential(block_value):
+                    _append_finding(
+                        findings,
+                        path,
+                        line_number,
+                        "PUBLIC_CREDENTIAL_VALUE",
+                        "Credential assignment must use an explicit placeholder.",
+                        line,
+                    )
+                continue
+            if _source_code_expression(path, value):
+                continue
+            if not _placeholder_credential(value):
                 _append_finding(
                     findings,
                     path,
@@ -193,7 +240,141 @@ def scan_public_text(relative_path: Path | str, text: str) -> list[ReleaseFindin
                     "Credential assignment must use an explicit placeholder.",
                     line,
                 )
+        if PRIVATE_KEY_RE.search(line):
+            _append_finding(
+                findings,
+                path,
+                line_number,
+                "PUBLIC_PRIVATE_KEY",
+                "Private-key material is not allowed in a public release.",
+                line,
+            )
+        if URL_USERINFO_RE.search(line):
+            _append_finding(
+                findings,
+                path,
+                line_number,
+                "PUBLIC_URL_CREDENTIAL",
+                "URL user information is not allowed in a public release.",
+                line,
+            )
+        bearer = BEARER_RE.search(line)
+        if (
+            bearer
+            and not _source_bearer_expression(path, bearer.group("value"))
+            and _bearer_candidate(bearer.group("value"))
+            and not _placeholder_credential(bearer.group("value"))
+        ):
+            _append_finding(
+                findings,
+                path,
+                line_number,
+                "PUBLIC_CREDENTIAL_VALUE",
+                "Bearer credential must use an explicit placeholder.",
+                line,
+            )
     return sorted(findings, key=_finding_key)
+
+
+def _ellipsized_home_placeholder(line: str, match: re.Match[str]) -> bool:
+    matched = match.group(0)
+    if not matched.endswith("/"):
+        return False
+    remainder = line[match.end() :]
+    return bool(re.match(r"^\.\.\.(?:$|[\s`'\"),.;:])", remainder))
+
+
+def _named_home_placeholder(match: re.Match[str]) -> bool:
+    user = match.group("user")
+    return user.startswith("<") and user.endswith(">")
+
+
+def _credential_assignments(line: str) -> list[tuple[str, str, str]]:
+    matches = list(ASSIGNMENT_START_RE.finditer(line))
+    assignments = []
+    for index, match in enumerate(matches):
+        key = match.group("key")
+        if not _credential_key(key):
+            continue
+        if match.group("separator") == ":":
+            prefix = line[: match.start()].strip()
+            if prefix and not prefix.endswith(("{", ",")):
+                continue
+        value_end = matches[index + 1].start() if index + 1 < len(matches) else len(line)
+        value = line[match.end() : value_end].strip()
+        assignments.append((key, match.group("separator"), value))
+    return assignments
+
+
+def _credential_key(key: str) -> bool:
+    lowered = key.casefold().replace("-", "_").replace(".", "_")
+    exact = {
+        "api_key",
+        "apikey",
+        "authorization",
+        "cookie",
+        "password",
+        "passwd",
+        "private_key",
+        "secret",
+        "token",
+    }
+    suffixes = (
+        "_api_key",
+        "_authorization",
+        "_cookie",
+        "_password",
+        "_passwd",
+        "_private_key",
+        "_secret",
+        "_token",
+    )
+    if "-" in key and lowered == "tough_cookie":
+        return False
+    return lowered in exact or lowered.endswith(suffixes)
+
+
+def _source_code_expression(path: str, value: str) -> bool:
+    source_suffixes = {".cjs", ".go", ".java", ".js", ".jsx", ".mjs", ".py", ".rs", ".ts", ".tsx"}
+    return Path(path).suffix.casefold() in source_suffixes
+
+
+def _source_bearer_expression(path: str, value: str) -> bool:
+    source_suffixes = {".cjs", ".go", ".java", ".js", ".jsx", ".mjs", ".py", ".rs", ".ts", ".tsx"}
+    return Path(path).suffix.casefold() in source_suffixes and "{" in value
+
+
+def _bearer_candidate(value: str) -> bool:
+    normalized = value.strip()
+    if _placeholder_credential(normalized):
+        return True
+    return (
+        normalized.startswith(("ghp_", "github_pat_", "sk-"))
+        or normalized.count(".") == 2
+        or (
+            len(normalized) >= 20
+            and any(character.isdigit() for character in normalized)
+            and any(character in ".-_" for character in normalized)
+        )
+    )
+
+
+def _block_scalar_indicator(value: str) -> bool:
+    return _normalize_credential_value(value) in {"|", "|-", "|+", ">", ">-", ">+"}
+
+
+def _yaml_block_value(lines: list[str], header_index: int) -> str:
+    header = lines[header_index]
+    header_indent = len(header) - len(header.lstrip())
+    values = []
+    for line in lines[header_index + 1 :]:
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= header_indent:
+            break
+        values.append(line.strip())
+    return "\n".join(values)
 
 
 def _append_finding(
@@ -205,8 +386,14 @@ def _append_finding(
     source_line: str,
 ) -> None:
     signature = hashlib.sha256(source_line.encode("utf-8")).hexdigest()
-    if (path, rule_id, signature) not in SELF_SCAN_ALLOWLIST:
-        findings.append(ReleaseFinding(rule_id, path, line, summary))
+    if (path, rule_id, signature) in SELF_SCAN_ALLOWLIST:
+        return
+    if any(
+        finding.path == path and finding.line == line and finding.rule_id == rule_id
+        for finding in findings
+    ):
+        return
+    findings.append(ReleaseFinding(rule_id, path, line, summary))
 
 
 def _valid_ipv4(value: str) -> bool:
@@ -217,31 +404,48 @@ def _valid_ipv4(value: str) -> bool:
 
 
 def _placeholder_credential(value: str) -> bool:
-    normalized = value.strip().strip("'\"`,;").strip()
-    lowered = normalized.lower()
+    normalized = _normalize_credential_value(value)
+    lowered = normalized.casefold()
     if not normalized:
         return True
-    if re.search(r"<[^>]+>", normalized):
+    if re.fullmatch(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})", normalized):
         return True
-    if normalized.startswith("${") and normalized.endswith("}"):
+    if ANGLE_PLACEHOLDER_RE.fullmatch(normalized):
         return True
-    if normalized.startswith("{{") and normalized.endswith("}}"):
+    if re.fullmatch(
+        r"\{(?=[A-Za-z0-9_]*(?:TOKEN|PASSWORD|PASSWD|SECRET|API_KEY|AUTHORIZATION|COOKIE))[A-Za-z_][A-Za-z0-9_]*\}",
+        normalized,
+        re.IGNORECASE,
+    ):
         return True
-    if normalized.startswith("$") and re.fullmatch(r"\$[A-Za-z_][A-Za-z0-9_]*", normalized):
+    if GENERATED_TOKEN_RE.fullmatch(normalized):
         return True
-    if normalized.startswith("$(") and normalized.endswith(")"):
-        return True
-    if "$(" in normalized and ")" in normalized:
-        return True
-    first_word = lowered.split(maxsplit=1)[0].strip("'\"`.,;:)")
-    if first_word in PLACEHOLDER_VALUES:
-        return True
-    final_word = lowered.rsplit(maxsplit=1)[-1]
-    if final_word.startswith("your_") and final_word.endswith("_here"):
-        return True
-    if "canary" in lowered:
-        return True
+    if lowered.startswith("bearer "):
+        return _placeholder_credential(normalized[7:])
     return lowered in PLACEHOLDER_VALUES
+
+
+def _normalize_credential_value(value: str) -> str:
+    normalized = value.strip()
+    if normalized.endswith("\\"):
+        normalized = normalized[:-1].rstrip()
+    while normalized.endswith((",", ";")):
+        normalized = normalized[:-1].rstrip()
+    if normalized.endswith("}") and not normalized.startswith("${"):
+        without_brace = normalized[:-1].rstrip()
+        if (
+            len(without_brace) >= 2
+            and without_brace[0] in {"'", '"'}
+            and without_brace[-1] == without_brace[0]
+        ):
+            normalized = without_brace
+    if (
+        len(normalized) >= 2
+        and normalized[0] in {"'", '"'}
+        and normalized[-1] == normalized[0]
+    ):
+        normalized = normalized[1:-1].strip()
+    return normalized
 
 
 def evaluate_public_release(root: Path) -> dict:
@@ -313,10 +517,10 @@ def evaluate_public_release(root: Path) -> dict:
 def _runtime_artifact_finding(relative_path: Path) -> ReleaseFinding | None:
     path = relative_path.as_posix()
     lower_path = path.lower()
-    suffix = relative_path.suffix.lower()
     forbidden = relative_path.name != ".gitkeep" and (
-        suffix in RUNTIME_SUFFIXES
-        or lower_path.endswith((".sqlite-shm", ".sqlite-wal"))
+        bool(RUNTIME_DATABASE_RE.search(relative_path.name))
+        or bool(RUNTIME_BACKUP_RE.search(relative_path.name))
+        or bool(RUNTIME_LOG_RE.search(relative_path.name))
         or any(lower_path.startswith(prefix) for prefix in RUNTIME_PATH_PREFIXES)
         or lower_path in {".env", "frontend/.env.production"}
     )

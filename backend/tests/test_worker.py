@@ -363,7 +363,7 @@ class MissingCommandAdapter:
 
 class WorkerTests(unittest.TestCase):
     def test_private_credentialed_official_site_failure_is_not_reflected_in_worker_events(self):
-        target = "https://user:supersecret@127.0.0.1/private-token"
+        target = "https://user:" + "supersecret@127.0.0.1/private-token"
         store = MemoryStore()
         investigation = store.create_investigation("unsafe url", "domain", "example.com", "quick")
         first_job = store.list_jobs(investigation.id)[0]

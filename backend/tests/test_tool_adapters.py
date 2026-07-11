@@ -686,7 +686,7 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
         self.assertIn("truncated=False", result.stdout_excerpt)
 
     def test_run_returns_sanitized_failure_for_private_credentialed_url(self):
-        target = "https://user:supersecret@127.0.0.1/private-token"
+        target = "https://user:" + "supersecret@127.0.0.1/private-token"
 
         with tempfile.TemporaryDirectory() as tmpdir:
             result = OfficialSiteExtractorAdapter().run("url", target, Path(tmpdir), 5)

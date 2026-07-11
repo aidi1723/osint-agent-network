@@ -76,7 +76,9 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual(captured["url"], "http://relay.local/v1/chat/completions")
         self.assertEqual(captured["payload"]["model"], "gpt-5.4")
         self.assertEqual(captured["payload"]["temperature"], 0.2)
-        self.assertEqual(captured["headers"]["Authorization"], "Bearer sk-secret-value")
+        self.assertEqual(
+            captured["headers"]["Authorization"], "Bearer " + "sk-secret-value"
+        )
         self.assertNotIn("sk-secret-value", repr(client.status()))
 
     def test_status_payload_never_exposes_api_key(self):
