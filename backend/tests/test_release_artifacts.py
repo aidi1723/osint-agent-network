@@ -1,11 +1,28 @@
 import unittest
 from pathlib import Path
+import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class ReleaseArtifactTests(unittest.TestCase):
+    def test_backend_package_discovery_excludes_runtime_data(self):
+        config = tomllib.loads(
+            (ROOT / "backend" / "pyproject.toml").read_text(encoding="utf-8")
+        )
+
+        package_find = (
+            config.get("tool", {})
+            .get("setuptools", {})
+            .get("packages", {})
+            .get("find")
+        )
+        self.assertEqual(
+            package_find,
+            {"include": ["app*"], "exclude": ["data*", "tests*"]},
+        )
+
     def test_production_compose_uses_built_images_and_healthchecks(self):
         compose = (ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")
 
