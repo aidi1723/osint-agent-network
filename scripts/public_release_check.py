@@ -5,9 +5,11 @@ from bisect import bisect_right
 from dataclasses import asdict, dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import tomllib
 
 
@@ -15,6 +17,20 @@ REQUIRED_LICENSE_ID = "GPL-3.0-only"
 GPLV3_NORMALIZED_SHA256 = "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
 JAVASCRIPT_SUFFIXES = frozenset({".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"})
 JAVASCRIPT_AST_HELPER = Path(__file__).with_name("public_release_ast.mjs")
+JAVASCRIPT_AST_MAX_FILES_PER_BATCH = 64
+JAVASCRIPT_AST_MAX_FILE_BYTES = 512 * 1024
+JAVASCRIPT_AST_MAX_INPUT_BYTES = 2 * 1024 * 1024
+JAVASCRIPT_AST_MAX_OUTPUT_BYTES = 4 * 1024 * 1024
+JAVASCRIPT_AST_MAX_ASSIGNMENTS = 20_000
+JAVASCRIPT_AST_MAX_LITERALS = 20_000
+JAVASCRIPT_AST_TIMEOUT_SECONDS = 10
+JAVASCRIPT_AST_FAILURE_CATEGORIES = frozenset(
+    {
+        "input_limit", "invalid_json", "invalid_schema", "node_missing",
+        "output_limit", "parse_error", "process_error", "record_limit",
+        "timeout", "typescript_missing",
+    }
+)
 JAVASCRIPT_ASSIGNMENT_OPERATORS = frozenset(
     {
         "=", ":", "+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=",
@@ -46,7 +62,8 @@ PRIVATE_NETWORK_RE = re.compile(
     r"(?<![0-9.])(?:10(?:\.[0-9]{1,3}){3}|172\.(?:1[6-9]|2[0-9]|3[01])(?:\.[0-9]{1,3}){2}|192\.168(?:\.[0-9]{1,3}){2})(?![0-9.])"
 )
 PERSONAL_PATH_RE = re.compile(
-    r"(?<!\w)/(?P<home>home|users)/(?P<user>[\w.<>-]+)(?:/|(?=$))",
+    r"(?<!\w)(?:[A-Za-z]:[\\/]|/)(?P<home>home|users)[\\/]"
+    r"(?P<user>[\w.<>-]+)(?:[\\/]|(?=$))",
     re.IGNORECASE,
 )
 ASSIGNMENT_START_RE = re.compile(
@@ -257,6 +274,7 @@ class JavaScriptAstFile:
     assignments: dict[int, list[tuple[str, str, str, bool]]]
     pure_string_literals: tuple[tuple[int, int], ...]
     error_line: int | None = None
+    error_category: str | None = None
 
 
 def tracked_files(root: Path) -> list[Path]:
@@ -353,17 +371,18 @@ def scan_public_text(
         else _python_pure_string_literals(text) if suffix == ".py" else ()
     )
     if javascript_ast is not None and javascript_ast.error_line is not None:
+        category = javascript_ast.error_category or "invalid_schema"
         findings.append(
             ReleaseFinding(
                 "PUBLIC_CREDENTIAL_SCAN",
                 path,
                 javascript_ast.error_line,
-                "JavaScript credential scan could not parse this source file.",
+                f"JavaScript credential scan failed ({category}).",
             )
         )
     for line_number, line in enumerate(lines, start=1):
         for match in PERSONAL_PATH_RE.finditer(line):
-            if match.group(0).startswith("/home/osint") and match.group("user") == "osint":
+            if match.group("home").casefold() == "home" and match.group("user") == "osint":
                 continue
             if _named_home_placeholder(match):
                 continue
@@ -500,7 +519,7 @@ def scan_public_text(
 
 def _ellipsized_home_placeholder(line: str, match: re.Match[str]) -> bool:
     matched = match.group(0)
-    if not matched.endswith("/"):
+    if not matched.endswith(("/", "\\")):
         return False
     remainder = line[match.end() :]
     return bool(re.match(r"^\.\.\.(?:$|[\s`'\"),.;:])", remainder))
@@ -531,34 +550,109 @@ def _credential_assignments(line: str) -> list[tuple[str, str, str]]:
 def _javascript_ast_batch(
     files: list[tuple[str, str]],
 ) -> dict[str, JavaScriptAstFile]:
-    failed = {
-        path: JavaScriptAstFile({}, (), 1)
-        for path, _text in files
-    }
+    failed = {path: _javascript_ast_failure("invalid_schema") for path, _text in files}
     if not files:
         return failed
-    payload = json.dumps(
-        {"files": [{"path": path, "text": text} for path, text in files]}
+
+    results: dict[str, JavaScriptAstFile] = {}
+    chunk: list[tuple[str, str]] = []
+    for path, text in sorted(files, key=lambda item: item[0].encode("utf-8")):
+        if len(text.encode("utf-8")) > JAVASCRIPT_AST_MAX_FILE_BYTES:
+            results[path] = _javascript_ast_failure("input_limit")
+            continue
+        candidate = [*chunk, (path, text)]
+        if chunk and (
+            len(candidate) > JAVASCRIPT_AST_MAX_FILES_PER_BATCH
+            or len(_javascript_ast_payload(candidate)) > JAVASCRIPT_AST_MAX_INPUT_BYTES
+        ):
+            results.update(_javascript_ast_invoke(chunk))
+            chunk = []
+            candidate = [(path, text)]
+        if len(_javascript_ast_payload(candidate)) > JAVASCRIPT_AST_MAX_INPUT_BYTES:
+            results[path] = _javascript_ast_failure("input_limit")
+            continue
+        chunk = candidate
+    if chunk:
+        results.update(_javascript_ast_invoke(chunk))
+    for path, _text in files:
+        results.setdefault(path, failed[path])
+    return results
+
+
+def _javascript_ast_payload(files: list[tuple[str, str]]) -> bytes:
+    return json.dumps(
+        {"files": [{"path": path, "text": text} for path, text in files]},
+        ensure_ascii=False,
+        separators=(",", ":"),
     ).encode("utf-8")
+
+
+def _javascript_ast_failure(category: str, line: int = 1) -> JavaScriptAstFile:
+    safe_category = (
+        category
+        if isinstance(category, str) and category in JAVASCRIPT_AST_FAILURE_CATEGORIES
+        else "invalid_schema"
+    )
+    return JavaScriptAstFile({}, (), line, safe_category)
+
+
+def _javascript_ast_invoke(
+    files: list[tuple[str, str]],
+) -> dict[str, JavaScriptAstFile]:
+    failed = {path: _javascript_ast_failure("invalid_schema") for path, _text in files}
+    payload = _javascript_ast_payload(files)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PUBLIC_RELEASE_AST_MAX_INPUT_BYTES": str(JAVASCRIPT_AST_MAX_INPUT_BYTES),
+            "PUBLIC_RELEASE_AST_MAX_FILE_BYTES": str(JAVASCRIPT_AST_MAX_FILE_BYTES),
+            "PUBLIC_RELEASE_AST_MAX_FILES": str(JAVASCRIPT_AST_MAX_FILES_PER_BATCH),
+            "PUBLIC_RELEASE_AST_MAX_OUTPUT_BYTES": str(JAVASCRIPT_AST_MAX_OUTPUT_BYTES),
+            "PUBLIC_RELEASE_AST_MAX_ASSIGNMENTS": str(JAVASCRIPT_AST_MAX_ASSIGNMENTS),
+            "PUBLIC_RELEASE_AST_MAX_LITERALS": str(JAVASCRIPT_AST_MAX_LITERALS),
+        }
+    )
     try:
-        completed = subprocess.run(
-            ["node", str(JAVASCRIPT_AST_HELPER)],
-            check=False,
-            input=payload,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=30,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return failed
+        with tempfile.TemporaryFile() as output_file:
+            completed = subprocess.run(
+                ["node", str(JAVASCRIPT_AST_HELPER)],
+                check=False,
+                input=payload,
+                stdout=output_file,
+                stderr=subprocess.DEVNULL,
+                timeout=JAVASCRIPT_AST_TIMEOUT_SECONDS,
+                env=environment,
+            )
+            mocked_stdout = getattr(completed, "stdout", None)
+            if isinstance(mocked_stdout, bytes):
+                raw_output = mocked_stdout[: JAVASCRIPT_AST_MAX_OUTPUT_BYTES + 1]
+            else:
+                output_file.seek(0)
+                raw_output = output_file.read(JAVASCRIPT_AST_MAX_OUTPUT_BYTES + 1)
+    except subprocess.TimeoutExpired:
+        return {path: _javascript_ast_failure("timeout") for path, _text in files}
+    except OSError:
+        return {path: _javascript_ast_failure("node_missing") for path, _text in files}
     if completed.returncode != 0:
-        return failed
+        return {path: _javascript_ast_failure("process_error") for path, _text in files}
+    if len(raw_output) > JAVASCRIPT_AST_MAX_OUTPUT_BYTES:
+        return {path: _javascript_ast_failure("output_limit") for path, _text in files}
     try:
-        output = json.loads(completed.stdout.decode("utf-8"))
+        output = json.loads(raw_output.decode("utf-8"))
     except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
+        return {path: _javascript_ast_failure("invalid_json") for path, _text in files}
+    if (
+        isinstance(output, dict)
+        and set(output) == {"error", "files"}
+        and output.get("files") == []
+        and output.get("error") in JAVASCRIPT_AST_FAILURE_CATEGORIES
+    ):
+        category = output["error"]
+        return {path: _javascript_ast_failure(category) for path, _text in files}
+    if not isinstance(output, dict) or set(output) != {"files"}:
         return failed
-    records = output.get("files") if isinstance(output, dict) else None
-    if not isinstance(records, list):
+    records = output["files"]
+    if not isinstance(records, list) or len(records) > len(files):
         return failed
 
     results: dict[str, JavaScriptAstFile] = {}
@@ -595,23 +689,29 @@ def _javascript_ast_record(
     expected_file_keys = (
         {"path", "ok", "assignments", "pureStringLiterals"}
         if record.get("ok") is True
-        else {"path", "ok", "errorLine", "assignments", "pureStringLiterals"}
+        else {
+            "path", "ok", "errorLine", "errorCategory", "assignments",
+            "pureStringLiterals",
+        }
     )
     if set(record) != expected_file_keys:
         return None
     if record.get("ok") is not True:
         error_line = record.get("errorLine")
+        error_category = record.get("errorCategory")
         line_count = len(_line_offsets(requested_texts[path]))
-        return path, JavaScriptAstFile(
-            {},
-            (),
-            error_line
-            if type(error_line) is int and 1 <= error_line <= line_count
-            else 1,
+        return path, _javascript_ast_failure(
+            error_category,
+            error_line if type(error_line) is int and 1 <= error_line <= line_count else 1,
         )
     raw_assignments = record.get("assignments")
     raw_literals = record.get("pureStringLiterals")
     if not isinstance(raw_assignments, list) or not isinstance(raw_literals, list):
+        return None
+    if (
+        len(raw_assignments) > JAVASCRIPT_AST_MAX_ASSIGNMENTS
+        or len(raw_literals) > JAVASCRIPT_AST_MAX_LITERALS
+    ):
         return None
     source_text = requested_texts[path]
     offset_map = _utf16_offset_map(source_text)
@@ -662,11 +762,18 @@ def _javascript_ast_record(
     credential_records = [
         record for record in assignment_records if _credential_key(record[3])
     ]
-    for index, (start, _value_start, end, _key) in enumerate(credential_records):
-        for other_start, _other_value, other_end, _other_key in credential_records[index + 1 :]:
-            overlaps = start < other_end and other_start < end
-            if overlaps and (start, end) != (other_start, other_end):
-                return None
+    credential_records.sort(key=lambda item: (item[0], item[2]))
+    previous_range: tuple[int, int] | None = None
+    for start, _value_start, end, _key in credential_records:
+        current_range = (start, end)
+        if (
+            previous_range is not None
+            and start < previous_range[1]
+            and current_range != previous_range
+        ):
+            return None
+        if previous_range is None or start >= previous_range[1]:
+            previous_range = current_range
     literals: list[tuple[int, int]] = []
     literal_ranges: set[tuple[int, int]] = set()
     for literal in raw_literals:
@@ -688,10 +795,15 @@ def _javascript_ast_record(
         literal_range = (start, end)
         if literal_range in literal_ranges:
             return None
-        if any(start < other_end and other_start < end for other_start, other_end in literal_ranges):
-            return None
         literal_ranges.add(literal_range)
         literals.append((offset_map[start], offset_map[end]))
+    sorted_literal_ranges = sorted(literal_ranges)
+    if any(
+        start < previous_end
+        for (_previous_start, previous_end), (start, _end)
+        in zip(sorted_literal_ranges, sorted_literal_ranges[1:])
+    ):
+        return None
     return path, JavaScriptAstFile(assignments, tuple(literals))
 
 
@@ -730,10 +842,26 @@ def _python_pure_string_literals(text: str) -> tuple[tuple[int, int], ...]:
             and hasattr(node, "end_lineno")
             and hasattr(node, "end_col_offset")
         ):
-            start = offsets[node.lineno - 1] + node.col_offset
-            end = offsets[node.end_lineno - 1] + node.end_col_offset
+            start = _python_ast_offset(text, offsets, node.lineno, node.col_offset)
+            end = _python_ast_offset(
+                text, offsets, node.end_lineno, node.end_col_offset
+            )
             literals.append((start, end))
     return tuple(literals)
+
+
+def _python_ast_offset(
+    text: str, line_offsets: list[int], line_number: int, byte_column: int
+) -> int:
+    line_start = line_offsets[line_number - 1]
+    line_end = (
+        line_offsets[line_number]
+        if line_number < len(line_offsets)
+        else len(text)
+    )
+    line = text[line_start:line_end]
+    character_column = len(line.encode("utf-8")[:byte_column].decode("utf-8"))
+    return line_start + character_column
 
 
 def _python_string_expression_is_pure(

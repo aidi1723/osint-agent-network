@@ -3,12 +3,14 @@ import hashlib
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import scripts.public_release_check as release_check
 from scripts.public_release_check import (
     ReleaseFinding,
     evaluate_public_release,
@@ -842,6 +844,146 @@ class PublicReleaseCheckTests(unittest.TestCase):
             [("PUBLIC_CREDENTIAL_SCAN", 1)],
         )
 
+    def test_javascript_ast_chunks_isolate_failures_and_preserve_good_findings(self):
+        value = "hardcoded-" + "chunk-isolation"
+        literal = json.dumps(value)
+        files = [
+            ("frontend/bad.ts", f"const token = {literal};"),
+            ("frontend/good.ts", f"const apiKey = {literal};"),
+        ]
+        calls = []
+
+        def fake_run(*_args, **kwargs):
+            request = json.loads(kwargs["input"])
+            calls.append([item["path"] for item in request["files"]])
+            if request["files"][0]["path"].endswith("bad.ts"):
+                output = b"not-json"
+            else:
+                item = request["files"][0]
+                source = item["text"]
+                value_start = source.index(literal)
+                output = json.dumps({"files": [{
+                    "path": item["path"], "ok": True,
+                    "assignments": [{
+                        "key": "apiKey", "operator": "=",
+                        "start": source.index("apiKey"),
+                        "valueStart": value_start,
+                        "end": value_start + len(literal),
+                        "safeInitializer": False,
+                    }],
+                    "pureStringLiterals": [],
+                }]}).encode()
+            if hasattr(kwargs["stdout"], "write"):
+                kwargs["stdout"].write(output)
+                return SimpleNamespace(returncode=0)
+            return SimpleNamespace(returncode=0, stdout=output, stderr=b"")
+
+        with (
+            patch.object(release_check, "JAVASCRIPT_AST_MAX_FILES_PER_BATCH", 1,
+                         create=True),
+            patch("scripts.public_release_check.subprocess.run", side_effect=fake_run),
+        ):
+            records = release_check._javascript_ast_batch(files)
+
+        bad = scan_public_text(files[0][0], files[0][1], javascript_ast=records[files[0][0]])
+        good = scan_public_text(files[1][0], files[1][1], javascript_ast=records[files[1][0]])
+        self.assertEqual(calls, [["frontend/bad.ts"], ["frontend/good.ts"]])
+        self.assertEqual([(item.rule_id, item.line) for item in bad],
+                         [("PUBLIC_CREDENTIAL_SCAN", 1)])
+        self.assertEqual([(item.rule_id, item.line) for item in good],
+                         [("PUBLIC_CREDENTIAL_VALUE", 1)])
+
+    def test_javascript_ast_enforces_file_and_output_caps_with_sanitized_categories(self):
+        fixture_value = "hardcoded-" + "limit-secret"
+        oversized = f'const token = "{fixture_value}";'
+        good = 'const safe = "ok";'
+        calls = []
+
+        def fake_run(*_args, **kwargs):
+            request = json.loads(kwargs["input"])
+            calls.append([item["path"] for item in request["files"]])
+            output = (fixture_value * 20).encode()
+            if hasattr(kwargs["stdout"], "write"):
+                kwargs["stdout"].write(output)
+                return SimpleNamespace(returncode=0)
+            return SimpleNamespace(returncode=0, stdout=output, stderr=b"")
+
+        with (
+            patch.object(release_check, "JAVASCRIPT_AST_MAX_FILE_BYTES", len(good) + 1,
+                         create=True),
+            patch.object(release_check, "JAVASCRIPT_AST_MAX_OUTPUT_BYTES", 32,
+                         create=True),
+            patch("scripts.public_release_check.subprocess.run", side_effect=fake_run),
+        ):
+            records = release_check._javascript_ast_batch(
+                [("frontend/large.ts", oversized), ("frontend/good.ts", good)]
+            )
+
+        large_finding = scan_public_text(
+            "frontend/large.ts", oversized, javascript_ast=records["frontend/large.ts"]
+        )[0]
+        good_finding = scan_public_text(
+            "frontend/good.ts", good, javascript_ast=records["frontend/good.ts"]
+        )[0]
+        self.assertEqual(calls, [["frontend/good.ts"]])
+        self.assertIn("input_limit", large_finding.summary)
+        self.assertIn("output_limit", good_finding.summary)
+        self.assertNotIn(fixture_value, large_finding.summary + good_finding.summary)
+
+    def test_javascript_ast_helper_enforces_record_and_serialized_output_caps(self):
+        record_source = (
+            "const token = process.env.TOKEN; "
+            "const apiKey = process.env.API_KEY;"
+        )
+        with patch.object(release_check, "JAVASCRIPT_AST_MAX_ASSIGNMENTS", 1):
+            record_result = release_check._javascript_ast_batch(
+                [("frontend/record-limit.ts", record_source)]
+            )["frontend/record-limit.ts"]
+
+        output_source = "\n".join(
+            f'const safe{index} = "value{index}";' for index in range(10)
+        )
+        with patch.object(release_check, "JAVASCRIPT_AST_MAX_OUTPUT_BYTES", 64):
+            output_result = release_check._javascript_ast_batch(
+                [("frontend/output-limit.ts", output_source)]
+            )["frontend/output-limit.ts"]
+
+        self.assertEqual(record_result.error_category, "record_limit")
+        self.assertEqual(output_result.error_category, "output_limit")
+
+    def test_javascript_ast_failures_use_stable_nonreflective_categories(self):
+        fixture_value = "hardcoded-" + "diagnostic-secret"
+        source = f'const token = "{fixture_value}";'
+
+        def completed(output, returncode=0):
+            def run(*_args, **kwargs):
+                if hasattr(kwargs["stdout"], "write"):
+                    kwargs["stdout"].write(output)
+                    return SimpleNamespace(returncode=returncode)
+                return SimpleNamespace(returncode=returncode, stdout=output, stderr=b"")
+            return run
+
+        cases = (
+            (OSError(fixture_value), "node_missing"),
+            (subprocess.TimeoutExpired("node", 1, output=fixture_value.encode()), "timeout"),
+            (completed(b"not-json"), "invalid_json"),
+            (completed(json.dumps({"files": [{"path": "wrong.ts"}]}).encode()),
+             "invalid_schema"),
+            (completed(json.dumps({"error": "typescript_missing", "files": []}).encode()),
+             "typescript_missing"),
+        )
+        for behavior, category in cases:
+            with self.subTest(category=category):
+                mocked = patch(
+                    "scripts.public_release_check.subprocess.run", side_effect=behavior
+                )
+                with mocked:
+                    findings = scan_public_text("frontend/diagnostic.ts", source)
+                self.assertEqual(len(findings), 1)
+                self.assertEqual(findings[0].summary,
+                                 f"JavaScript credential scan failed ({category}).")
+                self.assertNotIn(fixture_value, json.dumps(findings[0].to_dict()))
+
     def test_javascript_ast_schema_uses_local_lines_and_rejects_invalid_records(self):
         value = "hardcoded-" + "schema-value"
         literal = json.dumps(value)
@@ -942,6 +1084,26 @@ class PublicReleaseCheckTests(unittest.TestCase):
             [("PUBLIC_CREDENTIAL_VALUE", 1), ("PUBLIC_CREDENTIAL_VALUE", 2)],
         )
 
+    def test_javascript_ast_overlap_validation_scales_with_sorted_ranges(self):
+        count = 6000
+        source = "x" * count
+        assignments = [
+            {"key": "token", "operator": "=", "start": index,
+             "valueStart": index, "end": index + 1, "safeInitializer": False}
+            for index in range(count)
+        ]
+        record = {"path": "frontend/stress.ts", "ok": True,
+                  "assignments": assignments, "pureStringLiterals": []}
+
+        started = time.monotonic()
+        parsed = release_check._javascript_ast_record(
+            record, {"frontend/stress.ts": source}
+        )
+        elapsed = time.monotonic() - started
+
+        self.assertIsNotNone(parsed)
+        self.assertLess(elapsed, 0.2)
+
     def test_javascript_ast_local_lines_use_universal_newlines(self):
         value = "hardcoded-" + "newline"
         literal = json.dumps(value)
@@ -966,6 +1128,7 @@ class PublicReleaseCheckTests(unittest.TestCase):
                     "path": "frontend/schema.ts",
                     "ok": False,
                     "errorLine": 999,
+                    "errorCategory": "parse_error",
                     "assignments": [],
                     "pureStringLiterals": [],
                 }
@@ -1120,6 +1283,15 @@ class PublicReleaseCheckTests(unittest.TestCase):
             f'if authorization != "Bearer {comparison_fixture}":\n    pass',
         )
         self.assertEqual(comparison, [])
+
+    def test_python_literal_offsets_handle_unicode_before_fixture_literals(self):
+        fixture = "admin-" + "secret"
+        for prefix in ('note = "café"; ', 'note = "\U0001f600"; '):
+            with self.subTest(prefix=prefix):
+                text = prefix + f'Authorization = "Bearer {fixture}"'
+                self.assertEqual(
+                    scan_public_text("backend/tests/test_agent_auth.py", text), []
+                )
 
     def test_javascript_allows_only_complete_safe_expressions(self):
         text = "\n".join(
@@ -1370,6 +1542,25 @@ class PublicReleaseCheckTests(unittest.TestCase):
         self.assertEqual(
             [(finding.rule_id, finding.line) for finding in findings],
             [("PUBLIC_PERSONAL_PATH", 1), ("PUBLIC_PERSONAL_PATH", 2), ("PUBLIC_PERSONAL_PATH", 3)],
+        )
+
+    def test_windows_personal_paths_support_case_and_mixed_separators(self):
+        text = "\n".join(
+            [
+                "first=C:\\Users\\" + "alice\\private",
+                "second=c:/users/" + "bob/private",
+                "third=C:\\uSeRs/" + "carol\\private",
+                "placeholder=C:\\Users\\<name>\\project",
+                "docs=C:/Users/<name>/project",
+            ]
+        )
+
+        findings = scan_public_text("notes/windows-paths.txt", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_PERSONAL_PATH", 1), ("PUBLIC_PERSONAL_PATH", 2),
+             ("PUBLIC_PERSONAL_PATH", 3)],
         )
 
     def test_self_scan_allowlist_uses_exact_content_and_still_scans_adjacent_lines(self):
@@ -1697,6 +1888,18 @@ class PublicReleaseCheckTests(unittest.TestCase):
         findings = {(finding["rule_id"], finding["path"]) for finding in result["findings"]}
         self.assertIn(("PUBLIC_PERSONAL_PATH", "personal-link"), findings)
         self.assertIn(("PUBLIC_RUNTIME_ARTIFACT", "runtime.sqlite"), findings)
+
+    def test_maintenance_docs_describe_tracked_symlink_entry_scanning(self):
+        documentation = (
+            REPOSITORY_ROOT / "docs" / "PUBLIC_REPOSITORY_MAINTENANCE.md"
+        ).read_text(encoding="utf-8")
+        normalized = " ".join(documentation.split())
+
+        self.assertIn(
+            "Tracked symbolic links are scanned as link-entry text without "
+            "dereferencing their targets.",
+            normalized,
+        )
 
     def test_tracked_files_falls_back_when_git_command_fails(self):
         with tempfile.TemporaryDirectory() as tmpdir:

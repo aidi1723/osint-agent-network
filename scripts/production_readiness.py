@@ -12,28 +12,44 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
 def evaluate_readiness(
-    api_health: dict,
-    system_status: dict,
-    tool_health: dict,
+    api_health: object,
+    system_status: object,
+    tool_health: object,
     web_ok: bool,
     backup_timer_status: str,
     auth_config: dict | None = None,
 ) -> dict:
-    tool_summary = tool_health.get("summary") or system_status.get("tools", {}).get("health", {})
-    auth_config = auth_config if auth_config is not None else {"required": False, "missing": []}
-    auth_checks = auth_config.get("checks", {})
+    api_health = _mapping(api_health)
+    system_status = _mapping(system_status)
+    tool_health = _mapping(tool_health)
+    database = _mapping(system_status.get("database"))
+    scripts = _mapping(system_status.get("scripts"))
+    system_tools = _mapping(system_status.get("tools"))
+    tool_summary = _mapping(tool_health.get("summary"))
+    if not tool_summary:
+        tool_summary = _mapping(system_tools.get("health"))
+    auth_config = _mapping(
+        auth_config if auth_config is not None else {"required": False, "missing": []}
+    )
+    auth_checks = _mapping(auth_config.get("checks"))
+    backup = _mapping(scripts.get("backup"))
+    healthcheck = _mapping(scripts.get("healthcheck"))
+    verify = _mapping(scripts.get("verify"))
+    attention = _nonnegative_int(tool_summary.get("attention_required"))
+    ready_tools = _nonnegative_int(tool_summary.get("ready"))
+    total_tools = _nonnegative_int(tool_summary.get("total"))
     checks = {
         "api": "ok" if api_health.get("status") == "ok" else "fail",
-        "database": "ok" if system_status.get("database", {}).get("status") == "ok" else "fail",
+        "database": "ok" if database.get("status") == "ok" else "fail",
         "web": "ok" if web_ok else "fail",
         "auth_tokens": "ok" if not auth_config.get("missing") else "fail",
         "auth_required": auth_checks.get("auth_required", "ok"),
         "cookie_secure": auth_checks.get("cookie_secure", "ok"),
         "legacy_agent_token": auth_checks.get("legacy_agent_token", "ok"),
-        "backup_script": "ok" if system_status.get("scripts", {}).get("backup", {}).get("present") else "fail",
-        "healthcheck_script": "ok" if system_status.get("scripts", {}).get("healthcheck", {}).get("present") else "fail",
-        "verify_script": "ok" if system_status.get("scripts", {}).get("verify", {}).get("present") else "fail",
-        "tool_health_endpoint": "ok" if int(tool_summary.get("total") or 0) > 0 else "fail",
+        "backup_script": "ok" if backup.get("present") is True else "fail",
+        "healthcheck_script": "ok" if healthcheck.get("present") is True else "fail",
+        "verify_script": "ok" if verify.get("present") is True else "fail",
+        "tool_health_endpoint": "ok" if total_tools > 0 else "fail",
         "backup_timer": "ok" if backup_timer_status in {"enabled", "active", "unknown-local"} else "fail",
     }
     warnings = []
@@ -46,9 +62,6 @@ def evaluate_readiness(
     if checks["legacy_agent_token"] != "ok":
         warnings.append("legacy_agent_token_forbidden")
     info = []
-    attention = int(tool_summary.get("attention_required") or 0)
-    ready_tools = int(tool_summary.get("ready") or 0)
-    total_tools = int(tool_summary.get("total") or 0)
     if attention:
         info.append(f"tool_attention={attention}")
     if total_tools and ready_tools == 0:
@@ -66,6 +79,16 @@ def evaluate_readiness(
             "attention_required": attention,
         },
     }
+
+
+def _mapping(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _nonnegative_int(value: object) -> int:
+    if type(value) is int and value >= 0:
+        return value
+    return 0
 
 
 def main() -> int:
@@ -149,7 +172,10 @@ def _get_json(url: str, token: str = "") -> dict:
         request.add_header("Authorization", f"Bearer {token}")
     try:
         with urlopen(request, timeout=10) as response:
-            return json.loads(response.read().decode("utf-8"))
+            payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(payload, dict):
+            return {"status": "error", "error": "invalid_json_shape"}
+        return payload
     except HTTPError as exc:
         try:
             body = exc.read().decode("utf-8", errors="ignore")

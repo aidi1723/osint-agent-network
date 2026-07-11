@@ -59,7 +59,7 @@ line numbers. It never includes a matched credential value in its output:
 | `LICENSE_FILE` | Missing or incomplete GNU GPL v3 license text. |
 | `LICENSE_FRONTEND` | Frontend metadata other than `GPL-3.0-only`. |
 | `LICENSE_BACKEND` | Backend metadata other than `GPL-3.0-only`. |
-| `PUBLIC_PERSONAL_PATH` | Personal `/Users/<name>/` or `/home/<name>/` paths. |
+| `PUBLIC_PERSONAL_PATH` | Personal `/Users/<name>/`, `/home/<name>/`, or `C:\Users\<name>\` paths. |
 | `PUBLIC_PRIVATE_NETWORK` | Addresses in `10/8`, `172.16/12`, or `192.168/16`. |
 | `PUBLIC_CREDENTIAL_VALUE` | Credential assignments with non-placeholder values. |
 | `PUBLIC_PRIVATE_KEY` | PEM/OpenSSH private-key blocks. |
@@ -69,7 +69,16 @@ line numbers. It never includes a matched credential value in its output:
 The scanner reads the NUL-delimited Git index when available. For non-Git fixture
 directories it uses a sorted filesystem walk that excludes `.git`, virtual
 environments, dependency directories, and cache directories. It scans only
-strict UTF-8 text and skips binary data and symlinks.
+strict UTF-8 text and skips binary data. Tracked symbolic links are scanned as
+link-entry text without dereferencing their targets. Filesystem-fallback walks
+skip symbolic links.
+
+JavaScript and TypeScript credential scanning requires Node.js and the
+`typescript` development dependency declared by `frontend/package.json`. Run
+`npm install` in `frontend/` before the release check. Helper failures are
+reported only as stable categories such as `node_missing`, `typescript_missing`,
+`timeout`, `invalid_json`, or `invalid_schema`; source text and credential values
+are never included in those diagnostics.
 
 Run these commands before pushing a public release branch:
 

@@ -6,6 +6,29 @@ from scripts.production_readiness import _get_json, auth_config_status, evaluate
 
 
 class ProductionReadinessTests(unittest.TestCase):
+    def test_evaluate_readiness_normalizes_malformed_endpoint_shapes(self):
+        malformed_cases = (
+            ([], {}, {}),
+            (None, {"database": [], "scripts": None, "tools": None}, {"summary": []}),
+            ("ok", {"database": "ok", "scripts": {"backup": []},
+                    "tools": {"health": "ready"}}, {"summary": "ready"}),
+            ({"status": "ok"}, {"database": {"status": "ok"},
+             "scripts": {}, "tools": {"health": {"total": "many"}}},
+             {"summary": {"total": {"count": 1}, "ready": None}}),
+        )
+        for api_health, system_status, tool_health in malformed_cases:
+            with self.subTest(api_health=api_health, system_status=system_status):
+                result = evaluate_readiness(
+                    api_health=api_health,
+                    system_status=system_status,
+                    tool_health=tool_health,
+                    web_ok=True,
+                    backup_timer_status="enabled",
+                )
+                self.assertFalse(result["ready"])
+                self.assertEqual(result["severity"], "fail")
+                self.assertIn("fail", result["checks"].values())
+
     def test_evaluate_readiness_accepts_healthy_services_and_records_tool_attention_as_info(self):
         result = evaluate_readiness(
             api_health={"status": "ok"},
@@ -311,6 +334,31 @@ class ProductionReadinessTests(unittest.TestCase):
 
         self.assertEqual(payload["status"], "error")
         self.assertIn("connection refused", payload["error"])
+
+    def test_get_json_rejects_non_object_json_at_boundary(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return self.payload
+
+        for payload in (b"[]", b"null", b'"ok"', b"7"):
+            with self.subTest(payload=payload):
+                with patch(
+                    "scripts.production_readiness.urlopen",
+                    return_value=FakeResponse(payload),
+                ):
+                    result = _get_json("http://127.0.0.1:8088/api/health")
+                self.assertEqual(
+                    result, {"status": "error", "error": "invalid_json_shape"}
+                )
 
 
 if __name__ == "__main__":

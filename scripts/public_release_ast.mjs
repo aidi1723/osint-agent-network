@@ -1,7 +1,19 @@
 import { createRequire } from "node:module";
+import { writeSync } from "node:fs";
 
-const require = createRequire(import.meta.url);
-const ts = require("../frontend/node_modules/typescript");
+const limits = {
+  inputBytes: boundedLimit("PUBLIC_RELEASE_AST_MAX_INPUT_BYTES", 2 * 1024 * 1024),
+  fileBytes: boundedLimit("PUBLIC_RELEASE_AST_MAX_FILE_BYTES", 512 * 1024),
+  files: boundedLimit("PUBLIC_RELEASE_AST_MAX_FILES", 64),
+  outputBytes: boundedLimit("PUBLIC_RELEASE_AST_MAX_OUTPUT_BYTES", 4 * 1024 * 1024),
+  assignments: boundedLimit("PUBLIC_RELEASE_AST_MAX_ASSIGNMENTS", 20_000),
+  literals: boundedLimit("PUBLIC_RELEASE_AST_MAX_LITERALS", 20_000),
+};
+const ts = loadTypeScript();
+if (!ts) {
+  writeOutput({ error: "typescript_missing", files: [] });
+  process.exit(0);
+}
 const equalityOperators = new Set([
   ts.SyntaxKind.EqualsEqualsToken,
   ts.SyntaxKind.ExclamationEqualsToken,
@@ -9,22 +21,81 @@ const equalityOperators = new Set([
   ts.SyntaxKind.ExclamationEqualsEqualsToken,
 ]);
 
-const input = await readInput();
-if (!input || !Array.isArray(input.files)) {
-  process.exitCode = 2;
+const inputResult = await readInput();
+if (inputResult.error) {
+  writeOutput({ error: inputResult.error, files: [] });
 } else {
+  const input = inputResult.value;
+  if (
+    !input ||
+    typeof input !== "object" ||
+    Array.isArray(input) ||
+    Object.keys(input).length !== 1 ||
+    !Array.isArray(input.files) ||
+    input.files.length > limits.files ||
+    input.files.some((entry) =>
+      !entry ||
+      typeof entry !== "object" ||
+      Array.isArray(entry) ||
+      Object.keys(entry).sort().join(",") !== "path,text" ||
+      typeof entry.path !== "string" ||
+      typeof entry.text !== "string"
+    )
+  ) {
+    writeOutput({ error: "invalid_schema", files: [] });
+    process.exit(0);
+  }
+  if (input.files.some((entry) => Buffer.byteLength(entry.text, "utf8") > limits.fileBytes)) {
+    writeOutput({ error: "input_limit", files: [] });
+    process.exit(0);
+  }
   const files = input.files.map(parseFile);
-  process.stdout.write(JSON.stringify({ files }));
+  writeOutput({ files });
 }
 
 async function readInput() {
   const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    return null;
+  let size = 0;
+  let tooLarge = false;
+  for await (const chunk of process.stdin) {
+    size += chunk.length;
+    if (size > limits.inputBytes) {
+      tooLarge = true;
+      continue;
+    }
+    chunks.push(chunk);
   }
+  if (tooLarge) return { error: "input_limit" };
+  try {
+    return { value: JSON.parse(Buffer.concat(chunks).toString("utf8")) };
+  } catch {
+    return { error: "invalid_json" };
+  }
+}
+
+function boundedLimit(name, fallback) {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isSafeInteger(value) && value > 0 ? Math.min(value, fallback) : fallback;
+}
+
+function loadTypeScript() {
+  const roots = [import.meta.url, new URL("../frontend/package.json", import.meta.url)];
+  for (const root of roots) {
+    try {
+      return createRequire(root)("typescript");
+    } catch {
+      // Try the next declared source root.
+    }
+  }
+  return null;
+}
+
+function writeOutput(payload) {
+  let output = JSON.stringify(payload);
+  if (Buffer.byteLength(output, "utf8") > limits.outputBytes) {
+    output = JSON.stringify({ error: "output_limit", files: [] });
+  }
+  writeSync(process.stdout.fd, output);
 }
 
 function parseFile(entry) {
@@ -43,6 +114,7 @@ function parseFile(entry) {
       path,
       ok: false,
       errorLine: source.getLineAndCharacterOfPosition(position).line + 1,
+      errorCategory: "parse_error",
       assignments: [],
       pureStringLiterals: [],
     };
@@ -51,15 +123,31 @@ function parseFile(entry) {
   const assignments = [];
   const assignmentKeys = new Set();
   const pureStringLiterals = [];
+  let recordLimitExceeded = false;
   visit(source);
+  if (recordLimitExceeded) {
+    return {
+      path,
+      ok: false,
+      errorLine: 1,
+      errorCategory: "record_limit",
+      assignments: [],
+      pureStringLiterals: [],
+    };
+  }
   return { path, ok: true, assignments, pureStringLiterals };
 
   function visit(node) {
+    if (recordLimitExceeded) return;
     collectAssignment(node);
     if (
       (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) &&
       isPureStringExpression(node)
     ) {
+      if (pureStringLiterals.length >= limits.literals) {
+        recordLimitExceeded = true;
+        return;
+      }
       pureStringLiterals.push({ start: node.getStart(source), end: node.end });
     }
     ts.forEachChild(node, visit);
@@ -71,6 +159,10 @@ function parseFile(entry) {
     const valueStart = expression.getStart(source);
     const identity = JSON.stringify([key, operator, start, valueStart, expression.end]);
     if (assignmentKeys.has(identity)) return;
+    if (assignments.length >= limits.assignments) {
+      recordLimitExceeded = true;
+      return;
+    }
     assignmentKeys.add(identity);
     assignments.push({
       key,
