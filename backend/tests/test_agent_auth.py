@@ -10,9 +10,11 @@ from app.main import (
     ApiHandler,
     agent_request_authorized,
     missing_required_auth_tokens,
+    production_security_configuration_errors,
     read_request_authorized,
     request_authorized,
     requires_write_authorization,
+    run,
 )
 
 
@@ -167,7 +169,155 @@ class AgentAuthTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(missing, ["AGENT_API_TOKEN", "READ_API_TOKEN"])
+        self.assertEqual(missing, ["READ_API_TOKEN"])
+
+    def test_production_does_not_require_global_agent_token(self):
+        env = {
+            "APP_ENV": "  PrOd  ",
+            "ADMIN_API_TOKEN": "admin",
+            "READ_API_TOKEN": "read",
+            "OSINT_COOKIE_SECURE": " YES ",
+        }
+
+        self.assertEqual(missing_required_auth_tokens(env), [])
+        self.assertEqual(production_security_configuration_errors(env), [])
+
+    def test_nonproduction_explicit_auth_requires_admin_and_read_only(self):
+        env = {
+            "APP_ENV": "development",
+            "OSINT_REQUIRE_AUTH": " On ",
+            "ADMIN_API_TOKEN": "admin",
+        }
+
+        self.assertEqual(missing_required_auth_tokens(env), ["READ_API_TOKEN"])
+
+    def test_production_security_configuration_errors_match_boolean_policy(self):
+        base = {
+            "APP_ENV": " Production ",
+            "ADMIN_API_TOKEN": "admin",
+            "READ_API_TOKEN": "read",
+        }
+        self.assertIn(
+            "OSINT_COOKIE_SECURE must be true in production",
+            production_security_configuration_errors(base),
+        )
+        for true_value in ("1", "true", "YES", " on "):
+            with self.subTest(true_value=true_value):
+                self.assertEqual(
+                    production_security_configuration_errors(
+                        {**base, "OSINT_COOKIE_SECURE": true_value}
+                    ),
+                    [],
+                )
+                self.assertIn(
+                    "OSINT_ALLOW_LEGACY_AGENT_TOKEN must be false in production",
+                    production_security_configuration_errors(
+                        {
+                            **base,
+                            "OSINT_COOKIE_SECURE": "true",
+                            "OSINT_ALLOW_LEGACY_AGENT_TOKEN": true_value,
+                        }
+                    ),
+                )
+        for false_value in ("0", "false", "NO", " off "):
+            with self.subTest(false_value=false_value):
+                errors = production_security_configuration_errors(
+                    {
+                        **base,
+                        "OSINT_REQUIRE_AUTH": false_value,
+                        "OSINT_COOKIE_SECURE": false_value,
+                        "OSINT_ALLOW_LEGACY_AGENT_TOKEN": false_value,
+                    }
+                )
+                self.assertIn("OSINT_REQUIRE_AUTH must not be false in production", errors)
+                self.assertIn("OSINT_COOKIE_SECURE must be true in production", errors)
+                self.assertNotIn(
+                    "OSINT_ALLOW_LEGACY_AGENT_TOKEN must be false in production", errors
+                )
+
+    def test_production_security_diagnostics_never_include_token_values(self):
+        admin_secret = "admin-secret-that-must-not-leak"
+        read_secret = "read-secret-that-must-not-leak"
+        errors = production_security_configuration_errors(
+            {
+                "APP_ENV": "production",
+                "ADMIN_API_TOKEN": admin_secret,
+                "READ_API_TOKEN": read_secret,
+                "OSINT_REQUIRE_AUTH": "false",
+                "OSINT_COOKIE_SECURE": "false",
+                "OSINT_ALLOW_LEGACY_AGENT_TOKEN": "true",
+            }
+        )
+
+        diagnostic = " ".join(errors)
+        self.assertNotIn(admin_secret, diagnostic)
+        self.assertNotIn(read_secret, diagnostic)
+
+    def test_run_refuses_invalid_production_security_before_starting_services(self):
+        env = {
+            "APP_ENV": "production",
+            "ADMIN_API_TOKEN": "admin",
+            "READ_API_TOKEN": "read",
+            "OSINT_REQUIRE_AUTH": "false",
+            "OSINT_COOKIE_SECURE": "false",
+            "OSINT_ALLOW_LEGACY_AGENT_TOKEN": "true",
+        }
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("app.main.job_queue.ensure_running") as ensure_running,
+            patch("app.main.ThreadingHTTPServer") as server_class,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            run()
+
+        ensure_running.assert_not_called()
+        server_class.assert_not_called()
+        message = str(raised.exception)
+        self.assertIn("OSINT_REQUIRE_AUTH", message)
+        self.assertIn("OSINT_COOKIE_SECURE", message)
+        self.assertIn("OSINT_ALLOW_LEGACY_AGENT_TOKEN", message)
+        self.assertNotIn("admin", message)
+        self.assertNotIn("read", message)
+
+    def test_run_refuses_each_missing_management_token_before_starting_services(self):
+        base = {
+            "APP_ENV": "production",
+            "ADMIN_API_TOKEN": "admin",
+            "READ_API_TOKEN": "read",
+            "OSINT_COOKIE_SECURE": "true",
+        }
+        for missing_token in ("ADMIN_API_TOKEN", "READ_API_TOKEN"):
+            with (
+                self.subTest(missing_token=missing_token),
+                patch.dict("os.environ", {**base, missing_token: ""}, clear=True),
+                patch("app.main.job_queue.ensure_running") as ensure_running,
+                patch("app.main.ThreadingHTTPServer") as server_class,
+                self.assertRaises(SystemExit) as raised,
+            ):
+                run()
+
+            ensure_running.assert_not_called()
+            server_class.assert_not_called()
+            self.assertIn(missing_token, str(raised.exception))
+
+    def test_run_starts_secure_production_without_global_agent_token(self):
+        env = {
+            "APP_ENV": " PrOd ",
+            "ADMIN_API_TOKEN": "admin",
+            "READ_API_TOKEN": "read",
+            "OSINT_COOKIE_SECURE": " On ",
+            "OSINT_ALLOW_LEGACY_AGENT_TOKEN": " off ",
+        }
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("app.main.job_queue.ensure_running") as ensure_running,
+            patch("app.main.ThreadingHTTPServer") as server_class,
+        ):
+            run()
+
+        ensure_running.assert_called_once()
+        server_class.assert_called_once()
+        server_class.return_value.serve_forever.assert_called_once_with()
 
     def test_development_does_not_require_tokens_by_default(self):
         self.assertEqual(missing_required_auth_tokens({"APP_ENV": "development"}), [])

@@ -207,6 +207,79 @@ class ProductionReadinessTests(unittest.TestCase):
         self.assertTrue(status["required"])
         self.assertEqual(status["missing"], ["ADMIN_API_TOKEN", "READ_API_TOKEN"])
 
+    def test_production_aliases_and_true_variants_share_security_policy(self):
+        for app_env in ("prod", " production ", "PROD", "Production"):
+            for true_value in ("1", "true", "YES", " on "):
+                with self.subTest(app_env=app_env, true_value=true_value):
+                    status = auth_config_status(
+                        {
+                            "APP_ENV": app_env,
+                            "ADMIN_API_TOKEN": "admin",
+                            "READ_API_TOKEN": "read",
+                            "OSINT_COOKIE_SECURE": true_value,
+                        }
+                    )
+                    self.assertTrue(status["production"])
+                    self.assertEqual(status["missing"], [])
+                    self.assertEqual(status["checks"]["auth_required"], "ok")
+                    self.assertEqual(status["checks"]["cookie_secure"], "ok")
+                    legacy_status = auth_config_status(
+                        {
+                            "APP_ENV": app_env,
+                            "ADMIN_API_TOKEN": "admin",
+                            "READ_API_TOKEN": "read",
+                            "OSINT_COOKIE_SECURE": "true",
+                            "OSINT_ALLOW_LEGACY_AGENT_TOKEN": true_value,
+                        }
+                    )
+                    self.assertEqual(
+                        legacy_status["checks"]["legacy_agent_token"], "fail"
+                    )
+
+    def test_production_false_variants_disable_auth_and_secure_cookie(self):
+        for false_value in ("0", "false", "NO", " off "):
+            with self.subTest(false_value=false_value):
+                status = auth_config_status(
+                    {
+                        "APP_ENV": "production",
+                        "OSINT_REQUIRE_AUTH": false_value,
+                        "ADMIN_API_TOKEN": "admin",
+                        "READ_API_TOKEN": "read",
+                        "OSINT_COOKIE_SECURE": false_value,
+                        "OSINT_ALLOW_LEGACY_AGENT_TOKEN": false_value,
+                    }
+                )
+                self.assertEqual(status["checks"]["auth_required"], "fail")
+                self.assertEqual(status["checks"]["cookie_secure"], "fail")
+                self.assertEqual(status["checks"]["legacy_agent_token"], "ok")
+
+    def test_nonproduction_auth_true_variants_require_management_tokens(self):
+        for true_value in ("1", "true", "YES", " on "):
+            with self.subTest(true_value=true_value):
+                status = auth_config_status({"OSINT_REQUIRE_AUTH": true_value})
+                self.assertTrue(status["required"])
+                self.assertEqual(
+                    status["missing"], ["ADMIN_API_TOKEN", "READ_API_TOKEN"]
+                )
+
+    def test_readiness_diagnostics_do_not_expose_token_values(self):
+        admin_secret = "admin-secret-that-must-not-leak"
+        read_secret = "read-secret-that-must-not-leak"
+        status = auth_config_status(
+            {
+                "APP_ENV": "production",
+                "ADMIN_API_TOKEN": admin_secret,
+                "READ_API_TOKEN": read_secret,
+                "OSINT_REQUIRE_AUTH": "false",
+                "OSINT_COOKIE_SECURE": "false",
+                "OSINT_ALLOW_LEGACY_AGENT_TOKEN": "true",
+            }
+        )
+
+        diagnostic = repr(status)
+        self.assertNotIn(admin_secret, diagnostic)
+        self.assertNotIn(read_secret, diagnostic)
+
     def test_get_json_sends_read_token_when_provided(self):
         captured = {}
 

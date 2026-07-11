@@ -1000,15 +1000,22 @@ class ApiHandler(BaseHTTPRequestHandler):
 
 
 def run():
+    missing_tokens = missing_required_auth_tokens()
+    configuration_errors = production_security_configuration_errors()
+    if missing_tokens or configuration_errors:
+        reasons = [
+            *(f"{name} is required when authentication is enabled" for name in missing_tokens),
+            *configuration_errors,
+        ]
+        raise SystemExit(
+            "Refusing to start with insecure authentication configuration: "
+            + "; ".join(reasons)
+        )
     host = os.getenv("APP_HOST", "0.0.0.0")
     port = int(os.getenv("APP_PORT", "8088"))
-    missing_tokens = missing_required_auth_tokens()
-    if missing_tokens:
-        missing = ", ".join(missing_tokens)
-        raise SystemExit(f"Refusing to start in production without required API tokens: {missing}")
-    if not os.getenv("AGENT_API_TOKEN") and not os.getenv("ADMIN_API_TOKEN"):
-        print("\n⚠️  WARNING: No AGENT_API_TOKEN or ADMIN_API_TOKEN configured.")
-        print("   The API is running without authentication. Set tokens in .env for production use.\n")
+    if not os.getenv("ADMIN_API_TOKEN") and not os.getenv("READ_API_TOKEN"):
+        print("\n⚠️  WARNING: No ADMIN_API_TOKEN or READ_API_TOKEN configured.")
+        print("   Management APIs are running without authentication. Set tokens in .env for production use.\n")
     job_queue.ensure_running(store)
     server = ThreadingHTTPServer((host, port), ApiHandler)
     print(f"OSINT Agent Network API listening on http://{host}:{port}")
@@ -1148,8 +1155,28 @@ def missing_required_auth_tokens(env: dict | None = None) -> list[str]:
     values = env if env is not None else os.environ
     if not authentication_required_for_environment(values):
         return []
-    required = ["ADMIN_API_TOKEN", "AGENT_API_TOKEN", "READ_API_TOKEN"]
+    required = ["ADMIN_API_TOKEN", "READ_API_TOKEN"]
     return [name for name in required if not str(values.get(name, "")).strip()]
+
+
+def production_security_configuration_errors(env: dict | None = None) -> list[str]:
+    values = env if env is not None else os.environ
+    if str(values.get("APP_ENV", "")).strip().lower() not in {"prod", "production"}:
+        return []
+
+    explicit_auth = str(values.get("OSINT_REQUIRE_AUTH", "")).strip().lower()
+    errors = []
+    if explicit_auth in {"0", "false", "no", "off"}:
+        errors.append("OSINT_REQUIRE_AUTH must not be false in production")
+    if not _env_true(values.get("OSINT_COOKIE_SECURE", "")):
+        errors.append("OSINT_COOKIE_SECURE must be true in production")
+    if _env_true(values.get("OSINT_ALLOW_LEGACY_AGENT_TOKEN", "")):
+        errors.append("OSINT_ALLOW_LEGACY_AGENT_TOKEN must be false in production")
+    return errors
+
+
+def _env_true(value: object) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _get_allowed_origins() -> tuple[str, ...]:
