@@ -1,9 +1,11 @@
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 export function compactGraphLabel(value: string, maxCodePoints: number): string {
   if (maxCodePoints <= 0) return "";
-  const codePoints = Array.from(value);
-  if (codePoints.length <= maxCodePoints) return value;
+  const graphemes = Array.from(graphemeSegmenter.segment(value), ({ segment }) => segment);
+  if (graphemes.length <= maxCodePoints) return value;
   if (maxCodePoints === 1) return "…";
-  return `${codePoints.slice(0, maxCodePoints - 1).join("")}…`;
+  return `${graphemes.slice(0, maxCodePoints - 1).join("")}…`;
 }
 
 export function nextSelectedNode(currentId: string | null, nextId: string): string | null {

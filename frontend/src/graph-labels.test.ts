@@ -15,6 +15,14 @@ describe("compactGraphLabel", () => {
     expect(compactGraphLabel("A😀BC", 3)).toBe("A😀…");
   });
 
+  it("does not split combining-character graphemes", () => {
+    expect(compactGraphLabel("e\u0301xy", 2)).toBe("e\u0301…");
+  });
+
+  it("does not split zero-width-joiner emoji graphemes", () => {
+    expect(compactGraphLabel("👨‍👩‍👧‍👦AB", 2)).toBe("👨‍👩‍👧‍👦…");
+  });
+
   it("handles exact and minimum display limits", () => {
     expect(compactGraphLabel("Exact", 5)).toBe("Exact");
     expect(compactGraphLabel("Long", 1)).toBe("…");

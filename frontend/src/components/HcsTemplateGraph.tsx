@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useMemo, useState } from "react";
+import { type KeyboardEvent, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { compactGraphLabel, nextSelectedNode } from "../graph-labels";
 import { preferredDecisionLabel, preferredOrganizationLabel } from "../hcs-graph-data";
@@ -101,6 +101,7 @@ export function HcsTemplateGraph({
 }: HcsTemplateGraphProps) {
   const [zoom, setZoom] = useState(1);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const nodeRefs = useRef(new Map<string, SVGGElement>());
 
   const nodes = useMemo<GraphNodeInfo[]>(() => {
     const preferredOrganization = preferredOrganizationLabel(entities, organizationLabel);
@@ -217,6 +218,17 @@ export function HcsTemplateGraph({
     setSelectedId((currentId) => nextSelectedNode(currentId, id));
   }
 
+  function setNodeRef(id: string, node: SVGGElement | null) {
+    if (node) nodeRefs.current.set(id, node);
+    else nodeRefs.current.delete(id);
+  }
+
+  function closeDetail() {
+    const triggerId = selectedId;
+    setSelectedId(null);
+    if (triggerId) window.requestAnimationFrame(() => nodeRefs.current.get(triggerId)?.focus());
+  }
+
   function handleNodeKeyDown(event: KeyboardEvent<SVGGElement>, id: string) {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
@@ -252,7 +264,7 @@ export function HcsTemplateGraph({
       >
         <div className={`hcs-template-graph-layout${selected ? " has-detail" : ""}`}>
           <div className="hcs-template-graph-viewport">
-          <svg className="hcs-template-svg" viewBox="0 0 700 450" role="img" aria-label="HCS 双核心标准拓扑">
+          <svg className="hcs-template-svg" viewBox="0 0 700 450" role="group" aria-label="HCS 双核心标准拓扑">
           <defs>
             <marker id="hcs-arrow-green" viewBox="0 0 10 10" refX="22" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M 0 0 L 10 5 L 0 10 z" fill="#10b981" />
@@ -277,36 +289,36 @@ export function HcsTemplateGraph({
             <line x1="220" y1="225" x2="100" y2="315" stroke="#10b981" strokeWidth="1.2" markerEnd="url(#hcs-arrow-green)" />
             <line x1="220" y1="225" x2="220" y2="345" stroke="#10b981" strokeWidth="2" markerEnd="url(#hcs-arrow-green)" />
 
-            <g className={`hcs-click-node ${selectedId === "organization-core" ? "is-selected" : ""}`} transform="translate(220,225)" role="button" aria-pressed={selectedId === "organization-core"} tabIndex={0} onClick={() => selectNode("organization-core")} onKeyDown={(event) => handleNodeKeyDown(event, "organization-core")}>
+            <g ref={(node) => setNodeRef("organization-core", node)} className={`hcs-click-node ${selectedId === "organization-core" ? "is-selected" : ""}`} transform="translate(220,225)" role="button" aria-pressed={selectedId === "organization-core"} tabIndex={0} onClick={() => selectNode("organization-core")} onKeyDown={(event) => handleNodeKeyDown(event, "organization-core")}>
               <title>{nodeById.get("organization-core")?.subtitle}</title>
               <circle r="32" fill="#eff6ff" stroke="#2563eb" strokeWidth="2.5" />
               <text textAnchor="middle" y="-4" fill="#1e3a8a" fontSize="9" fontWeight="700">【组织资产核】</text>
               <text textAnchor="middle" y="8" fill="#2563eb" fontSize="8" fontFamily="monospace" fontWeight="700">{compactGraphLabel(nodeById.get("organization-core")?.subtitle ?? "", 12)}</text>
               <text textAnchor="middle" y="17" fill="#64748b" fontSize="6">Enterprise Asset Hub</text>
             </g>
-            <g className={`hcs-click-node ${selectedId === "offshore-shell" ? "is-selected" : ""}`} transform="translate(220,85)" role="button" aria-pressed={selectedId === "offshore-shell"} tabIndex={0} onClick={() => selectNode("offshore-shell")} onKeyDown={(event) => handleNodeKeyDown(event, "offshore-shell")}>
+            <g ref={(node) => setNodeRef("offshore-shell", node)} className={`hcs-click-node ${selectedId === "offshore-shell" ? "is-selected" : ""}`} transform="translate(220,85)" role="button" aria-pressed={selectedId === "offshore-shell"} tabIndex={0} onClick={() => selectNode("offshore-shell")} onKeyDown={(event) => handleNodeKeyDown(event, "offshore-shell")}>
               <title>{nodeById.get("offshore-shell")?.subtitle}</title>
               <rect x="-65" y="-14" width="130" height="28" rx="4" fill="#fff1f2" stroke="#f43f5e" strokeWidth="1.5" />
               <text textAnchor="middle" y="3" fill="#991b1b" fontSize="8" fontWeight="700">{compactGraphLabel(nodeById.get("offshore-shell")?.subtitle ?? "", 18)}</text>
             </g>
-            <g className={`hcs-click-node ${selectedId === "manufacturing-base" ? "is-selected" : ""}`} transform="translate(85,115)" role="button" aria-pressed={selectedId === "manufacturing-base"} tabIndex={0} onClick={() => selectNode("manufacturing-base")} onKeyDown={(event) => handleNodeKeyDown(event, "manufacturing-base")}>
+            <g ref={(node) => setNodeRef("manufacturing-base", node)} className={`hcs-click-node ${selectedId === "manufacturing-base" ? "is-selected" : ""}`} transform="translate(85,115)" role="button" aria-pressed={selectedId === "manufacturing-base"} tabIndex={0} onClick={() => selectNode("manufacturing-base")} onKeyDown={(event) => handleNodeKeyDown(event, "manufacturing-base")}>
               <title>{nodeById.get("manufacturing-base")?.subtitle}</title>
               <rect x="-55" y="-14" width="110" height="28" rx="14" fill="#fffbeb" stroke="#d97706" strokeWidth="1" strokeDasharray="2,2" />
               <text textAnchor="middle" y="3" fill="#92400e" fontSize="8">{compactGraphLabel(nodeById.get("manufacturing-base")?.subtitle ?? "", 16)}</text>
             </g>
-            <g className={`hcs-click-node ${selectedId === "product-line" ? "is-selected" : ""}`} transform="translate(55,225)" role="button" aria-pressed={selectedId === "product-line"} tabIndex={0} onClick={() => selectNode("product-line")} onKeyDown={(event) => handleNodeKeyDown(event, "product-line")}>
+            <g ref={(node) => setNodeRef("product-line", node)} className={`hcs-click-node ${selectedId === "product-line" ? "is-selected" : ""}`} transform="translate(55,225)" role="button" aria-pressed={selectedId === "product-line"} tabIndex={0} onClick={() => selectNode("product-line")} onKeyDown={(event) => handleNodeKeyDown(event, "product-line")}>
               <title>{nodeById.get("product-line")?.subtitle}</title>
               <rect x="-45" y="-20" width="90" height="32" rx="4" fill="#f0fdf4" stroke="#16a34a" strokeWidth="1" />
               <text textAnchor="middle" y="-4" fill="#14532d" fontSize="8" fontWeight="700">[核心主营产品线]</text>
               <text textAnchor="middle" y="7" fill="#166534" fontSize="6">{compactGraphLabel(nodeById.get("product-line")?.subtitle ?? "", 18)}</text>
             </g>
-            <g className={`hcs-click-node ${selectedId === "digital-footprint" ? "is-selected" : ""}`} transform="translate(100,330)" role="button" aria-pressed={selectedId === "digital-footprint"} tabIndex={0} onClick={() => selectNode("digital-footprint")} onKeyDown={(event) => handleNodeKeyDown(event, "digital-footprint")}>
+            <g ref={(node) => setNodeRef("digital-footprint", node)} className={`hcs-click-node ${selectedId === "digital-footprint" ? "is-selected" : ""}`} transform="translate(100,330)" role="button" aria-pressed={selectedId === "digital-footprint"} tabIndex={0} onClick={() => selectNode("digital-footprint")} onKeyDown={(event) => handleNodeKeyDown(event, "digital-footprint")}>
               <title>{nodeById.get("digital-footprint")?.subtitle}</title>
               <rect x="-55" y="-18" width="110" height="30" rx="4" fill="#f0fdf4" stroke="#16a34a" strokeWidth="1" />
               <text textAnchor="middle" y="-3" fill="#14532d" fontSize="8" fontWeight="700">[数字踪迹/代运营网络]</text>
               <text textAnchor="middle" y="7" fill="#0891b2" fontSize="7">{compactGraphLabel(nodeById.get("digital-footprint")?.subtitle ?? "", 20)}</text>
             </g>
-            <g className={`hcs-click-node ${selectedId === "landed-entity" ? "is-selected" : ""}`} transform="translate(220,375)" role="button" aria-pressed={selectedId === "landed-entity"} tabIndex={0} onClick={() => selectNode("landed-entity")} onKeyDown={(event) => handleNodeKeyDown(event, "landed-entity")}>
+            <g ref={(node) => setNodeRef("landed-entity", node)} className={`hcs-click-node ${selectedId === "landed-entity" ? "is-selected" : ""}`} transform="translate(220,375)" role="button" aria-pressed={selectedId === "landed-entity"} tabIndex={0} onClick={() => selectNode("landed-entity")} onKeyDown={(event) => handleNodeKeyDown(event, "landed-entity")}>
               <title>{nodeById.get("landed-entity")?.subtitle}</title>
               <rect x="-70" y="-18" width="140" height="34" rx="4" fill="#f8fafc" stroke="#475569" strokeWidth="1.5" />
               <text textAnchor="middle" y="-3" fill="#0f172a" fontSize="9" fontWeight="700">穿透落地经营实体名称</text>
@@ -318,30 +330,30 @@ export function HcsTemplateGraph({
             <line x1="480" y1="225" x2="610" y2="225" stroke="#10b981" strokeWidth="1.2" markerEnd="url(#hcs-arrow-green)" />
             <line x1="480" y1="225" x2="590" y2="305" stroke="#94a3b8" strokeWidth="1" strokeDasharray="2,2" />
 
-            <g className={`hcs-click-node ${selectedId === "decision-core" ? "is-selected" : ""}`} transform="translate(480,225)" role="button" aria-pressed={selectedId === "decision-core"} tabIndex={0} onClick={() => selectNode("decision-core")} onKeyDown={(event) => handleNodeKeyDown(event, "decision-core")}>
+            <g ref={(node) => setNodeRef("decision-core", node)} className={`hcs-click-node ${selectedId === "decision-core" ? "is-selected" : ""}`} transform="translate(480,225)" role="button" aria-pressed={selectedId === "decision-core"} tabIndex={0} onClick={() => selectNode("decision-core")} onKeyDown={(event) => handleNodeKeyDown(event, "decision-core")}>
               <title>{nodeById.get("decision-core")?.subtitle}</title>
               <circle r="32" fill="#ecfdf5" stroke="#10b981" strokeWidth="2.5" />
               <text textAnchor="middle" y="-4" fill="#064e3b" fontSize="9" fontWeight="700">【意志决策核】</text>
               <text textAnchor="middle" y="8" fill="#10b981" fontSize="8" fontFamily="monospace" fontWeight="700">{compactGraphLabel(nodeById.get("decision-core")?.subtitle ?? "", 12)}</text>
               <text textAnchor="middle" y="17" fill="#047857" fontSize="6">Action & Intention Core</text>
             </g>
-            <g className={`hcs-click-node ${selectedId === "persona-role" ? "is-selected" : ""}`} transform="translate(480,105)" role="button" aria-pressed={selectedId === "persona-role"} tabIndex={0} onClick={() => selectNode("persona-role")} onKeyDown={(event) => handleNodeKeyDown(event, "persona-role")}>
+            <g ref={(node) => setNodeRef("persona-role", node)} className={`hcs-click-node ${selectedId === "persona-role" ? "is-selected" : ""}`} transform="translate(480,105)" role="button" aria-pressed={selectedId === "persona-role"} tabIndex={0} onClick={() => selectNode("persona-role")} onKeyDown={(event) => handleNodeKeyDown(event, "persona-role")}>
               <title>{nodeById.get("persona-role")?.subtitle}</title>
               <rect x="-55" y="-14" width="110" height="28" rx="4" fill="#ffffff" stroke="#cbd5e1" strokeWidth="1" strokeDasharray="3,3" />
               <text textAnchor="middle" y="3" fill="#94a3b8" fontSize="8">{compactGraphLabel(nodeById.get("persona-role")?.subtitle ?? "", 16)}</text>
             </g>
-            <g className={`hcs-click-node ${selectedId === "contact-channel" ? "is-selected" : ""}`} transform="translate(615,145)" role="button" aria-pressed={selectedId === "contact-channel"} tabIndex={0} onClick={() => selectNode("contact-channel")} onKeyDown={(event) => handleNodeKeyDown(event, "contact-channel")}>
+            <g ref={(node) => setNodeRef("contact-channel", node)} className={`hcs-click-node ${selectedId === "contact-channel" ? "is-selected" : ""}`} transform="translate(615,145)" role="button" aria-pressed={selectedId === "contact-channel"} tabIndex={0} onClick={() => selectNode("contact-channel")} onKeyDown={(event) => handleNodeKeyDown(event, "contact-channel")}>
               <title>{nodeById.get("contact-channel")?.subtitle}</title>
               <rect x="-55" y="-14" width="110" height="28" rx="4" fill="#ffffff" stroke="#cbd5e1" strokeWidth="1" strokeDasharray="3,3" />
               <text textAnchor="middle" y="3" fill="#94a3b8" fontSize="8">{compactGraphLabel(nodeById.get("contact-channel")?.subtitle ?? "", 22)}</text>
             </g>
-            <g className={`hcs-click-node ${selectedId === "location" ? "is-selected" : ""}`} transform="translate(625,225)" role="button" aria-pressed={selectedId === "location"} tabIndex={0} onClick={() => selectNode("location")} onKeyDown={(event) => handleNodeKeyDown(event, "location")}>
+            <g ref={(node) => setNodeRef("location", node)} className={`hcs-click-node ${selectedId === "location" ? "is-selected" : ""}`} transform="translate(625,225)" role="button" aria-pressed={selectedId === "location"} tabIndex={0} onClick={() => selectNode("location")} onKeyDown={(event) => handleNodeKeyDown(event, "location")}>
               <title>{nodeById.get("location")?.subtitle}</title>
               <rect x="-45" y="-16" width="90" height="32" rx="4" fill="#ecfdf5" stroke="#10b981" strokeWidth="1" />
               <text textAnchor="middle" y="-2" fill="#047857" fontSize="9" fontWeight="700">{compactGraphLabel(nodeById.get("location")?.subtitle ?? "", 14)}</text>
               <text textAnchor="middle" y="8" fill="#059669" fontSize="7">本地时区 / 常驻地</text>
             </g>
-            <g className={`hcs-click-node ${selectedId === "activity-habit" ? "is-selected" : ""}`} transform="translate(605,320)" role="button" aria-pressed={selectedId === "activity-habit"} tabIndex={0} onClick={() => selectNode("activity-habit")} onKeyDown={(event) => handleNodeKeyDown(event, "activity-habit")}>
+            <g ref={(node) => setNodeRef("activity-habit", node)} className={`hcs-click-node ${selectedId === "activity-habit" ? "is-selected" : ""}`} transform="translate(605,320)" role="button" aria-pressed={selectedId === "activity-habit"} tabIndex={0} onClick={() => selectNode("activity-habit")} onKeyDown={(event) => handleNodeKeyDown(event, "activity-habit")}>
               <title>{nodeById.get("activity-habit")?.subtitle}</title>
               <rect x="-55" y="-14" width="110" height="28" rx="4" fill="#ffffff" stroke="#cbd5e1" strokeWidth="1" strokeDasharray="3,3" />
               <text textAnchor="middle" y="3" fill="#94a3b8" fontSize="8">{compactGraphLabel(nodeById.get("activity-habit")?.subtitle ?? "", 18)}</text>
@@ -356,7 +368,7 @@ export function HcsTemplateGraph({
                 <button
                   type="button"
                   className="hcs-node-detail-close"
-                  onClick={() => setSelectedId(null)}
+                  onClick={closeDetail}
                   aria-label="关闭节点详情"
                   title="关闭节点详情"
                 >
