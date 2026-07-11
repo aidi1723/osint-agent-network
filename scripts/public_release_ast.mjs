@@ -49,6 +49,7 @@ function parseFile(entry) {
   }
 
   const assignments = [];
+  const assignmentKeys = new Set();
   const pureStringLiterals = [];
   visit(source);
   return { path, ok: true, assignments, pureStringLiterals };
@@ -66,34 +67,27 @@ function parseFile(entry) {
 
   function addAssignment(key, operator, expression, target) {
     if (!key || !expression) return;
-    const position = target.getStart(source);
+    const start = target.getStart(source);
+    const valueStart = expression.getStart(source);
+    const identity = JSON.stringify([key, operator, start, valueStart, expression.end]);
+    if (assignmentKeys.has(identity)) return;
+    assignmentKeys.add(identity);
     assignments.push({
       key,
       operator,
-      start: expression.getStart(source),
+      start,
+      valueStart,
       end: expression.end,
-      line: source.getLineAndCharacterOfPosition(position).line + 1,
       safeInitializer: isSafeCredentialInitializer(expression),
     });
   }
 
   function collectAssignment(node) {
-    if (ts.isVariableDeclaration(node) && node.initializer) {
-      for (const key of targetKeys(node.name)) {
-        addAssignment(key, "=", node.initializer, node.name);
+    if (node.initializer && node.name) {
+      const operator = ts.isPropertyAssignment(node) ? ":" : "=";
+      for (const key of declarationKeys(node.name)) {
+        addAssignment(key, operator, node.initializer, node.name);
       }
-      return;
-    }
-    if (ts.isParameter(node) && node.initializer) {
-      for (const key of targetKeys(node.name)) {
-        addAssignment(key, "=", node.initializer, node.name);
-      }
-      return;
-    }
-    if (ts.isPropertyAssignment(node)) {
-      const key = propertyKey(node.name);
-      addAssignment(key, ":", node.initializer, node.name);
-      return;
     }
     if (ts.isBinaryExpression(node) && isAssignmentOperator(node.operatorToken.kind)) {
       for (const key of targetKeys(node.left)) {
@@ -130,8 +124,16 @@ function targetKeys(node) {
   return [];
 }
 
+function declarationKeys(node) {
+  const targets = targetKeys(node);
+  if (targets.length) return targets;
+  const key = propertyKey(node);
+  return key ? [key] : [];
+}
+
 function propertyKey(node) {
   if (ts.isIdentifier(node) || ts.isStringLiteral(node)) return node.text;
+  if (ts.isPrivateIdentifier(node)) return node.text.replace(/^#/, "");
   if (ts.isComputedPropertyName(node)) return stringValue(node.expression);
   return "";
 }

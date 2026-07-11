@@ -14,6 +14,12 @@ REQUIRED_LICENSE_ID = "GPL-3.0-only"
 GPLV3_NORMALIZED_SHA256 = "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
 JAVASCRIPT_SUFFIXES = frozenset({".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"})
 JAVASCRIPT_AST_HELPER = Path(__file__).with_name("public_release_ast.mjs")
+JAVASCRIPT_ASSIGNMENT_OPERATORS = frozenset(
+    {
+        "=", ":", "+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=",
+        ">>>=", "&=", "|=", "^=", "&&=", "||=", "??=",
+    }
+)
 GENERATED_DEPENDENCY_DIRS = frozenset(
     {".git", ".mypy_cache", ".pytest_cache", ".tox", ".venv", "__pycache__", "node_modules", "venv"}
 )
@@ -558,15 +564,22 @@ def _javascript_ast_batch(
     requested_texts = dict(files)
     requested_paths = set(requested_texts)
     for record in records:
+        if not isinstance(record, dict):
+            return failed
+        record_path = record.get("path")
+        if not isinstance(record_path, str) or record_path not in requested_paths:
+            return failed
+        if record_path in results:
+            results[record_path] = failed[record_path]
+            continue
         parsed = _javascript_ast_record(record, requested_texts)
         if parsed is None:
+            results[record_path] = failed[record_path]
             continue
         path, ast_file = parsed
-        if path in results:
-            return failed
         results[path] = ast_file
-    if results.keys() != requested_paths:
-        return failed
+    for path in requested_paths - results.keys():
+        results[path] = failed[path]
     return results
 
 
@@ -580,8 +593,13 @@ def _javascript_ast_record(
         return None
     if record.get("ok") is not True:
         error_line = record.get("errorLine")
+        line_count = max(1, len(requested_texts[path].splitlines()))
         return path, JavaScriptAstFile(
-            {}, (), error_line if isinstance(error_line, int) and error_line > 0 else 1
+            {},
+            (),
+            error_line
+            if type(error_line) is int and 1 <= error_line <= line_count
+            else 1,
         )
     raw_assignments = record.get("assignments")
     raw_literals = record.get("pureStringLiterals")
@@ -590,49 +608,70 @@ def _javascript_ast_record(
     source_text = requested_texts[path]
     offset_map = _utf16_offset_map(source_text)
     assignments: dict[int, list[tuple[str, str, str, bool]]] = {}
+    assignment_records: list[tuple[int, int, int, str]] = []
+    assignment_identities: set[tuple[int, int, int, str]] = set()
     for assignment in raw_assignments:
         if not isinstance(assignment, dict):
             return None
-        line = assignment.get("line")
         key = assignment.get("key")
         operator = assignment.get("operator")
         start = assignment.get("start")
+        value_start = assignment.get("valueStart")
         end = assignment.get("end")
         safe_initializer = assignment.get("safeInitializer")
         if (
-            not isinstance(line, int)
-            or line < 1
-            or not isinstance(key, str)
-            or not isinstance(operator, str)
-            or not isinstance(start, int)
-            or not isinstance(end, int)
+            not isinstance(key, str)
+            or not 1 <= len(key) <= 256
+            or re.search(r"[\x00-\x1f\x7f]", key) is not None
+            or operator not in JAVASCRIPT_ASSIGNMENT_OPERATORS
+            or type(start) is not int
+            or type(value_start) is not int
+            or type(end) is not int
             or start < 0
-            or end <= start
+            or not start <= value_start < end
             or start not in offset_map
+            or value_start not in offset_map
             or end not in offset_map
             or not isinstance(safe_initializer, bool)
         ):
             return None
+        identity = (start, value_start, end, key)
+        if identity in assignment_identities:
+            return None
+        assignment_identities.add(identity)
+        assignment_records.append(identity)
         if _credential_key(key):
-            value = source_text[offset_map[start] : offset_map[end]]
+            line = source_text.count("\n", 0, offset_map[start]) + 1
+            value = source_text[offset_map[value_start] : offset_map[end]]
             assignments.setdefault(line, []).append(
                 (key, operator, value, safe_initializer)
             )
+    for index, (start, _value_start, end, _key) in enumerate(assignment_records):
+        for other_start, _other_value, other_end, _other_key in assignment_records[index + 1 :]:
+            if (start < other_start < end < other_end) or (
+                other_start < start < other_end < end
+            ):
+                return None
     literals: list[tuple[int, int]] = []
+    literal_ranges: set[tuple[int, int]] = set()
     for literal in raw_literals:
         if not isinstance(literal, dict):
             return None
         start = literal.get("start")
         end = literal.get("end")
         if (
-            not isinstance(start, int)
-            or not isinstance(end, int)
+            type(start) is not int
+            or type(end) is not int
             or start < 0
             or end <= start
             or start not in offset_map
             or end not in offset_map
         ):
             return None
+        literal_range = (start, end)
+        if literal_range in literal_ranges:
+            return None
+        literal_ranges.add(literal_range)
         literals.append((offset_map[start], offset_map[end]))
     return path, JavaScriptAstFile(assignments, tuple(literals))
 

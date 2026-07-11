@@ -545,6 +545,74 @@ class PublicReleaseCheckTests(unittest.TestCase):
             [("PUBLIC_CREDENTIAL_VALUE", 1)],
         )
 
+    def test_typescript_ast_covers_property_and_binding_initializers(self):
+        value = "hardcoded-" + "declaration-initializer"
+        literal = json.dumps(value)
+        text = "\n".join(
+            [
+                "class Credentials {",
+                f"  token: string = {literal};",
+                f'  ["apiKey"] = {literal};',
+                f"  static clientSecret = {literal};",
+                f"  #password = {literal};",
+                "}",
+                f"const {{ token = {literal} }} = config;",
+                f"const [apiKey = {literal}] = values;",
+                f"function objectParam({{ clientSecret = {literal} }} = config) {{}}",
+                f"function arrayParam([password = {literal}] = values) {{}}",
+            ]
+        )
+
+        findings = scan_public_text("frontend/initializers.ts", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [
+                ("PUBLIC_CREDENTIAL_VALUE", line)
+                for line in (2, 3, 4, 5, 7, 8, 9, 10)
+            ],
+        )
+        self.assertNotIn(
+            value, json.dumps([finding.to_dict() for finding in findings])
+        )
+
+    def test_release_tree_blocks_typescript_declaration_initializers(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            write_release_fixture(root)
+            value = "hardcoded-" + "initializer-release"
+            literal = json.dumps(value)
+            (root / "frontend" / "initializers.ts").write_text(
+                "\n".join(
+                    [
+                        "class Credentials {",
+                        f"  token: string = {literal};",
+                        f'  ["apiKey"] = {literal};',
+                        "}",
+                        f"const {{ clientSecret = {literal} }} = config;",
+                        f"function connect([password = {literal}] = values) {{}}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = evaluate_public_release(root)
+
+        findings = [
+            finding
+            for finding in result["findings"]
+            if finding["rule_id"] == "PUBLIC_CREDENTIAL_VALUE"
+        ]
+        self.assertFalse(result["ready"])
+        self.assertEqual(
+            [(finding["path"], finding["line"]) for finding in findings],
+            [
+                ("frontend/initializers.ts", line)
+                for line in (2, 3, 5, 6)
+            ],
+        )
+        self.assertNotIn(value, json.dumps(findings))
+
     def test_javascript_template_expressions_are_scanned_as_code(self):
         value = "hardcoded-" + "template-expression"
         literal = json.dumps(value)
@@ -725,6 +793,161 @@ class PublicReleaseCheckTests(unittest.TestCase):
             [(finding.rule_id, finding.line) for finding in malformed],
             [("PUBLIC_CREDENTIAL_SCAN", 1)],
         )
+
+    def test_javascript_ast_schema_uses_local_lines_and_rejects_invalid_records(self):
+        value = "hardcoded-" + "schema-value"
+        literal = json.dumps(value)
+        source = f"const token = {literal};"
+        value_start = source.index(literal)
+        valid = {
+            "key": "token",
+            "operator": "=",
+            "start": source.index("token"),
+            "valueStart": value_start,
+            "end": value_start + len(literal),
+            "line": 999,
+            "safeInitializer": False,
+        }
+
+        findings = self._scan_with_javascript_ast_record(source, [valid])
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", 1)],
+        )
+
+        invalid_records = (
+            [{**valid, "start": -1}],
+            [{**valid, "start": False}],
+            [{**valid, "end": len(source) + 1}],
+            [{**valid, "valueStart": valid["start"] - 1}],
+            [{**valid, "key": "token\nforged"}],
+            [{**valid, "operator": "=>"}],
+            [{**valid, "safeInitializer": "false"}],
+            [valid, dict(valid)],
+            [
+                {**valid, "end": len(source) - 1},
+                {
+                    **valid,
+                    "key": "apiKey",
+                    "start": valid["valueStart"],
+                    "valueStart": valid["valueStart"] + 1,
+                    "end": len(source),
+                },
+            ],
+        )
+        for records in invalid_records:
+            with self.subTest(records=records):
+                findings = self._scan_with_javascript_ast_record(source, records)
+                self.assertEqual(
+                    [(finding.rule_id, finding.line) for finding in findings],
+                    [("PUBLIC_CREDENTIAL_SCAN", 1)],
+                )
+                self.assertNotIn(
+                    value,
+                    json.dumps([finding.to_dict() for finding in findings]),
+                )
+
+    def test_javascript_ast_parse_error_line_is_bounded(self):
+        source = "const token = process.env.TOKEN;\nconst safe = true;"
+        payload = {
+            "files": [
+                {
+                    "path": "frontend/schema.ts",
+                    "ok": False,
+                    "errorLine": 999,
+                    "assignments": [],
+                    "pureStringLiterals": [],
+                }
+            ]
+        }
+        completed = SimpleNamespace(
+            returncode=0, stdout=json.dumps(payload).encode(), stderr=b""
+        )
+        with patch(
+            "scripts.public_release_check.subprocess.run", return_value=completed
+        ):
+            findings = scan_public_text("frontend/schema.ts", source)
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_SCAN", 1)],
+        )
+
+    def test_javascript_ast_batch_isolates_invalid_file_records(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            write_release_fixture(root)
+            value = "hardcoded-" + "batch-isolation"
+            literal = json.dumps(value)
+            sources = {
+                "frontend/good.ts": f"const token = {literal};",
+                "frontend/bad.ts": f"const apiKey = {literal};",
+            }
+            for path, source in sources.items():
+                (root / path).write_text(source, encoding="utf-8")
+
+            records = []
+            for path, source in sources.items():
+                key = "token" if path.endswith("good.ts") else "apiKey\nforged"
+                value_start = source.index(literal)
+                records.append(
+                    {
+                        "path": path,
+                        "ok": True,
+                        "assignments": [
+                            {
+                                "key": key,
+                                "operator": "=",
+                                "start": source.index("token" if "good" in path else "apiKey"),
+                                "valueStart": value_start,
+                                "end": value_start + len(literal),
+                                "safeInitializer": False,
+                            }
+                        ],
+                        "pureStringLiterals": [],
+                    }
+                )
+            completed = SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"files": records}).encode(),
+                stderr=b"",
+            )
+            with patch(
+                "scripts.public_release_check.subprocess.run", return_value=completed
+            ):
+                result = evaluate_public_release(root)
+
+        findings = [
+            (finding["rule_id"], finding["path"], finding["line"])
+            for finding in result["findings"]
+            if finding["rule_id"].startswith("PUBLIC_CREDENTIAL")
+        ]
+        self.assertEqual(
+            findings,
+            [
+                ("PUBLIC_CREDENTIAL_SCAN", "frontend/bad.ts", 1),
+                ("PUBLIC_CREDENTIAL_VALUE", "frontend/good.ts", 1),
+            ],
+        )
+        self.assertNotIn(value, json.dumps(result["findings"]))
+
+    def _scan_with_javascript_ast_record(self, source, assignments):
+        payload = {
+            "files": [
+                {
+                    "path": "frontend/schema.ts",
+                    "ok": True,
+                    "assignments": assignments,
+                    "pureStringLiterals": [],
+                }
+            ]
+        }
+        completed = SimpleNamespace(
+            returncode=0, stdout=json.dumps(payload).encode(), stderr=b""
+        )
+        with patch(
+            "scripts.public_release_check.subprocess.run", return_value=completed
+        ):
+            return scan_public_text("frontend/schema.ts", source)
 
     def test_javascript_react_state_allows_only_proven_empty_initializers(self):
         value = "hardcoded-" + "state-value"
