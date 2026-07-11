@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import subprocess
 import tempfile
@@ -97,25 +98,25 @@ class PublicReleaseCheckTests(unittest.TestCase):
         )
 
     def test_blocks_real_credential_assignments_without_reflecting_values(self):
-        secret = "sk-live-" + "do-not-reflect-987654"
-        text = "\n".join(["ADMIN_API_TOKEN", f"ADMIN_API_TOKEN={secret}"])
+        credential_value = "sk-live-" + "do-not-reflect-987654"
+        text = "\n".join(["ADMIN_API_TOKEN", f"ADMIN_API_TOKEN={credential_value}"])
 
         findings = scan_public_text("config.env.example", text)
 
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0].rule_id, "PUBLIC_CREDENTIAL_VALUE")
         self.assertEqual(findings[0].line, 2)
-        self.assertNotIn(secret, findings[0].summary)
-        self.assertNotIn(secret, json.dumps(findings[0].to_dict()))
+        self.assertNotIn(credential_value, findings[0].summary)
+        self.assertNotIn(credential_value, json.dumps(findings[0].to_dict()))
 
     def test_blocks_case_insensitive_shell_dotenv_and_toml_credentials(self):
-        secret = "actual-" + "credential-123"
+        credential_value = "actual-" + "credential-123"
         text = "\n".join(
             [
-                "export " + "password" + " = " + secret,
-                "Db_PassWord" + "='" + secret + "'",
-                "client_secret" + ' = "' + secret + '"',
-                "user=public " + "api_token" + "=" + secret + " mode=test",
+                "export " + "password" + " = " + credential_value,
+                "Db_PassWord" + "='" + credential_value + "'",
+                "client_secret" + ' = "' + credential_value + '"',
+                "user=public " + "api_token" + "=" + credential_value + " mode=test",
             ]
         )
 
@@ -125,15 +126,150 @@ class PublicReleaseCheckTests(unittest.TestCase):
             [(finding.rule_id, finding.line) for finding in findings],
             [("PUBLIC_CREDENTIAL_VALUE", line) for line in range(1, 5)],
         )
-        self.assertNotIn(secret, json.dumps([finding.to_dict() for finding in findings]))
+        self.assertNotIn(credential_value, json.dumps([finding.to_dict() for finding in findings]))
 
-    def test_blocks_yaml_and_json_credential_values_with_quoted_keys(self):
-        secret = "yaml-" + "credential-456"
+    def test_source_credentials_allow_only_narrow_dynamic_rhs_forms(self):
+        key = "API_" + "KEY"
+        hardcoded = "hardcoded-" + "python-value"
         text = "\n".join(
             [
-                "password" + ": " + secret,
-                '"api_token"' + ': "' + secret + '",',
-                "'Client_Secret'" + ": '" + secret + "'",
+                f'{key} = "{hardcoded}"',
+                f'{key} = "hardcoded-" + "python-value"',
+                f'{key} = f"prefix-{{user}}-{hardcoded}"',
+                f'{key} = os.getenv("{key}")',
+                f'{key} = os.environ["{key}"]',
+                f'{key} = settings.api_key',
+                f'{key} = secrets.token_urlsafe(32)',
+            ]
+        )
+
+        findings = scan_public_text("app/config.py", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", line) for line in range(1, 4)],
+        )
+
+    def test_javascript_credentials_block_literals_and_allow_direct_env_references(self):
+        key = "CLIENT_" + "SECRET"
+        hardcoded = "hardcoded-" + "javascript-value"
+        text = "\n".join(
+            [
+                f'const {key} = "{hardcoded}";',
+                f'const {key} = "hardcoded-" + "javascript-value";',
+                f'const {key} = `prefix-${{user}}-{hardcoded}`;',
+                f"const {key} = process.env.{key};",
+                f'const {key} = process.env["{key}"];',
+                f"const {key} = import.meta.env.VITE_{key};",
+                f"const {key} = config.clientSecret;",
+                f"const {key} = crypto.randomUUID();",
+            ]
+        )
+
+        findings = scan_public_text("frontend/config.ts", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", line) for line in range(1, 4)],
+        )
+
+    def test_python_source_scans_real_assignments_without_flagging_annotations(self):
+        key = "API_" + "KEY"
+        text = "\n".join(
+            [
+                'def request(token: str = "") -> dict:',
+                '    payload = {"csrf_token": result.csrf_token}',
+                "    token = load_runtime_token()",
+                f"    {key} = load_runtime_token()",
+                "    api_key = load_runtime_token()",
+                '    api_key = os.getenv("PRIMARY_API_KEY") or os.getenv("FALLBACK_API_KEY") or ""',
+                "    repeated_cookie = Message()",
+                '    headers["Authorization"] = f"Bearer {token}"',
+                '    headers["Authorization"] = f"Bearer {self.config.api_key}"',
+                '    gap_token = f"gap:{gap_key}"',
+                '    status = {"legacy_agent_token": "ok" if enabled else "fail"}',
+                "    return payload",
+            ]
+        )
+
+        findings = scan_public_text("app/request.py", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", line) for line in range(3, 6)],
+        )
+
+    def test_python_credential_dicts_block_literals_but_allow_dynamic_fixture_values(self):
+        key = "ADMIN_API_" + "TOKEN"
+        hardcoded = "hardcoded-" + "dict-value"
+        text = "\n".join(
+            [
+                f'config = {{"{key}": "{hardcoded}"}}',
+                f'fixture = {{"{key}": fixture_value("admin")}}',
+            ]
+        )
+
+        findings = scan_public_text("tests/config.py", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", 1)],
+        )
+
+    def test_exact_synthetic_credential_fixture_is_allowed_only_in_test_paths(self):
+        key = "ADMIN_API_" + "TOKEN"
+        fixture = "admin-" + "secret"
+        source = f'{key} = "{fixture}"'
+
+        self.assertEqual(scan_public_text("backend/tests/test_auth.py", source), [])
+        self.assertEqual(scan_public_text("frontend/src/auth.test.ts", source), [])
+        inline = f'call({{ {key}: "{fixture}" }}, fetchImpl)'
+        self.assertEqual(
+            scan_public_text("frontend/src/auth.test.ts", inline), []
+        )
+        outside = scan_public_text("backend/app/config.py", source)
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in outside],
+            [("PUBLIC_CREDENTIAL_VALUE", 1)],
+        )
+
+    def test_test_fixture_allowlist_rejects_realistic_modified_and_concatenated_values(self):
+        key = "ADMIN_API_" + "TOKEN"
+        realistic = "sk-live-" + "A9f3kLm2Qx7vNp4Zt8Yw6R"
+        text = "\n".join(
+            [
+                f'{key} = "{realistic}"',
+                f'{key} = "admin-secret-modified"',
+                f'{key} = "admin-" + "secret"',
+            ]
+        )
+
+        findings = scan_public_text("backend/tests/test_auth.py", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", line) for line in range(1, 4)],
+        )
+
+    def test_typescript_annotations_and_bearer_constants_are_not_credentials(self):
+        text = "\n".join(
+            [
+                "type Config = { token: string; clientSecret?: string }",
+                'const BEARER = "bearer";',
+                "function request(token: string): string { return token; }",
+                "const authorization = `Bearer ${token}`;",
+            ]
+        )
+
+        self.assertEqual(scan_public_text("frontend/types.ts", text), [])
+
+    def test_blocks_yaml_and_json_credential_values_with_quoted_keys(self):
+        credential_value = "yaml-" + "credential-456"
+        text = "\n".join(
+            [
+                "password" + ": " + credential_value,
+                '"api_token"' + ': "' + credential_value + '",',
+                "'Client_Secret'" + ": '" + credential_value + "'",
             ]
         )
 
@@ -145,14 +281,14 @@ class PublicReleaseCheckTests(unittest.TestCase):
         )
 
     def test_blocks_url_userinfo_private_keys_and_bearer_tokens(self):
-        secret = "network-" + "credential-789"
-        private_key = "-----BEGIN " + "PRIVATE KEY-----"
+        credential_value = "network-" + "credential-789"
+        key_material = "-----BEGIN " + "PRIVATE KEY-----"
         text = "\n".join(
             [
-                "endpoint=https://alice:" + secret + "@example.com/api",
-                private_key,
-                "Bearer " + secret,
-                "Authorization: Bearer " + secret,
+                "endpoint=https://alice:" + credential_value + "@example.com/api",
+                key_material,
+                "Bearer " + credential_value,
+                "Authorization: Bearer " + credential_value,
             ]
         )
 
@@ -167,7 +303,97 @@ class PublicReleaseCheckTests(unittest.TestCase):
                 ("PUBLIC_CREDENTIAL_VALUE", 4),
             ],
         )
-        self.assertNotIn(secret, json.dumps([finding.to_dict() for finding in findings]))
+        self.assertNotIn(credential_value, json.dumps([finding.to_dict() for finding in findings]))
+
+    def test_blocks_password_userinfo_for_multiple_uri_schemes_and_encoded_characters(self):
+        url_value = "p%40ss%3Aword%2Fwith%21chars"
+        text = "\n".join(
+            [
+                f"postgresql://dbuser:{url_value}@db.example/app",
+                f"mysql://dbuser:{url_value}@db.example/app",
+                f"redis://default:{url_value}@cache.example/0",
+                f"http://webuser:{url_value}@example.com/path",
+                "postgresql://dbuser@db.example/app",
+                "redis://default@cache.example/0",
+            ]
+        )
+
+        findings = scan_public_text("deploy/connection-strings.txt", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_URL_CREDENTIAL", line) for line in range(1, 5)],
+        )
+
+    def test_credential_key_vocabulary_covers_provider_and_generic_secret_keys(self):
+        keys = [
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_ACCESS_KEY_ID",
+            "GITHUB_PAT",
+            "DEPLOY_PAT",
+            "CLIENT_SECRET",
+            "TLS_PRIVATE_KEY",
+            "SERVICE_ACCESS_KEY",
+            "DB_CREDENTIAL",
+            "DB_CREDENTIALS",
+        ]
+        value = "real-" + "credential-value"
+        text = "\n".join(f"{key}={value}" for key in keys)
+
+        findings = scan_public_text("deploy/provider.env", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", line) for line in range(1, len(keys) + 1)],
+        )
+
+    def test_generic_credential_prose_is_not_an_assignment(self):
+        text = "Creden" + "tials: configure these in your local environment."
+
+        self.assertEqual(scan_public_text("docs/setup.md", text), [])
+
+    def test_bearer_placeholder_prose_and_punctuation_are_allowed(self):
+        prefix = "Bear" + "er "
+        text = "\n".join(
+            [
+                prefix + "Token，configure it locally.",
+                prefix + "credential in the request header.",
+                prefix + "...",
+            ]
+        )
+
+        self.assertEqual(scan_public_text("docs/auth.md", text), [])
+
+    def test_url_detection_does_not_span_json_fields_to_an_email_address(self):
+        text = (
+            '{"url":"https://www.example.com","email":"sales@example.com",'
+            '"type":"Organization"}'
+        )
+
+        self.assertEqual(scan_public_text("fixtures/company.json", text), [])
+
+    def test_all_bearer_literals_are_blocked_regardless_of_shape(self):
+        prefix = "Bear" + "er "
+        text = "\n".join(
+            [
+                prefix + "abc123",
+                prefix + "550e8400-e29b-41d4-a716-446655440000",
+                "Authorization: " + prefix + "opaque-short-value",
+                prefix + "$TOKEN",
+                prefix + "${TOKEN}",
+                prefix + "{token}",
+                prefix + "{self.config.api_key}",
+                prefix + "{tool_agent['agent_token']}",
+                prefix + "<your-token>",
+            ]
+        )
+
+        findings = scan_public_text("docs/auth.txt", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", line) for line in range(1, 4)],
+        )
 
     def test_allows_username_only_url_authority_without_password(self):
         findings = scan_public_text(
@@ -178,14 +404,14 @@ class PublicReleaseCheckTests(unittest.TestCase):
         self.assertEqual(findings, [])
 
     def test_blocks_multiline_yaml_credential_scalars(self):
-        secret = "multiline-" + "credential-321"
+        credential_value = "multiline-" + "credential-321"
         text = "\n".join(
             [
                 "password: |",
-                "  " + secret,
+                "  " + credential_value,
                 "description: public",
                 "api_token: >-",
-                "  " + secret,
+                "  " + credential_value,
             ]
         )
 
@@ -276,6 +502,43 @@ class PublicReleaseCheckTests(unittest.TestCase):
         self.assertEqual(
             [(finding.rule_id, finding.line) for finding in findings],
             [("PUBLIC_PERSONAL_PATH", 3)],
+        )
+
+    def test_self_scan_allowlist_blocks_identical_occurrences_beyond_count_one(self):
+        path = "docs/count-one.md"
+        rule_id = "PUBLIC_PERSONAL_PATH"
+        source_line = "checkout=/Users/" + "example/private"
+        signature = hashlib.sha256(source_line.encode("utf-8")).hexdigest()
+
+        with patch(
+            "scripts.public_release_check.SELF_SCAN_ALLOWLIST",
+            {(path, rule_id, signature): 1},
+        ):
+            findings = scan_public_text(path, f"{source_line}\n{source_line}\n")
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [(rule_id, 2)],
+        )
+
+    def test_self_scan_allowlist_blocks_next_occurrence_beyond_larger_baseline(self):
+        path = "docs/count-two.md"
+        rule_id = "PUBLIC_PERSONAL_PATH"
+        source_line = "checkout=/home/" + "example/private"
+        signature = hashlib.sha256(source_line.encode("utf-8")).hexdigest()
+
+        with patch(
+            "scripts.public_release_check.SELF_SCAN_ALLOWLIST",
+            {(path, rule_id, signature): 2},
+        ):
+            findings = scan_public_text(
+                path,
+                f"{source_line}\n{source_line}\n{source_line}\n",
+            )
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [(rule_id, 3)],
         )
 
     def test_credential_allowlist_does_not_hide_adjacent_unmarked_assignments(self):
@@ -373,6 +636,62 @@ class PublicReleaseCheckTests(unittest.TestCase):
         ]
         self.assertEqual(runtime_paths, sorted(artifact_paths))
         self.assertNotIn("fixtures/source.zip", runtime_paths)
+
+    def test_blocks_nested_case_insensitive_dotenv_except_exact_templates(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            write_release_fixture(root)
+            blocked_paths = [
+                ".ENV",
+                "config/.env",
+                "apps/web/.Env.Production",
+                "nested/config/.env.local",
+                "nested/config/.env.production.example",
+            ]
+            allowed_paths = [
+                ".env.example",
+                "config/.ENV.SAMPLE",
+                "apps/web/.env.template",
+            ]
+            for path in blocked_paths + allowed_paths:
+                destination = root / path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("PUBLIC_SETTING=example\n", encoding="utf-8")
+
+            result = evaluate_public_release(root)
+
+        runtime_paths = [
+            finding["path"]
+            for finding in result["findings"]
+            if finding["rule_id"] == "PUBLIC_RUNTIME_ARTIFACT"
+        ]
+        self.assertEqual(runtime_paths, sorted(blocked_paths))
+
+    def test_blocks_compressed_and_rotated_runtime_logs_and_databases(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            write_release_fixture(root)
+            artifact_paths = [
+                "app.log.gz",
+                "app.log.1.gz",
+                "state.sqlite.gz",
+                "state.sqlite-wal.gz",
+                "data/cache.db-shm.gz",
+            ]
+            allowed_paths = ["fixtures/source.zip", "fixtures/source.tar.gz"]
+            for path in artifact_paths + allowed_paths:
+                destination = root / path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("archive fixture", encoding="utf-8")
+
+            result = evaluate_public_release(root)
+
+        runtime_paths = [
+            finding["path"]
+            for finding in result["findings"]
+            if finding["rule_id"] == "PUBLIC_RUNTIME_ARTIFACT"
+        ]
+        self.assertEqual(runtime_paths, sorted(artifact_paths))
 
     def test_binary_files_are_skipped_for_text_scanning(self):
         with tempfile.TemporaryDirectory() as tmpdir:
