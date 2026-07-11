@@ -173,6 +173,19 @@ Do not commit `.env`, cookies, API keys, tokens, or tool credentials.
 
 For the current <production-host> real-tool wiring and remaining install list, see `docs/REAL_TOOL_ENABLEMENT.md`.
 
+### Controlled fake-IP compatibility
+
+The safe HTTP exception for transparent fake-IP proxies is default-off. Enable it only when a production network maps approved public sites into the benchmarking range and both controls can be configured:
+
+```text
+OSINT_SAFE_HTTP_FAKE_IP_CIDRS=198.18.0.0/15
+OSINT_SAFE_HTTP_FAKE_IP_HOSTS=<exact-public-host>,<exact-redirect-host>
+```
+
+Each CIDR must be an IPv4 subnet contained by `198.18.0.0/15`, and each host is an exact host match. Wildcards, URLs, ports, credentials, and IP addresses are invalid configuration. IP literals remain blocked even when they fall inside the configured subnet. Every redirect is resolved and validated again, so a redirect hostname requires its own exact entry.
+
+Both variables are required; malformed or partial configuration fails closed before the official-site request begins. The exception is used only by the internal official-site extractor. Other safe HTTP consumers retain strict public-address validation. Post-fetch content cleaning and evidence normalization do not replace destination controls because they cannot undo an SSRF request.
+
 ## 6. Native Deployment
 
 Install dependencies:

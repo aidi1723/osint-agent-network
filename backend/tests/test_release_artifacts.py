@@ -7,6 +7,20 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ReleaseArtifactTests(unittest.TestCase):
+    def test_fake_ip_allowance_is_default_off_and_documented(self):
+        environment = (ROOT / ".env.example").read_text(encoding="utf-8")
+        runbook = (ROOT / "docs" / "N100_DEPLOYMENT_RUNBOOK.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("OSINT_SAFE_HTTP_FAKE_IP_CIDRS=\n", environment)
+        self.assertIn("OSINT_SAFE_HTTP_FAKE_IP_HOSTS=\n", environment)
+        self.assertIn("default-off", runbook)
+        self.assertIn("exact host", runbook)
+        self.assertIn("`198.18.0.0/15`", runbook)
+        self.assertIn("IP literals remain blocked", runbook)
+        self.assertIn("Every redirect", runbook)
+
     def test_backend_package_discovery_excludes_runtime_data(self):
         config = tomllib.loads(
             (ROOT / "backend" / "pyproject.toml").read_text(encoding="utf-8")
