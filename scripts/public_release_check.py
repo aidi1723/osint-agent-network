@@ -282,6 +282,10 @@ class JavaScriptAstFile:
     error_category: str | None = None
 
 
+class JavaScriptAstDeadlineExceeded(Exception):
+    pass
+
+
 def tracked_files(root: Path) -> list[Path]:
     root = root.resolve()
     git_metadata = root / ".git"
@@ -561,11 +565,22 @@ def _javascript_ast_batch(
 
     deadline = time.monotonic() + JAVASCRIPT_AST_TOTAL_TIMEOUT_SECONDS
     results: dict[str, JavaScriptAstFile] = {}
-    chunks: list[list[tuple[str, str]]] = []
-    chunk: list[tuple[str, str]] = []
+    chunks: list[tuple[list[tuple[str, str]], bytes]] = []
+    chunk_files: list[tuple[str, str]] = []
+    chunk_entries: list[bytes] = []
+    chunk_size = len(b'{"files":[]}')
     total_bytes = 0
     total_files = 0
-    for path, text in sorted(files, key=lambda item: item[0].encode("utf-8")):
+    sorted_files = sorted(files, key=lambda item: item[0].encode("utf-8"))
+    if _javascript_ast_deadline_expired(deadline):
+        return {path: _javascript_ast_failure("timeout") for path, _text in files}
+    for file_index, (path, text) in enumerate(sorted_files):
+        if _javascript_ast_deadline_expired(deadline):
+            results.update(
+                {pending_path: _javascript_ast_failure("timeout")
+                 for pending_path, _pending_text in sorted_files[file_index:]}
+            )
+            break
         text_bytes = len(text.encode("utf-8"))
         if (
             total_files >= JAVASCRIPT_AST_MAX_TOTAL_FILES
@@ -578,25 +593,73 @@ def _javascript_ast_batch(
         if text_bytes > JAVASCRIPT_AST_MAX_FILE_BYTES:
             results[path] = _javascript_ast_failure("input_limit")
             continue
-        candidate = [*chunk, (path, text)]
-        if chunk and (
-            len(candidate) > JAVASCRIPT_AST_MAX_FILES_PER_BATCH
-            or len(_javascript_ast_payload(candidate)) > JAVASCRIPT_AST_MAX_INPUT_BYTES
+        entry = _javascript_ast_file_entry(path, text)
+        if _javascript_ast_deadline_expired(deadline):
+            results.update(
+                {pending_path: _javascript_ast_failure("timeout")
+                 for pending_path, _pending_text in sorted_files[file_index:]}
+            )
+            break
+        candidate_size = chunk_size + len(entry) + (1 if chunk_entries else 0)
+        if chunk_files and (
+            len(chunk_files) >= JAVASCRIPT_AST_MAX_FILES_PER_BATCH
+            or candidate_size > JAVASCRIPT_AST_MAX_INPUT_BYTES
         ):
-            chunks.append(chunk)
-            chunk = []
-            candidate = [(path, text)]
-        if len(_javascript_ast_payload(candidate)) > JAVASCRIPT_AST_MAX_INPUT_BYTES:
+            if _javascript_ast_deadline_expired(deadline):
+                results.update(
+                    {chunk_path: _javascript_ast_failure("timeout")
+                     for chunk_path, _chunk_text in chunk_files}
+                )
+                results.update(
+                    {pending_path: _javascript_ast_failure("timeout")
+                     for pending_path, _pending_text in sorted_files[file_index:]}
+                )
+                chunk_files = []
+                chunk_entries = []
+                break
+            chunk_payload = _javascript_ast_payload_from_entries(chunk_entries)
+            if _javascript_ast_deadline_expired(deadline):
+                results.update(
+                    {chunk_path: _javascript_ast_failure("timeout")
+                     for chunk_path, _chunk_text in chunk_files}
+                )
+                results.update(
+                    {pending_path: _javascript_ast_failure("timeout")
+                     for pending_path, _pending_text in sorted_files[file_index:]}
+                )
+                chunk_files = []
+                chunk_entries = []
+                break
+            chunks.append((chunk_files, chunk_payload))
+            chunk_files = []
+            chunk_entries = []
+            chunk_size = len(b'{"files":[]}')
+            candidate_size = chunk_size + len(entry)
+        if candidate_size > JAVASCRIPT_AST_MAX_INPUT_BYTES:
             results[path] = _javascript_ast_failure("input_limit")
             continue
-        chunk = candidate
-    if chunk:
-        chunks.append(chunk)
+        chunk_files.append((path, text))
+        chunk_entries.append(entry)
+        chunk_size = candidate_size
+    if chunk_files:
+        if _javascript_ast_deadline_expired(deadline):
+            results.update(
+                {path: _javascript_ast_failure("timeout") for path, _text in chunk_files}
+            )
+        else:
+            chunk_payload = _javascript_ast_payload_from_entries(chunk_entries)
+            if _javascript_ast_deadline_expired(deadline):
+                results.update(
+                    {path: _javascript_ast_failure("timeout")
+                     for path, _text in chunk_files}
+                )
+            else:
+                chunks.append((chunk_files, chunk_payload))
 
-    for index, current_chunk in enumerate(chunks):
+    for index, (current_chunk, payload) in enumerate(chunks):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            for pending_chunk in chunks[index:]:
+            for pending_chunk, _pending_payload in chunks[index:]:
                 results.update(
                     {path: _javascript_ast_failure("timeout") for path, _text in pending_chunk}
                 )
@@ -604,6 +667,8 @@ def _javascript_ast_batch(
         results.update(
             _javascript_ast_invoke(
                 current_chunk,
+                payload=payload,
+                deadline=deadline,
                 timeout_seconds=min(JAVASCRIPT_AST_TIMEOUT_SECONDS, remaining),
             )
         )
@@ -613,11 +678,21 @@ def _javascript_ast_batch(
 
 
 def _javascript_ast_payload(files: list[tuple[str, str]]) -> bytes:
+    return _javascript_ast_payload_from_entries(
+        [_javascript_ast_file_entry(path, text) for path, text in files]
+    )
+
+
+def _javascript_ast_file_entry(path: str, text: str) -> bytes:
     return json.dumps(
-        {"files": [{"path": path, "text": text} for path, text in files]},
+        {"path": path, "text": text},
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def _javascript_ast_payload_from_entries(entries: list[bytes]) -> bytes:
+    return b'{"files":[' + b",".join(entries) + b"]}"
 
 
 def _javascript_ast_failure(category: str, line: int = 1) -> JavaScriptAstFile:
@@ -629,13 +704,32 @@ def _javascript_ast_failure(category: str, line: int = 1) -> JavaScriptAstFile:
     return JavaScriptAstFile({}, (), line, safe_category)
 
 
+def _javascript_ast_deadline_expired(deadline: float | None) -> bool:
+    return deadline is not None and time.monotonic() >= deadline
+
+
+def _javascript_ast_check_deadline(deadline: float | None) -> None:
+    if _javascript_ast_deadline_expired(deadline):
+        raise JavaScriptAstDeadlineExceeded
+
+
 def _javascript_ast_invoke(
     files: list[tuple[str, str]],
     *,
+    payload: bytes | None = None,
+    deadline: float | None = None,
     timeout_seconds: float | None = None,
 ) -> dict[str, JavaScriptAstFile]:
     failed = {path: _javascript_ast_failure("invalid_schema") for path, _text in files}
-    payload = _javascript_ast_payload(files)
+    if deadline is None:
+        deadline = time.monotonic() + (
+            JAVASCRIPT_AST_TIMEOUT_SECONDS
+            if timeout_seconds is None
+            else max(0.0, timeout_seconds)
+        )
+    if _javascript_ast_deadline_expired(deadline):
+        return {path: _javascript_ast_failure("timeout") for path, _text in files}
+    payload = _javascript_ast_payload(files) if payload is None else payload
     environment = os.environ.copy()
     environment.update(
         {
@@ -651,19 +745,25 @@ def _javascript_ast_invoke(
         payload,
         environment,
         timeout_seconds=(
-            JAVASCRIPT_AST_TIMEOUT_SECONDS
+            min(JAVASCRIPT_AST_TIMEOUT_SECONDS, max(0.0, deadline - time.monotonic()))
             if timeout_seconds is None
-            else max(0.0, timeout_seconds)
+            else min(max(0.0, timeout_seconds), max(0.0, deadline - time.monotonic()))
         ),
     )
+    if _javascript_ast_deadline_expired(deadline):
+        return {path: _javascript_ast_failure("timeout") for path, _text in files}
     if category is not None:
         return {path: _javascript_ast_failure(category) for path, _text in files}
     if returncode != 0:
         return {path: _javascript_ast_failure("process_error") for path, _text in files}
     try:
+        _javascript_ast_check_deadline(deadline)
         output = json.loads(raw_output.decode("utf-8"))
+        _javascript_ast_check_deadline(deadline)
     except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
         return {path: _javascript_ast_failure("invalid_json") for path, _text in files}
+    except JavaScriptAstDeadlineExceeded:
+        return {path: _javascript_ast_failure("timeout") for path, _text in files}
     if (
         isinstance(output, dict)
         and set(output) == {"error", "files"}
@@ -682,6 +782,12 @@ def _javascript_ast_invoke(
     requested_texts = dict(files)
     requested_paths = set(requested_texts)
     for record in records:
+        if _javascript_ast_deadline_expired(deadline):
+            results.update(
+                {path: _javascript_ast_failure("timeout")
+                 for path in requested_paths - results.keys()}
+            )
+            return results
         if not isinstance(record, dict):
             return failed
         record_path = record.get("path")
@@ -690,7 +796,14 @@ def _javascript_ast_invoke(
         if record_path in results:
             results[record_path] = failed[record_path]
             continue
-        parsed = _javascript_ast_record(record, requested_texts)
+        try:
+            parsed = _javascript_ast_record(record, requested_texts, deadline=deadline)
+        except JavaScriptAstDeadlineExceeded:
+            results.update(
+                {pending_path: _javascript_ast_failure("timeout")
+                 for pending_path in requested_paths - results.keys()}
+            )
+            return results
         if parsed is None:
             results[record_path] = failed[record_path]
             continue
@@ -815,8 +928,12 @@ def _terminate_and_reap(process: subprocess.Popen) -> None:
 
 
 def _javascript_ast_record(
-    record: object, requested_texts: dict[str, str]
+    record: object,
+    requested_texts: dict[str, str],
+    *,
+    deadline: float | None = None,
 ) -> tuple[str, JavaScriptAstFile] | None:
+    _javascript_ast_check_deadline(deadline)
     if not isinstance(record, dict):
         return None
     path = record.get("path")
@@ -850,12 +967,15 @@ def _javascript_ast_record(
     ):
         return None
     source_text = requested_texts[path]
-    offset_map = _utf16_offset_map(source_text)
+    offset_map = _utf16_offset_map(source_text, deadline=deadline)
     source_line_offsets = _line_offsets(source_text)
+    _javascript_ast_check_deadline(deadline)
     assignments: dict[int, list[tuple[str, str, str, bool]]] = {}
     assignment_records: list[tuple[int, int, int, str]] = []
     assignment_identities: set[tuple[int, int, int, str]] = set()
-    for assignment in raw_assignments:
+    for assignment_index, assignment in enumerate(raw_assignments):
+        if assignment_index % 256 == 0:
+            _javascript_ast_check_deadline(deadline)
         if not isinstance(assignment, dict):
             return None
         if set(assignment) != {
@@ -898,9 +1018,13 @@ def _javascript_ast_record(
     credential_records = [
         record for record in assignment_records if _credential_key(record[3])
     ]
+    _javascript_ast_check_deadline(deadline)
     credential_records.sort(key=lambda item: (item[0], item[2]))
+    _javascript_ast_check_deadline(deadline)
     previous_range: tuple[int, int] | None = None
-    for start, _value_start, end, _key in credential_records:
+    for range_index, (start, _value_start, end, _key) in enumerate(credential_records):
+        if range_index % 256 == 0:
+            _javascript_ast_check_deadline(deadline)
         current_range = (start, end)
         if (
             previous_range is not None
@@ -912,7 +1036,9 @@ def _javascript_ast_record(
             previous_range = current_range
     literals: list[tuple[int, int]] = []
     literal_ranges: set[tuple[int, int]] = set()
-    for literal in raw_literals:
+    for literal_index, literal in enumerate(raw_literals):
+        if literal_index % 256 == 0:
+            _javascript_ast_check_deadline(deadline)
         if not isinstance(literal, dict):
             return None
         if set(literal) != {"start", "end"}:
@@ -933,7 +1059,9 @@ def _javascript_ast_record(
             return None
         literal_ranges.add(literal_range)
         literals.append((offset_map[start], offset_map[end]))
+    _javascript_ast_check_deadline(deadline)
     sorted_literal_ranges = sorted(literal_ranges)
+    _javascript_ast_check_deadline(deadline)
     if any(
         start < previous_end
         for (_previous_start, previous_end), (start, _end)
@@ -943,10 +1071,14 @@ def _javascript_ast_record(
     return path, JavaScriptAstFile(assignments, tuple(literals))
 
 
-def _utf16_offset_map(text: str) -> dict[int, int]:
+def _utf16_offset_map(
+    text: str, *, deadline: float | None = None
+) -> dict[int, int]:
     offsets = {0: 0}
     utf16_offset = 0
     for index, character in enumerate(text, start=1):
+        if index % 4096 == 0:
+            _javascript_ast_check_deadline(deadline)
         utf16_offset += 2 if ord(character) > 0xFFFF else 1
         offsets[utf16_offset] = index
     return offsets

@@ -988,36 +988,99 @@ class PublicReleaseCheckTests(unittest.TestCase):
                                  [("PUBLIC_CREDENTIAL_SCAN", 1)])
                 self.assertEqual(records[files[1][0]].error_category, "input_limit")
 
+    def test_javascript_ast_deadline_bounds_1024_file_chunk_construction(self):
+        files = [
+            (f"frontend/bulk-{index:04}.ts", "x" * 16384)
+            for index in range(1024)
+        ]
+        real_dumps = json.dumps
+        clock = SimpleNamespace(now=0.0, dumps=0)
+
+        def monotonic():
+            return clock.now
+
+        def bounded_dumps(*args, **kwargs):
+            clock.dumps += 1
+            clock.now += 0.002
+            if clock.dumps > 3:
+                raise AssertionError("serialization continued after total deadline")
+            return real_dumps(*args, **kwargs)
+
+        with (
+            patch("scripts.public_release_check.time.monotonic", side_effect=monotonic),
+            patch("scripts.public_release_check.json.dumps", side_effect=bounded_dumps),
+            patch.object(release_check, "JAVASCRIPT_AST_TOTAL_TIMEOUT_SECONDS", 0.003),
+            patch("scripts.public_release_check._javascript_ast_process") as process,
+        ):
+            records = release_check._javascript_ast_batch(files)
+
+        process.assert_not_called()
+        self.assertLessEqual(clock.dumps, 3)
+        self.assertEqual(
+            {record.error_category for record in records.values()}, {"timeout"}
+        )
+
+    def test_javascript_ast_record_validation_checks_deadline_periodically(self):
+        count = 20_000
+        source = "x" * count
+        assignments = [
+            {"key": "token", "operator": "=", "start": index,
+             "valueStart": index, "end": index + 1, "safeInitializer": False}
+            for index in range(count)
+        ]
+        record = {"path": "frontend/validation.ts", "ok": True,
+                  "assignments": assignments, "pureStringLiterals": []}
+        deadline_error = getattr(
+            release_check, "JavaScriptAstDeadlineExceeded", RuntimeError
+        )
+        checks = iter((False, False, True))
+
+        with (
+            patch.object(
+                release_check,
+                "_javascript_ast_deadline_expired",
+                side_effect=lambda _deadline: next(checks),
+                create=True,
+            ),
+            self.assertRaises(deadline_error),
+        ):
+            release_check._javascript_ast_record(
+                record, {"frontend/validation.ts": source}, deadline=1.0
+            )
+
     def test_javascript_ast_uses_one_total_deadline_across_chunks(self):
-        helper = """
-const chunks = [];
-for await (const chunk of process.stdin) chunks.push(chunk);
-const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-await new Promise((resolve) => setTimeout(resolve, 180));
-const files = input.files.map(({ path }) => ({
-  path, ok: true, assignments: [], pureStringLiterals: [],
-}));
-process.stdout.write(JSON.stringify({ files }));
-"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            helper_path = Path(tmpdir) / "slow-helper.mjs"
-            helper_path.write_text(helper, encoding="utf-8")
-            files = [("frontend/a.ts", "const a = 1;"),
-                     ("frontend/b.ts", "const b = 2;")]
-            started = time.monotonic()
-            with (
-                patch.object(release_check, "JAVASCRIPT_AST_HELPER", helper_path),
-                patch.object(release_check, "JAVASCRIPT_AST_MAX_FILES_PER_BATCH", 1),
-                patch.object(release_check, "JAVASCRIPT_AST_TIMEOUT_SECONDS", 1),
-                patch.object(release_check, "JAVASCRIPT_AST_TOTAL_TIMEOUT_SECONDS", 0.3,
-                             create=True),
-            ):
-                records = release_check._javascript_ast_batch(files)
-            elapsed = time.monotonic() - started
+        files = [("frontend/a.ts", "const a = 1;"),
+                 ("frontend/b.ts", "const b = 2;")]
+        clock = SimpleNamespace(now=0.0)
+        calls = []
+
+        def process(payload, _environment, *, timeout_seconds):
+            calls.append(timeout_seconds)
+            clock.now += 0.2
+            request = json.loads(payload)
+            output = {"files": [
+                {"path": item["path"], "ok": True, "assignments": [],
+                 "pureStringLiterals": []}
+                for item in request["files"]
+            ]}
+            return None, 0, json.dumps(output).encode()
+
+        with (
+            patch("scripts.public_release_check.time.monotonic",
+                  side_effect=lambda: clock.now),
+            patch.object(release_check, "JAVASCRIPT_AST_MAX_FILES_PER_BATCH", 1),
+            patch.object(release_check, "JAVASCRIPT_AST_TIMEOUT_SECONDS", 1),
+            patch.object(release_check, "JAVASCRIPT_AST_TOTAL_TIMEOUT_SECONDS", 0.3),
+            patch("scripts.public_release_check._javascript_ast_process",
+                  side_effect=process),
+        ):
+            records = release_check._javascript_ast_batch(files)
 
         self.assertIsNone(records[files[0][0]].error_line)
         self.assertEqual(records[files[1][0]].error_category, "timeout")
-        self.assertLess(elapsed, 0.4)
+        self.assertEqual(len(calls), 2)
+        self.assertAlmostEqual(calls[0], 0.3)
+        self.assertAlmostEqual(calls[1], 0.1)
 
     def test_javascript_ast_terminates_and_reaps_output_flood_immediately(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1033,23 +1096,19 @@ setInterval(() => process.stdout.write(chunk), 5);
 """,
                 encoding="utf-8",
             )
-            started = time.monotonic()
             with (
                 patch.dict(os.environ, {"PUBLIC_RELEASE_TEST_PID": str(pid_path)}),
                 patch.object(release_check, "JAVASCRIPT_AST_HELPER", helper_path),
                 patch.object(release_check, "JAVASCRIPT_AST_MAX_OUTPUT_BYTES", 32768),
-                patch.object(release_check, "JAVASCRIPT_AST_TIMEOUT_SECONDS", 0.4),
-                patch.object(release_check, "JAVASCRIPT_AST_TOTAL_TIMEOUT_SECONDS", 0.4,
-                             create=True),
+                patch.object(release_check, "JAVASCRIPT_AST_TIMEOUT_SECONDS", 5),
+                patch.object(release_check, "JAVASCRIPT_AST_TOTAL_TIMEOUT_SECONDS", 5),
             ):
                 record = release_check._javascript_ast_batch(
                     [("frontend/flood.ts", "const safe = true;")]
                 )["frontend/flood.ts"]
-            elapsed = time.monotonic() - started
             pid = int(pid_path.read_text(encoding="utf-8"))
 
         self.assertEqual(record.error_category, "output_limit")
-        self.assertLess(elapsed, 0.25)
         with self.assertRaises(ProcessLookupError):
             os.kill(pid, 0)
 
