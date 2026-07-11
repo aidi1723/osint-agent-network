@@ -34,17 +34,23 @@ describe("compactGraphLabel", () => {
     expect(() => compactGraphLabel("Label", 2.5)).toThrow(RangeError);
   });
 
-  it("loads and preserves grapheme clusters when Intl.Segmenter is unavailable", async () => {
+  it("loads and uses conservative truncation when Intl.Segmenter is unavailable", async () => {
     const descriptor = Object.getOwnPropertyDescriptor(Intl, "Segmenter");
     vi.resetModules();
     Object.defineProperty(Intl, "Segmenter", { configurable: true, value: undefined });
     try {
       const fallbackModule = await import("./graph-labels");
-      expect(fallbackModule.compactGraphLabel("e\u0301xy", 2)).toBe("e\u0301…");
-      expect(fallbackModule.compactGraphLabel("✈️AB", 2)).toBe("✈️…");
-      expect(fallbackModule.compactGraphLabel("👍🏽AB", 2)).toBe("👍🏽…");
-      expect(fallbackModule.compactGraphLabel("👨‍👩‍👧‍👦AB", 2)).toBe("👨‍👩‍👧‍👦…");
-      expect(fallbackModule.compactGraphLabel("🇨🇳AB", 2)).toBe("🇨🇳…");
+      expect(fallbackModule.compactGraphLabel("Example Manager", 12)).toBe("Example Man…");
+      expect(fallbackModule.compactGraphLabel("短中文", 12)).toBe("短中文");
+      expect(fallbackModule.compactGraphLabel("\r\nA", 2)).toBe("\r\nA");
+      expect(fallbackModule.compactGraphLabel("e\u0301xy", 2)).toBe("…");
+      expect(fallbackModule.compactGraphLabel("✈️AB", 2)).toBe("…");
+      expect(fallbackModule.compactGraphLabel("👍🏽AB", 2)).toBe("…");
+      expect(fallbackModule.compactGraphLabel("👨‍👩‍👧‍👦AB", 2)).toBe("…");
+      expect(fallbackModule.compactGraphLabel("🇨🇳AB", 2)).toBe("…");
+      expect(fallbackModule.compactGraphLabel("가A", 2)).toBe("…");
+      expect(fallbackModule.compactGraphLabel("क्षाA", 2)).toBe("…");
+      expect(fallbackModule.compactGraphLabel("🏴\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}A", 2)).toBe("…");
     } finally {
       if (descriptor) Object.defineProperty(Intl, "Segmenter", descriptor);
       else Reflect.deleteProperty(Intl, "Segmenter");
