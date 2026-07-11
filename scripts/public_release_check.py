@@ -7,9 +7,11 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import queue
 import re
 import subprocess
-import tempfile
+import threading
+import time
 import tomllib
 
 
@@ -24,6 +26,9 @@ JAVASCRIPT_AST_MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 JAVASCRIPT_AST_MAX_ASSIGNMENTS = 20_000
 JAVASCRIPT_AST_MAX_LITERALS = 20_000
 JAVASCRIPT_AST_TIMEOUT_SECONDS = 10
+JAVASCRIPT_AST_MAX_TOTAL_FILES = 4096
+JAVASCRIPT_AST_MAX_TOTAL_BYTES = 64 * 1024 * 1024
+JAVASCRIPT_AST_TOTAL_TIMEOUT_SECONDS = 30
 JAVASCRIPT_AST_FAILURE_CATEGORIES = frozenset(
     {
         "input_limit", "invalid_json", "invalid_schema", "node_missing",
@@ -554,10 +559,23 @@ def _javascript_ast_batch(
     if not files:
         return failed
 
+    deadline = time.monotonic() + JAVASCRIPT_AST_TOTAL_TIMEOUT_SECONDS
     results: dict[str, JavaScriptAstFile] = {}
+    chunks: list[list[tuple[str, str]]] = []
     chunk: list[tuple[str, str]] = []
+    total_bytes = 0
+    total_files = 0
     for path, text in sorted(files, key=lambda item: item[0].encode("utf-8")):
-        if len(text.encode("utf-8")) > JAVASCRIPT_AST_MAX_FILE_BYTES:
+        text_bytes = len(text.encode("utf-8"))
+        if (
+            total_files >= JAVASCRIPT_AST_MAX_TOTAL_FILES
+            or total_bytes + text_bytes > JAVASCRIPT_AST_MAX_TOTAL_BYTES
+        ):
+            results[path] = _javascript_ast_failure("input_limit")
+            continue
+        total_files += 1
+        total_bytes += text_bytes
+        if text_bytes > JAVASCRIPT_AST_MAX_FILE_BYTES:
             results[path] = _javascript_ast_failure("input_limit")
             continue
         candidate = [*chunk, (path, text)]
@@ -565,7 +583,7 @@ def _javascript_ast_batch(
             len(candidate) > JAVASCRIPT_AST_MAX_FILES_PER_BATCH
             or len(_javascript_ast_payload(candidate)) > JAVASCRIPT_AST_MAX_INPUT_BYTES
         ):
-            results.update(_javascript_ast_invoke(chunk))
+            chunks.append(chunk)
             chunk = []
             candidate = [(path, text)]
         if len(_javascript_ast_payload(candidate)) > JAVASCRIPT_AST_MAX_INPUT_BYTES:
@@ -573,7 +591,22 @@ def _javascript_ast_batch(
             continue
         chunk = candidate
     if chunk:
-        results.update(_javascript_ast_invoke(chunk))
+        chunks.append(chunk)
+
+    for index, current_chunk in enumerate(chunks):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            for pending_chunk in chunks[index:]:
+                results.update(
+                    {path: _javascript_ast_failure("timeout") for path, _text in pending_chunk}
+                )
+            break
+        results.update(
+            _javascript_ast_invoke(
+                current_chunk,
+                timeout_seconds=min(JAVASCRIPT_AST_TIMEOUT_SECONDS, remaining),
+            )
+        )
     for path, _text in files:
         results.setdefault(path, failed[path])
     return results
@@ -598,6 +631,8 @@ def _javascript_ast_failure(category: str, line: int = 1) -> JavaScriptAstFile:
 
 def _javascript_ast_invoke(
     files: list[tuple[str, str]],
+    *,
+    timeout_seconds: float | None = None,
 ) -> dict[str, JavaScriptAstFile]:
     failed = {path: _javascript_ast_failure("invalid_schema") for path, _text in files}
     payload = _javascript_ast_payload(files)
@@ -612,31 +647,19 @@ def _javascript_ast_invoke(
             "PUBLIC_RELEASE_AST_MAX_LITERALS": str(JAVASCRIPT_AST_MAX_LITERALS),
         }
     )
-    try:
-        with tempfile.TemporaryFile() as output_file:
-            completed = subprocess.run(
-                ["node", str(JAVASCRIPT_AST_HELPER)],
-                check=False,
-                input=payload,
-                stdout=output_file,
-                stderr=subprocess.DEVNULL,
-                timeout=JAVASCRIPT_AST_TIMEOUT_SECONDS,
-                env=environment,
-            )
-            mocked_stdout = getattr(completed, "stdout", None)
-            if isinstance(mocked_stdout, bytes):
-                raw_output = mocked_stdout[: JAVASCRIPT_AST_MAX_OUTPUT_BYTES + 1]
-            else:
-                output_file.seek(0)
-                raw_output = output_file.read(JAVASCRIPT_AST_MAX_OUTPUT_BYTES + 1)
-    except subprocess.TimeoutExpired:
-        return {path: _javascript_ast_failure("timeout") for path, _text in files}
-    except OSError:
-        return {path: _javascript_ast_failure("node_missing") for path, _text in files}
-    if completed.returncode != 0:
+    category, returncode, raw_output = _javascript_ast_process(
+        payload,
+        environment,
+        timeout_seconds=(
+            JAVASCRIPT_AST_TIMEOUT_SECONDS
+            if timeout_seconds is None
+            else max(0.0, timeout_seconds)
+        ),
+    )
+    if category is not None:
+        return {path: _javascript_ast_failure(category) for path, _text in files}
+    if returncode != 0:
         return {path: _javascript_ast_failure("process_error") for path, _text in files}
-    if len(raw_output) > JAVASCRIPT_AST_MAX_OUTPUT_BYTES:
-        return {path: _javascript_ast_failure("output_limit") for path, _text in files}
     try:
         output = json.loads(raw_output.decode("utf-8"))
     except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
@@ -676,6 +699,119 @@ def _javascript_ast_invoke(
     for path in requested_paths - results.keys():
         results[path] = failed[path]
     return results
+
+
+def _javascript_ast_process(
+    payload: bytes,
+    environment: dict[str, str],
+    *,
+    timeout_seconds: float,
+) -> tuple[str | None, int | None, bytes]:
+    try:
+        process = subprocess.Popen(
+            ["node", str(JAVASCRIPT_AST_HELPER)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=environment,
+        )
+    except OSError:
+        return "node_missing", None, b""
+
+    output_queue: queue.Queue[bytes | None] = queue.Queue(maxsize=2)
+    stop = threading.Event()
+
+    def write_input() -> None:
+        try:
+            if process.stdin is not None:
+                process.stdin.write(payload)
+                process.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+
+    def read_output() -> None:
+        try:
+            if process.stdout is not None:
+                while not stop.is_set():
+                    chunk = process.stdout.read(65536)
+                    if not chunk:
+                        break
+                    while not stop.is_set():
+                        try:
+                            output_queue.put(chunk, timeout=0.05)
+                            break
+                        except queue.Full:
+                            continue
+        finally:
+            while not stop.is_set():
+                try:
+                    output_queue.put(None, timeout=0.05)
+                    break
+                except queue.Full:
+                    continue
+
+    writer = threading.Thread(target=write_input, daemon=True)
+    reader = threading.Thread(target=read_output, daemon=True)
+    writer.start()
+    reader.start()
+    deadline = time.monotonic() + timeout_seconds
+    output = bytearray()
+    category: str | None = None
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            category = "timeout"
+            break
+        try:
+            chunk = output_queue.get(timeout=remaining)
+        except queue.Empty:
+            category = "timeout"
+            break
+        if chunk is None:
+            break
+        if len(output) + len(chunk) > JAVASCRIPT_AST_MAX_OUTPUT_BYTES:
+            category = "output_limit"
+            break
+        output.extend(chunk)
+
+    if category is not None:
+        _terminate_and_reap(process)
+    else:
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            category = "timeout"
+            _terminate_and_reap(process)
+
+    stop.set()
+    writer.join(timeout=0.2)
+    reader.join(timeout=0.2)
+    if process.stdin is not None and not process.stdin.closed:
+        process.stdin.close()
+    if process.stdout is not None:
+        process.stdout.close()
+    if process.poll() is None:
+        _terminate_and_reap(process)
+    return category, process.returncode, bytes(output)
+
+
+def _terminate_and_reap(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        process.wait()
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=0.2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+    except OSError:
+        try:
+            process.kill()
+        except OSError:
+            pass
+        process.wait()
 
 
 def _javascript_ast_record(

@@ -1,5 +1,4 @@
 import { createRequire } from "node:module";
-import { writeSync } from "node:fs";
 
 const limits = {
   inputBytes: boundedLimit("PUBLIC_RELEASE_AST_MAX_INPUT_BYTES", 2 * 1024 * 1024),
@@ -11,7 +10,7 @@ const limits = {
 };
 const ts = loadTypeScript();
 if (!ts) {
-  writeOutput({ error: "typescript_missing", files: [] });
+  await writeOutput({ error: "typescript_missing", files: [] });
   process.exit(0);
 }
 const equalityOperators = new Set([
@@ -23,7 +22,7 @@ const equalityOperators = new Set([
 
 const inputResult = await readInput();
 if (inputResult.error) {
-  writeOutput({ error: inputResult.error, files: [] });
+  await writeOutput({ error: inputResult.error, files: [] });
 } else {
   const input = inputResult.value;
   if (
@@ -42,15 +41,15 @@ if (inputResult.error) {
       typeof entry.text !== "string"
     )
   ) {
-    writeOutput({ error: "invalid_schema", files: [] });
+    await writeOutput({ error: "invalid_schema", files: [] });
     process.exit(0);
   }
   if (input.files.some((entry) => Buffer.byteLength(entry.text, "utf8") > limits.fileBytes)) {
-    writeOutput({ error: "input_limit", files: [] });
+    await writeOutput({ error: "input_limit", files: [] });
     process.exit(0);
   }
   const files = input.files.map(parseFile);
-  writeOutput({ files });
+  await writeOutput({ files });
 }
 
 async function readInput() {
@@ -95,7 +94,12 @@ function writeOutput(payload) {
   if (Buffer.byteLength(output, "utf8") > limits.outputBytes) {
     output = JSON.stringify({ error: "output_limit", files: [] });
   }
-  writeSync(process.stdout.fd, output);
+  return new Promise((resolve, reject) => {
+    process.stdout.write(output, "utf8", (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
 }
 
 function parseFile(entry) {

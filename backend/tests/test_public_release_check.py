@@ -809,23 +809,16 @@ class PublicReleaseCheckTests(unittest.TestCase):
         value = "hardcoded-" + "parser-failure"
         source = f'const token: string = "{value}";'
         failure_cases = (
-            OSError("node unavailable"),
-            SimpleNamespace(returncode=1, stdout=b"", stderr=b"ignored"),
-            SimpleNamespace(returncode=0, stdout=b"not-json", stderr=b""),
+            ("node_missing", None, b""),
+            (None, 1, b""),
+            (None, 0, b"not-json"),
         )
         for failure in failure_cases:
-            with self.subTest(failure=type(failure).__name__):
-                if isinstance(failure, OSError):
-                    mocked = patch(
-                        "scripts.public_release_check.subprocess.run",
-                        side_effect=failure,
-                    )
-                else:
-                    mocked = patch(
-                        "scripts.public_release_check.subprocess.run",
-                        return_value=failure,
-                    )
-                with mocked:
+            with self.subTest(failure=failure[:2]):
+                with patch(
+                    "scripts.public_release_check._javascript_ast_process",
+                    return_value=failure,
+                ):
                     findings = scan_public_text("frontend/parser.ts", source)
                 self.assertEqual(
                     [(finding.rule_id, finding.line) for finding in findings],
@@ -853,8 +846,9 @@ class PublicReleaseCheckTests(unittest.TestCase):
         ]
         calls = []
 
-        def fake_run(*_args, **kwargs):
-            request = json.loads(kwargs["input"])
+        def fake_process(payload, _environment, *, timeout_seconds):
+            self.assertGreater(timeout_seconds, 0)
+            request = json.loads(payload)
             calls.append([item["path"] for item in request["files"]])
             if request["files"][0]["path"].endswith("bad.ts"):
                 output = b"not-json"
@@ -873,15 +867,15 @@ class PublicReleaseCheckTests(unittest.TestCase):
                     }],
                     "pureStringLiterals": [],
                 }]}).encode()
-            if hasattr(kwargs["stdout"], "write"):
-                kwargs["stdout"].write(output)
-                return SimpleNamespace(returncode=0)
-            return SimpleNamespace(returncode=0, stdout=output, stderr=b"")
+            return None, 0, output
 
         with (
             patch.object(release_check, "JAVASCRIPT_AST_MAX_FILES_PER_BATCH", 1,
                          create=True),
-            patch("scripts.public_release_check.subprocess.run", side_effect=fake_run),
+            patch(
+                "scripts.public_release_check._javascript_ast_process",
+                side_effect=fake_process,
+            ),
         ):
             records = release_check._javascript_ast_batch(files)
 
@@ -899,21 +893,21 @@ class PublicReleaseCheckTests(unittest.TestCase):
         good = 'const safe = "ok";'
         calls = []
 
-        def fake_run(*_args, **kwargs):
-            request = json.loads(kwargs["input"])
+        def fake_process(payload, _environment, *, timeout_seconds):
+            self.assertGreater(timeout_seconds, 0)
+            request = json.loads(payload)
             calls.append([item["path"] for item in request["files"]])
-            output = (fixture_value * 20).encode()
-            if hasattr(kwargs["stdout"], "write"):
-                kwargs["stdout"].write(output)
-                return SimpleNamespace(returncode=0)
-            return SimpleNamespace(returncode=0, stdout=output, stderr=b"")
+            return "output_limit", None, b""
 
         with (
             patch.object(release_check, "JAVASCRIPT_AST_MAX_FILE_BYTES", len(good) + 1,
                          create=True),
             patch.object(release_check, "JAVASCRIPT_AST_MAX_OUTPUT_BYTES", 32,
                          create=True),
-            patch("scripts.public_release_check.subprocess.run", side_effect=fake_run),
+            patch(
+                "scripts.public_release_check._javascript_ast_process",
+                side_effect=fake_process,
+            ),
         ):
             records = release_check._javascript_ast_batch(
                 [("frontend/large.ts", oversized), ("frontend/good.ts", good)]
@@ -951,31 +945,132 @@ class PublicReleaseCheckTests(unittest.TestCase):
         self.assertEqual(record_result.error_category, "record_limit")
         self.assertEqual(output_result.error_category, "output_limit")
 
+    def test_javascript_ast_helper_writes_complete_multi_chunk_output(self):
+        source = "\n".join(
+            f'const safe{index} = "value{index}";' for index in range(1000)
+        )
+
+        record = release_check._javascript_ast_batch(
+            [("frontend/multi-chunk.ts", source)]
+        )["frontend/multi-chunk.ts"]
+
+        self.assertIsNone(record.error_line)
+        self.assertGreater(len(record.pure_string_literals), 900)
+
+    def test_javascript_ast_enforces_cumulative_file_and_byte_budgets(self):
+        value = "hardcoded-" + "cumulative-budget"
+        first_source = f'const token = "{value}";'
+        second_source = 'const safe = "ok";'
+        files = [
+            ("frontend/a.ts", first_source),
+            ("frontend/b.ts", second_source),
+        ]
+        cases = (
+            {"JAVASCRIPT_AST_MAX_TOTAL_FILES": 1},
+            {"JAVASCRIPT_AST_MAX_TOTAL_BYTES": len(first_source.encode("utf-8"))},
+        )
+        for limits in cases:
+            with self.subTest(limits=limits):
+                patches = [patch.object(release_check, name, limit, create=True)
+                           for name, limit in limits.items()]
+                with patches[0]:
+                    records = release_check._javascript_ast_batch(files)
+                first = scan_public_text(
+                    files[0][0], first_source, javascript_ast=records[files[0][0]]
+                )
+                second = scan_public_text(
+                    files[1][0], second_source, javascript_ast=records[files[1][0]]
+                )
+
+                self.assertEqual([(item.rule_id, item.line) for item in first],
+                                 [("PUBLIC_CREDENTIAL_VALUE", 1)])
+                self.assertEqual([(item.rule_id, item.line) for item in second],
+                                 [("PUBLIC_CREDENTIAL_SCAN", 1)])
+                self.assertEqual(records[files[1][0]].error_category, "input_limit")
+
+    def test_javascript_ast_uses_one_total_deadline_across_chunks(self):
+        helper = """
+const chunks = [];
+for await (const chunk of process.stdin) chunks.push(chunk);
+const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+await new Promise((resolve) => setTimeout(resolve, 180));
+const files = input.files.map(({ path }) => ({
+  path, ok: true, assignments: [], pureStringLiterals: [],
+}));
+process.stdout.write(JSON.stringify({ files }));
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            helper_path = Path(tmpdir) / "slow-helper.mjs"
+            helper_path.write_text(helper, encoding="utf-8")
+            files = [("frontend/a.ts", "const a = 1;"),
+                     ("frontend/b.ts", "const b = 2;")]
+            started = time.monotonic()
+            with (
+                patch.object(release_check, "JAVASCRIPT_AST_HELPER", helper_path),
+                patch.object(release_check, "JAVASCRIPT_AST_MAX_FILES_PER_BATCH", 1),
+                patch.object(release_check, "JAVASCRIPT_AST_TIMEOUT_SECONDS", 1),
+                patch.object(release_check, "JAVASCRIPT_AST_TOTAL_TIMEOUT_SECONDS", 0.3,
+                             create=True),
+            ):
+                records = release_check._javascript_ast_batch(files)
+            elapsed = time.monotonic() - started
+
+        self.assertIsNone(records[files[0][0]].error_line)
+        self.assertEqual(records[files[1][0]].error_category, "timeout")
+        self.assertLess(elapsed, 0.4)
+
+    def test_javascript_ast_terminates_and_reaps_output_flood_immediately(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            pid_path = root / "helper.pid"
+            helper_path = root / "flood-helper.mjs"
+            helper_path.write_text(
+                """
+import { writeFileSync } from "node:fs";
+writeFileSync(process.env.PUBLIC_RELEASE_TEST_PID, String(process.pid));
+const chunk = "x".repeat(65536);
+setInterval(() => process.stdout.write(chunk), 5);
+""",
+                encoding="utf-8",
+            )
+            started = time.monotonic()
+            with (
+                patch.dict(os.environ, {"PUBLIC_RELEASE_TEST_PID": str(pid_path)}),
+                patch.object(release_check, "JAVASCRIPT_AST_HELPER", helper_path),
+                patch.object(release_check, "JAVASCRIPT_AST_MAX_OUTPUT_BYTES", 32768),
+                patch.object(release_check, "JAVASCRIPT_AST_TIMEOUT_SECONDS", 0.4),
+                patch.object(release_check, "JAVASCRIPT_AST_TOTAL_TIMEOUT_SECONDS", 0.4,
+                             create=True),
+            ):
+                record = release_check._javascript_ast_batch(
+                    [("frontend/flood.ts", "const safe = true;")]
+                )["frontend/flood.ts"]
+            elapsed = time.monotonic() - started
+            pid = int(pid_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(record.error_category, "output_limit")
+        self.assertLess(elapsed, 0.25)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+
     def test_javascript_ast_failures_use_stable_nonreflective_categories(self):
         fixture_value = "hardcoded-" + "diagnostic-secret"
         source = f'const token = "{fixture_value}";'
 
-        def completed(output, returncode=0):
-            def run(*_args, **kwargs):
-                if hasattr(kwargs["stdout"], "write"):
-                    kwargs["stdout"].write(output)
-                    return SimpleNamespace(returncode=returncode)
-                return SimpleNamespace(returncode=returncode, stdout=output, stderr=b"")
-            return run
-
         cases = (
-            (OSError(fixture_value), "node_missing"),
-            (subprocess.TimeoutExpired("node", 1, output=fixture_value.encode()), "timeout"),
-            (completed(b"not-json"), "invalid_json"),
-            (completed(json.dumps({"files": [{"path": "wrong.ts"}]}).encode()),
+            (("node_missing", None, b""), "node_missing"),
+            (("timeout", None, b""), "timeout"),
+            ((None, 0, b"not-json"), "invalid_json"),
+            ((None, 0, json.dumps({"files": [{"path": "wrong.ts"}]}).encode()),
              "invalid_schema"),
-            (completed(json.dumps({"error": "typescript_missing", "files": []}).encode()),
+            ((None, 0, json.dumps({"error": "typescript_missing", "files": []}).encode()),
              "typescript_missing"),
         )
         for behavior, category in cases:
             with self.subTest(category=category):
                 mocked = patch(
-                    "scripts.public_release_check.subprocess.run", side_effect=behavior
+                    "scripts.public_release_check._javascript_ast_process",
+                    return_value=behavior,
                 )
                 with mocked:
                     findings = scan_public_text("frontend/diagnostic.ts", source)
@@ -1134,11 +1229,9 @@ class PublicReleaseCheckTests(unittest.TestCase):
                 }
             ]
         }
-        completed = SimpleNamespace(
-            returncode=0, stdout=json.dumps(payload).encode(), stderr=b""
-        )
         with patch(
-            "scripts.public_release_check.subprocess.run", return_value=completed
+            "scripts.public_release_check._javascript_ast_process",
+            return_value=(None, 0, json.dumps(payload).encode()),
         ):
             findings = scan_public_text("frontend/schema.ts", source)
         self.assertEqual(
@@ -1180,13 +1273,9 @@ class PublicReleaseCheckTests(unittest.TestCase):
                         "pureStringLiterals": [],
                     }
                 )
-            completed = SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps({"files": records}).encode(),
-                stderr=b"",
-            )
             with patch(
-                "scripts.public_release_check.subprocess.run", return_value=completed
+                "scripts.public_release_check._javascript_ast_process",
+                return_value=(None, 0, json.dumps({"files": records}).encode()),
             ):
                 result = evaluate_public_release(root)
 
@@ -1211,11 +1300,9 @@ class PublicReleaseCheckTests(unittest.TestCase):
 
     def _scan_with_javascript_ast_file(self, source, ast_file):
         payload = {"files": [ast_file]}
-        completed = SimpleNamespace(
-            returncode=0, stdout=json.dumps(payload).encode(), stderr=b""
-        )
         with patch(
-            "scripts.public_release_check.subprocess.run", return_value=completed
+            "scripts.public_release_check._javascript_ast_process",
+            return_value=(None, 0, json.dumps(payload).encode()),
         ):
             return scan_public_text("frontend/schema.ts", source)
 

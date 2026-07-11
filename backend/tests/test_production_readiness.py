@@ -1,7 +1,10 @@
 import unittest
+from contextlib import redirect_stdout
+from io import BytesIO, StringIO
 from unittest.mock import patch
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
+import scripts.production_readiness as readiness
 from scripts.production_readiness import _get_json, auth_config_status, evaluate_readiness
 
 
@@ -313,8 +316,8 @@ class ProductionReadinessTests(unittest.TestCase):
             def __exit__(self, exc_type, exc, traceback):
                 return False
 
-            def read(self):
-                return b'{"status":"ok"}'
+            def read(self, size=-1):
+                return b'{"status":"ok"}'[:size]
 
         def fake_urlopen(request, timeout):
             captured["authorization"] = request.headers.get("Authorization")
@@ -332,8 +335,9 @@ class ProductionReadinessTests(unittest.TestCase):
         with patch("scripts.production_readiness.urlopen", side_effect=URLError("connection refused")):
             payload = _get_json("http://127.0.0.1:8088/api/health")
 
-        self.assertEqual(payload["status"], "error")
-        self.assertIn("connection refused", payload["error"])
+        self.assertEqual(
+            payload, {"status": "error", "error": "connection_error"}
+        )
 
     def test_get_json_rejects_non_object_json_at_boundary(self):
         class FakeResponse:
@@ -346,8 +350,8 @@ class ProductionReadinessTests(unittest.TestCase):
             def __exit__(self, exc_type, exc, traceback):
                 return False
 
-            def read(self):
-                return self.payload
+            def read(self, size=-1):
+                return self.payload[:size]
 
         for payload in (b"[]", b"null", b'"ok"', b"7"):
             with self.subTest(payload=payload):
@@ -359,6 +363,105 @@ class ProductionReadinessTests(unittest.TestCase):
                 self.assertEqual(
                     result, {"status": "error", "error": "invalid_json_shape"}
                 )
+
+    def test_get_json_bounds_response_and_stabilizes_decode_categories(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+                self.read_sizes = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self, size=-1):
+                self.read_sizes.append(size)
+                return self.payload[:size]
+
+        cases = (
+            (b"x" * 17, "response_too_large"),
+            (b"\xff", "invalid_utf8"),
+            (b"{", "invalid_json"),
+            (b"[]", "invalid_json_shape"),
+        )
+        for payload, category in cases:
+            with self.subTest(category=category):
+                response = FakeResponse(payload)
+                with (
+                    patch.object(readiness, "READINESS_MAX_JSON_BYTES", 16,
+                                 create=True),
+                    patch("scripts.production_readiness.urlopen", return_value=response),
+                ):
+                    result = _get_json("http://127.0.0.1:8088/api/health")
+                self.assertEqual(result, {"status": "error", "error": category})
+                self.assertEqual(response.read_sizes, [17])
+
+    def test_get_json_never_reflects_authenticated_error_bodies_or_network_reasons(self):
+        fixture_value = "read-" + "credential-that-must-not-leak"
+        body_value = "Bearer " + fixture_value + " arbitrary-private-body"
+        http_error = HTTPError(
+            "https://example.invalid/api", 401, "unauthorized", {},
+            BytesIO(body_value.encode("utf-8")),
+        )
+        with patch("scripts.production_readiness.urlopen", side_effect=http_error):
+            http_result = _get_json(
+                "https://example.invalid/api", token=fixture_value
+            )
+
+        network_reason = "failed URL user:" + fixture_value + "@example.invalid"
+        with patch(
+            "scripts.production_readiness.urlopen",
+            side_effect=URLError(network_reason),
+        ):
+            network_result = _get_json(
+                "https://user:" + fixture_value + "@example.invalid/api",
+                token=fixture_value,
+            )
+
+        self.assertEqual(
+            http_result, {"status": "error", "error": "http_error:401"}
+        )
+        self.assertEqual(
+            network_result, {"status": "error", "error": "connection_error"}
+        )
+        diagnostic = repr((http_result, network_result))
+        self.assertNotIn(fixture_value, diagnostic)
+        self.assertNotIn(body_value, diagnostic)
+        self.assertNotIn(network_reason, diagnostic)
+
+    def test_main_json_never_reflects_authenticated_http_error_content(self):
+        fixture_value = "read-" + "main-json-credential"
+        body_value = "Bearer " + fixture_value + " private-response-body"
+
+        def deny_request(_request, timeout):
+            self.assertEqual(timeout, 10)
+            raise HTTPError(
+                "https://example.invalid/api", 401, "unauthorized", {},
+                BytesIO(body_value.encode("utf-8")),
+            )
+
+        output = StringIO()
+        with (
+            patch.dict(
+                readiness.os.environ,
+                {"READ_API_TOKEN": fixture_value},
+                clear=True,
+            ),
+            patch("scripts.production_readiness._load_env"),
+            patch("scripts.production_readiness.urlopen", side_effect=deny_request),
+            patch("scripts.production_readiness._web_ok", return_value=False),
+            patch("scripts.production_readiness._backup_timer_status",
+                  return_value="disabled"),
+            redirect_stdout(output),
+        ):
+            status = readiness.main()
+
+        diagnostic = output.getvalue()
+        self.assertEqual(status, 1)
+        self.assertNotIn(fixture_value, diagnostic)
+        self.assertNotIn(body_value, diagnostic)
 
 
 if __name__ == "__main__":

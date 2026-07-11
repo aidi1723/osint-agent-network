@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+READINESS_MAX_JSON_BYTES = 1024 * 1024
 
 
 def evaluate_readiness(
@@ -172,18 +173,25 @@ def _get_json(url: str, token: str = "") -> dict:
         request.add_header("Authorization", f"Bearer {token}")
     try:
         with urlopen(request, timeout=10) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+            raw_payload = response.read(READINESS_MAX_JSON_BYTES + 1)
+        if len(raw_payload) > READINESS_MAX_JSON_BYTES:
+            return {"status": "error", "error": "response_too_large"}
+        try:
+            decoded = raw_payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return {"status": "error", "error": "invalid_utf8"}
+        try:
+            payload = json.loads(decoded)
+        except json.JSONDecodeError:
+            return {"status": "error", "error": "invalid_json"}
         if not isinstance(payload, dict):
             return {"status": "error", "error": "invalid_json_shape"}
         return payload
     except HTTPError as exc:
-        try:
-            body = exc.read().decode("utf-8", errors="ignore")
-        finally:
-            exc.close()
-        return {"status": "error", "error": f"HTTP {exc.code}: {body[:200]}"}
-    except (OSError, URLError, json.JSONDecodeError) as exc:
-        return {"status": "error", "error": str(exc)}
+        exc.close()
+        return {"status": "error", "error": f"http_error:{exc.code}"}
+    except (OSError, URLError):
+        return {"status": "error", "error": "connection_error"}
 
 
 def _web_ok(url: str) -> bool:
