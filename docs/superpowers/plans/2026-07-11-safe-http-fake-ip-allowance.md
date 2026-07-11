@@ -15,7 +15,7 @@
 **Files:**
 - Modify: `backend/tests/test_safe_http.py`
 
-- [ ] **Step 1: Add imports and configuration parser tests**
+- [x] **Step 1: Add imports and configuration parser tests**
 
 Import `FakeIpAllowance`, `InvalidFakeIpConfiguration`, and `fake_ip_allowance_from_env`. Add tests that specify the public API:
 
@@ -56,7 +56,7 @@ def test_invalid_fake_ip_configuration_fails_closed(self):
             fake_ip_allowance_from_env(environ)
 ```
 
-- [ ] **Step 2: Run the targeted tests and verify RED**
+- [x] **Step 2: Run the targeted tests and verify RED**
 
 Run:
 
@@ -71,7 +71,7 @@ Expected: import failure because the new allowance API does not exist.
 **Files:**
 - Modify: `backend/tests/test_safe_http.py`
 
-- [ ] **Step 1: Add a test helper and exact validation tests**
+- [x] **Step 1: Add a test helper and exact validation tests**
 
 Add:
 
@@ -118,11 +118,11 @@ def test_rejects_mixed_allowed_fake_and_private_answers(self):
         )
 ```
 
-- [ ] **Step 2: Add redirect revalidation tests**
+- [x] **Step 2: Add redirect revalidation tests**
 
 Use the existing fake connector pattern to assert that an initial listed host redirecting to an unlisted fake-IP host raises `BlockedNetworkTarget`, and that listing both exact hosts returns the final bounded response. Verify connector calls remain pinned to the resolved fake address and retain the original hostname.
 
-- [ ] **Step 3: Run the targeted tests and verify RED**
+- [x] **Step 3: Run the targeted tests and verify RED**
 
 Run the same `SafeHttpValidationTests` command. Expected: tests fail because `validate_public_url` and `safe_fetch` do not accept `fake_ip_allowance`.
 
@@ -132,7 +132,7 @@ Run the same `SafeHttpValidationTests` command. Expected: tests fail because `va
 - Modify: `backend/app/core/safe_http.py`
 - Test: `backend/tests/test_safe_http.py`
 
-- [ ] **Step 1: Add the immutable value and strict parser**
+- [x] **Step 1: Add the immutable value and strict parser**
 
 Add an exception, immutable value, constants, and parser:
 
@@ -162,7 +162,7 @@ def fake_ip_allowance_from_env(environ: Mapping[str, str] | None = None) -> Fake
 
 Import `os`. Reuse `_valid_hostname` and `_literal_address`; do not introduce URL or wildcard host matching.
 
-- [ ] **Step 2: Extend validation without changing defaults**
+- [x] **Step 2: Extend validation without changing defaults**
 
 Add the optional keyword argument to both functions:
 
@@ -178,11 +178,11 @@ def validate_public_url(
 
 For literals, retain the existing global-address test regardless of allowance. For DNS answers, accept an address when `_is_global_address(address)` is true, or when the normalized hostname is an exact configured host and the address belongs to a configured fake-IP subnet. Reject if any answer fails.
 
-- [ ] **Step 3: Revalidate every redirect**
+- [x] **Step 3: Revalidate every redirect**
 
 Add `fake_ip_allowance` to `safe_fetch` and pass it to every `validate_public_url` call inside the redirect loop. Do not change redirect count, timeout, response size, header validation, or connection pinning.
 
-- [ ] **Step 4: Run targeted safe HTTP tests and verify GREEN**
+- [x] **Step 4: Run targeted safe HTTP tests and verify GREEN**
 
 Run:
 
@@ -192,7 +192,7 @@ PYTHONPATH=backend python3 -m unittest backend.tests.test_safe_http
 
 Expected: all safe HTTP tests pass.
 
-- [ ] **Step 5: Commit the safe HTTP behavior**
+- [x] **Step 5: Commit the safe HTTP behavior**
 
 ```bash
 git add backend/app/core/safe_http.py backend/tests/test_safe_http.py
@@ -205,7 +205,7 @@ git commit -m "feat: allow controlled fake-ip fetches"
 - Modify: `backend/tests/test_tool_adapters.py`
 - Modify: `backend/app/tools/official_site_extractor.py`
 
-- [ ] **Step 1: Write the failing adapter test**
+- [x] **Step 1: Write the failing adapter test**
 
 Patch `fake_ip_allowance_from_env` to return a sentinel allowance and patch `safe_fetch`. Run the adapter, then assert:
 
@@ -224,7 +224,7 @@ safe_fetch_mock.assert_called_once_with(
 
 Also add a test where configuration parsing raises `InvalidFakeIpConfiguration`; assert return code `1`, empty artifact, and exact sanitized error `official site fetch failed`.
 
-- [ ] **Step 2: Run the adapter tests and verify RED**
+- [x] **Step 2: Run the adapter tests and verify RED**
 
 Run:
 
@@ -234,15 +234,15 @@ PYTHONPATH=backend python3 -m unittest backend.tests.test_tool_adapters.Official
 
 Expected: failure because the adapter does not load or pass the allowance.
 
-- [ ] **Step 3: Implement the minimal adapter integration**
+- [x] **Step 3: Implement the minimal adapter integration**
 
 Import `fake_ip_allowance_from_env`, load it immediately before the fetch, and pass it as `fake_ip_allowance=allowance`. Keep the existing `except (NormalizationError, SafeHttpError)` block so invalid configuration fails closed with sanitized output.
 
-- [ ] **Step 4: Run adapter and safe HTTP tests and verify GREEN**
+- [x] **Step 4: Run adapter and safe HTTP tests and verify GREEN**
 
 Run both targeted unittest modules. Expected: all pass.
 
-- [ ] **Step 5: Commit adapter integration**
+- [x] **Step 5: Commit adapter integration**
 
 ```bash
 git add backend/app/tools/official_site_extractor.py backend/tests/test_tool_adapters.py
@@ -256,11 +256,11 @@ git commit -m "feat: enable fake-ip allowance for official sites"
 - Modify: `docs/N100_DEPLOYMENT_RUNBOOK.md`
 - Modify: `backend/tests/test_release_artifacts.py`
 
-- [ ] **Step 1: Write the failing release-artifact test**
+- [x] **Step 1: Write the failing release-artifact test**
 
 Assert `.env.example` contains empty assignments for both variables and the runbook states exact-host matching, `198.18.0.0/15` containment, default-off behavior, literal-IP rejection, and per-redirect revalidation.
 
-- [ ] **Step 2: Run release-artifact tests and verify RED**
+- [x] **Step 2: Run release-artifact tests and verify RED**
 
 ```bash
 python3 -m unittest backend.tests.test_release_artifacts
@@ -268,7 +268,7 @@ python3 -m unittest backend.tests.test_release_artifacts
 
 Expected: failure because the variables and runbook guidance are absent.
 
-- [ ] **Step 3: Add public-safe configuration documentation**
+- [x] **Step 3: Add public-safe configuration documentation**
 
 Add:
 
@@ -279,7 +279,7 @@ OSINT_SAFE_HTTP_FAKE_IP_HOSTS=
 
 Document that both variables are required to enable the exception, CIDRs are restricted to subnets of `198.18.0.0/15`, hosts are exact matches, literals remain blocked, redirects are rechecked, and post-fetch cleaning cannot replace destination controls. Do not add real hostnames.
 
-- [ ] **Step 4: Run release tests and public scan**
+- [x] **Step 4: Run release tests and public scan**
 
 ```bash
 python3 -m unittest backend.tests.test_release_artifacts
@@ -289,7 +289,7 @@ git diff --check
 
 Expected: all exit `0`, no blockers.
 
-- [ ] **Step 5: Commit documentation**
+- [x] **Step 5: Commit documentation**
 
 ```bash
 git add .env.example docs/N100_DEPLOYMENT_RUNBOOK.md backend/tests/test_release_artifacts.py
@@ -301,7 +301,7 @@ git commit -m "docs: describe controlled fake-ip allowance"
 **Files:**
 - Verify: all changed files
 
-- [ ] **Step 1: Run the full verification gate**
+- [x] **Step 1: Run the full verification gate**
 
 ```bash
 bash scripts/verify.sh
@@ -309,11 +309,11 @@ bash scripts/verify.sh
 
 Expected: backend suite, four regression cases, frontend helper checks, 45 frontend tests, and Vite 8.1.4 build pass.
 
-- [ ] **Step 2: Review scope and secrets**
+- [x] **Step 2: Review scope and secrets**
 
 Run `git status --short`, `git diff --check`, and `python3 scripts/public_release_check.py`. Confirm the operator-maintained closure log remains outside all commits and no target hostname or production address is present.
 
-- [ ] **Step 3: Merge the isolated implementation branch into local `main`**
+- [x] **Step 3: Merge the isolated implementation branch into local `main`**
 
 Use the finishing-development workflow, perform a non-interactive merge after verification, and rerun `git status --short`. Preserve the user's existing maintenance-log modification.
 
@@ -323,27 +323,27 @@ Use the finishing-development workflow, perform a non-interactive merge after ve
 - Deploy: tracked source files changed by Tasks 3-5
 - Preserve remotely: `.env`, `data/`, `reports/`, artifacts, frontend build output until rebuilt
 
-- [ ] **Step 1: Create new timestamped backups**
+- [x] **Step 1: Create new timestamped backups**
 
 Back up the N100 runtime, source tree, and `.env` without printing contents. Confirm backup paths exist.
 
-- [ ] **Step 2: Derive the confidential exact-host list on N100**
+- [x] **Step 2: Derive the confidential exact-host list on N100**
 
 Select the prior production target in remote process memory. Combine its normalized hostname with redirect hostnames observed in the latest successful `httpx`/`katana` records. Validate that every item is an exact DNS hostname; do not print or export the values.
 
-- [ ] **Step 3: Update only the two environment keys**
+- [x] **Step 3: Update only the two environment keys**
 
 Set `OSINT_SAFE_HTTP_FAKE_IP_CIDRS=198.18.0.0/15` and set `OSINT_SAFE_HTTP_FAKE_IP_HOSTS` to the derived comma-separated exact host list. Preserve all other keys byte-for-byte and report only whether each key is configured.
 
-- [ ] **Step 4: Synchronize source without deleting runtime state**
+- [x] **Step 4: Synchronize source without deleting runtime state**
 
 Use `rsync -az` with the established exclusions for Git metadata, `.env`, data, reports, artifacts, frontend environment, dependencies, build output, Playwright output, and the operator-maintained closure log.
 
-- [ ] **Step 5: Run remote targeted and full applicable verification**
+- [x] **Step 5: Run remote targeted and full applicable verification**
 
 Run safe HTTP, adapter, and release-artifact tests, then the backend suite, regression smoke, frontend tests, and build. Run the public release scanner only against the local Git source tree, not the Git-less production runtime tree.
 
-- [ ] **Step 6: Restart and verify services**
+- [x] **Step 6: Restart and verify services**
 
 Restart both systemd user services. Poll until the API binds, then run health and production readiness. Require both services `active`, restart count zero, `ready=true`, and `severity=ok`.
 
@@ -352,26 +352,26 @@ Restart both systemd user services. Poll until the API binds, then run health an
 **Files:**
 - Modify: `docs/N100_HARDENED_DEPLOYMENT_REAL_SEARCH_CLOSURE_2026-07-11.md`
 
-- [ ] **Step 1: Create a fresh bounded investigation**
+- [x] **Step 1: Create a fresh bounded investigation**
 
 Use the previous successful target only in N100 process memory. Create a new quick investigation, run at most six jobs per round, and poll the persistent worker queue until idle before each next round.
 
-- [ ] **Step 2: Capture anonymized acceptance metrics**
+- [x] **Step 2: Capture anonymized acceptance metrics**
 
 Record status, score, job counts, tool status counts, evidence kinds, and source-backed field-type counts. Never print target values, entity values, contacts, tokens, or paths.
 
-- [ ] **Step 3: Verify empty-rerun stability**
+- [x] **Step 3: Verify empty-rerun stability**
 
 After terminal completion, enqueue one no-work bounded run. Require status and summary hashes to remain unchanged.
 
-- [ ] **Step 4: Compare against every acceptance criterion**
+- [x] **Step 4: Compare against every acceptance criterion**
 
 Classify `COMPLETED`, score at least `72`, zero failed/blocked jobs, completed official-site chain, source-backed organization/URL/contact/business fields, and stable rerun as met or not met. Report live-site evidence limitations honestly rather than expanding the network exception.
 
-- [ ] **Step 5: Update, scan, and commit the closure report**
+- [x] **Step 5: Update, scan, and commit the closure report**
 
 Update only public-safe evidence and residual risk. Run `git diff --check`, release-artifact tests, public scan, and relevant full verification. Commit the report without staging the user maintenance log.
 
-- [ ] **Step 6: Synchronize the final report and compare checksums**
+- [x] **Step 6: Synchronize the final report and compare checksums**
 
 Sync the report to N100, compare local and remote SHA-256 values, and perform one final service/health/readiness check.

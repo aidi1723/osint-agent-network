@@ -18,19 +18,18 @@ No credential, real target, contact value, private address, or production artifa
 
 The hardened application release was deployed successfully and the production services are healthy. Authentication hardening, secure-cookie configuration, dependency alignment, backend tests, frontend tests, regression checks, production build, health checks, and readiness checks passed.
 
-The repeated real search did **not** reach the end-to-end intelligence design goal in the current N100 network environment:
+The final repeated real search reached the end-to-end intelligence design goal after two narrowly scoped fixes:
 
-- final status: `NEEDS_REVIEW`
-- quality score: `44.5 / 100`
-- completed jobs: `4`
-- partially failed jobs: `1`
+- final status: `COMPLETED`
+- quality score: `78.1 / 100`
+- completed jobs: `5`
 - failed jobs: `0`
 - blocked jobs: `0`
 - stable empty rerun: passed
 
-The domain discovery, HTTP probing, and crawling stages completed. The internal official-site extractor refused the target because N100's transparent network layer returned a non-global reserved address during DNS validation. External tools could traverse the transparent network path, but the internal SSRF-safe fetcher correctly rejected that address. As a result, organization, contact, and business-scope evidence was not extracted and the quality gate remained open.
+The initial hardened retest stopped at `NEEDS_REVIEW`, score `44.5`, because N100's transparent network layer returned a reserved fake address and the internal safe fetcher rejected it. A default-off double allowlist now requires both an exact configured hostname and an IPv4 subnet contained by `198.18.0.0/15`. Literal addresses, unrelated private/reserved ranges, unlisted hosts, and unlisted redirect hosts remain blocked.
 
-This is an operational network compatibility gap, not evidence that the SSRF guard should be weakened. The production release is healthy, but the original real-search acceptance target remains unmet until N100 provides a resolver or controlled egress path that yields and pins real public addresses.
+After official-site extraction succeeded, the quality score returned to `78.1`, but two phone numbers from the same official source were incorrectly treated as contradictory. Cross verification now permits multiple contact values from the same source family while preserving conflicts between different source families. The strict completion policy then passed with no remaining blockers.
 
 ## Deployment Evidence
 
@@ -45,6 +44,7 @@ Protected state:
 - runtime backup: `<production-backup-root>/20260711-180918`
 - source archive: `<production-backup-root>/predeploy-20260711-180918-source.tar.gz`
 - pre-hardening environment backup: `<production-backup-root>/.env.pre-security-hardening-20260711-180918`
+- final pre-fake-IP source and environment backup timestamp: `20260711-185807`
 
 Production security settings confirmed after deployment:
 
@@ -55,6 +55,8 @@ OSINT_ALLOW_LEGACY_AGENT_TOKEN=false
 ADMIN_API_TOKEN=<configured-admin-token>
 READ_API_TOKEN=<configured-read-token>
 OFFICIAL_SITE_SEARCH_BASE_URL=configured
+OSINT_SAFE_HTTP_FAKE_IP_CIDRS=<configured-benchmark-subnet>
+OSINT_SAFE_HTTP_FAKE_IP_HOSTS=<configured-exact-hosts>
 ```
 
 Secret values were preserved and were never printed or copied into the repository.
@@ -82,9 +84,11 @@ Frontend dependency resolution confirmed:
 
 ## Verification Results
 
-Remote runtime-source verification:
+Final remote runtime-source verification:
 
-- backend unit tests: `732 / 732` passed
+- controlled-fetch and adapter tests: `67 / 67` passed
+- cross-verification and completion-policy tests: `77 / 77` passed
+- backend unit tests: `745 / 745` passed
 - agent governance manifest: passed
 - regression smoke cases: `4 / 4` passed
 - frontend helper and UI-copy checks: passed
@@ -115,19 +119,19 @@ Observed terminal evidence:
 
 | Criterion | Result | Evidence |
 | --- | --- | --- |
-| Investigation reaches `COMPLETED` | Not met | Final status `NEEDS_REVIEW` |
-| Quality score is at least `72` | Not met | `44.5` |
+| Investigation reaches `COMPLETED` | Met | Final status `COMPLETED` |
+| Quality score is at least `72` | Met | `78.1` |
 | Failed jobs equal `0` | Met | No `FAILED` jobs |
 | Blocked jobs equal `0` | Met | No `BLOCKED` jobs |
 | `subfinder` completes | Met | One completed job |
 | domain and URL `httpx` complete | Met | Two completed jobs |
 | `katana` completes | Met | One completed job |
-| `official_site_extractor` completes | Not met | One `PARTIAL_FAILED` job |
+| `official_site_extractor` completes | Met | One completed job |
 | Source-backed official URLs exist | Met | Four source-backed URL entities |
-| Source-backed organization/contact/business fields exist | Not met | No organization, phone, email, or business-scope field extracted |
+| Source-backed organization/contact/business fields exist | Met | One organization, two phones, and one business-scope entity |
 | Empty rerun preserves terminal state and summary | Met | Status and summary remained unchanged |
 
-The run produced two domain/subdomain entities, four URL entities, two HTTP-probe evidence items, and one passive subdomain-discovery evidence item. Real values are intentionally omitted.
+The final run produced two domain/subdomain entities, four URL entities, one organization, two phones, and one business-scope entity. Evidence included two HTTP probes, one passive subdomain-discovery record, one official identity record, two official contact records, and one official business-scope record. Four facts were linked to source evidence. Real values are intentionally omitted.
 
 ## Root Cause And Security Decision
 
@@ -140,29 +144,45 @@ On N100:
 - `httpx` and `katana` succeeded through the host's transparent network path;
 - the internal safe fetcher rejected the reserved address before connecting.
 
-Allowing the reserved range globally would weaken SSRF protection and could permit access to network-local services hidden behind the same address space. No such bypass was added.
+Allowing the reserved range globally would weaken SSRF protection and could permit access to network-local services hidden behind the same address space. No global bypass was added.
 
-Approved remediation direction:
+Implemented control:
 
-1. Configure the N100 network layer to bypass fake-address DNS mapping for the API service or for public OSINT targets, while retaining the transparent egress path.
-2. Alternatively provide a trusted fetch gateway that resolves public DNS independently, rejects private/reserved destinations on every redirect, pins validated addresses, limits response size and time, and returns only bounded public content.
-3. Rerun the same anonymized acceptance procedure after the network change. Do not add `198.18.0.0/15` or another reserved/private range to the application allowlist.
+1. Both the exact hostname list and the fake-IP CIDR list must be non-empty and valid; partial configuration fails closed.
+2. Configured CIDRs must be IPv4 subnets wholly contained by `198.18.0.0/15`.
+3. Hostnames are exact IDNA-normalized matches. Wildcards, URLs, credentials, ports, and IP host entries are invalid.
+4. Direct non-global IP literals remain blocked even inside the configured subnet.
+5. Every redirect repeats hostname, DNS-answer, address-class, timeout, size, and connection-pinning validation.
+6. Only the official-site extractor loads this exception. Other safe HTTP consumers remain strict.
+
+The final live-page smoke fetched bounded HTML and extracted one organization, two phones, one business scope, and four evidence items before the full investigation was run.
+
+## Additional Finding: Multi-Value Contact Semantics
+
+Cross verification previously treated every distinct value as a contradiction, including two phone numbers emitted by the same official-site source. The fix distinguishes source families:
+
+- multiple phone or email values from the same source family may coexist;
+- different contact values from different source families still produce a conflict;
+- fact-level conflicts and conflicts for company identity, official website, and other single-value fields remain unchanged.
+
+The new regression test reproduces the same-official-source two-phone case, while the existing official-versus-directory email conflict test continues to pass.
 
 ## Residual Risks
 
-- The real-search completion target is still open until safe official-site fetching works in the N100 network environment.
+- The exact-host allowance reduces exposure but still depends on the transparent proxy to map an approved fake address to the intended upstream destination. A separately controlled egress gateway remains the stronger long-term architecture.
 - Seven optional tools still require configuration or installation. Health-aware planning correctly skips known unavailable routes.
 - Secure browser cookies require HTTPS. Until TLS termination is installed, operator browser access should use a localhost SSH tunnel; production cookie security must not be weakened for plaintext LAN access.
 - A production runtime tree is not a clean public release tree. Public release scanning must remain attached to the Git source boundary or a clean release staging directory.
+- N100's configured backup root is inside `data/`, so an unqualified `scripts/backup.sh` invocation attempts to copy data into its own descendant. This deployment used an explicit external backup root. Production configuration should be corrected before relying on the default backup command.
 
 ## Rollback
 
 If the deployed source must be rolled back:
 
 1. Stop the API and Web user services.
-2. Restore source from `<production-backup-root>/predeploy-20260711-180918-source.tar.gz`.
+2. Restore source from the pre-fake-IP source archive with timestamp `20260711-185807`.
 3. Restore runtime state from `<production-backup-root>/20260711-180918` only if runtime rollback is explicitly required.
-4. Restore the environment backup only if the two security settings must be reverted for incident recovery; do not revert them for routine compatibility.
+4. Restore the pre-fake-IP environment backup or remove the two fake-IP variables to disable the exception immediately.
 5. Restart both services, then run the health and production-readiness checks.
 
-The current deployment does not require rollback: service health and release verification pass. The unresolved item is the network egress/DNS compatibility needed for the safe official-site stage.
+The current deployment does not require rollback: service health, release verification, controlled official-site fetching, and the real-search acceptance criteria pass.
