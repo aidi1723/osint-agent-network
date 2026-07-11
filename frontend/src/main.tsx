@@ -144,6 +144,7 @@ function OperationsConsole({ csrfToken, onLogout }: OperationsConsoleProps) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [selected, setSelected] = useState<Investigation | null>(null);
+  const [operationsOpen, setOperationsOpen] = useState(() => !selected);
   const [form, setForm] = useState({ name: "example.com 深度调查", seed_type: "domain", seed_value: "example.com", strategy: "deep" });
   const [requirementsForm, setRequirementsForm] = useState({
     decision_context: "qualify buyer or company lead",
@@ -684,7 +685,10 @@ function OperationsConsole({ csrfToken, onLogout }: OperationsConsoleProps) {
               <a
                 className="secondary-button data-board-empty-action"
                 href="#create-investigation-form"
-                onClick={() => window.requestAnimationFrame(() => createFormRef.current?.focus())}
+                onClick={() => {
+                  setOperationsOpen(true);
+                  window.requestAnimationFrame(() => createFormRef.current?.focus());
+                }}
               >
                 创建调查任务
               </a>
@@ -692,7 +696,11 @@ function OperationsConsole({ csrfToken, onLogout }: OperationsConsoleProps) {
           )}
         </section>
 
-        <details className="ops-console" open={!selected}>
+        <details
+          className="ops-console"
+          open={operationsOpen}
+          onToggle={(event) => setOperationsOpen(event.currentTarget.open)}
+        >
           <summary className="ops-console-summary">
             <span>任务与操作台</span>
             <strong>创建任务 / Agent 状态 / 任务池</strong>

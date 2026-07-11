@@ -71,6 +71,14 @@ async function submitLogin(adminToken: string) {
   });
 }
 
+async function closeOperationsConsole(details: HTMLDetailsElement) {
+  await act(async () => {
+    details.open = false;
+    details.dispatchEvent(new Event("toggle", { bubbles: true }));
+    await Promise.resolve();
+  });
+}
+
 describe("App browser auth shell", () => {
   beforeEach(() => {
     document.body.innerHTML = '<div id="test-root"></div>';
@@ -131,6 +139,49 @@ describe("App browser auth shell", () => {
 
     expect(document.querySelector(".shell")).not.toBeNull();
     expect(document.querySelector('button[aria-label="退出登录"]')).toBeNull();
+  });
+
+  it("preserves a manually closed operations console across unrelated rerenders", async () => {
+    authMocks.loadSession.mockResolvedValue({ authenticated: false, required: false });
+    await renderApp();
+    const details = document.querySelector<HTMLDetailsElement>(".ops-console");
+    const nameInput = document.querySelector<HTMLInputElement>("#create-investigation-form input");
+    expect(details?.open).toBe(true);
+    expect(nameInput).not.toBeNull();
+
+    await closeOperationsConsole(details!);
+    await act(async () => {
+      const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      valueSetter?.call(nameInput, "更新任务名称");
+      nameInput?.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(details?.open).toBe(false);
+  });
+
+  it("reopens the operations console and focuses the form from the empty state action", async () => {
+    authMocks.loadSession.mockResolvedValue({ authenticated: false, required: false });
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    await renderApp();
+    const details = document.querySelector<HTMLDetailsElement>(".ops-console");
+    const form = document.querySelector<HTMLFormElement>("#create-investigation-form");
+    const action = document.querySelector<HTMLAnchorElement>(".data-board-empty-action");
+    expect(details?.open).toBe(true);
+    expect(form).not.toBeNull();
+    expect(action).not.toBeNull();
+
+    await closeOperationsConsole(details!);
+    await act(async () => {
+      action?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+
+    expect(details?.open).toBe(true);
+    expect(document.activeElement).toBe(form);
   });
 
   it("mounts OperationsConsole and loads initial data after successful login", async () => {
