@@ -44,7 +44,7 @@ def test_parses_exact_hosts_and_contained_fake_ip_subnets(self):
 def test_invalid_fake_ip_configuration_fails_closed(self):
     invalid = (
         {"OSINT_SAFE_HTTP_FAKE_IP_CIDRS": "198.18.0.0/14", "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": "example.com"},
-        {"OSINT_SAFE_HTTP_FAKE_IP_CIDRS": "10.0.0.0/8", "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": "example.com"},
+        {"OSINT_SAFE_HTTP_FAKE_IP_CIDRS": "127.0.0.0/8", "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": "example.com"},
         {"OSINT_SAFE_HTTP_FAKE_IP_CIDRS": "2001:db8::/32", "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": "example.com"},
         {"OSINT_SAFE_HTTP_FAKE_IP_CIDRS": "198.18.0.0/15", "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": "*.example.com"},
         {"OSINT_SAFE_HTTP_FAKE_IP_CIDRS": "198.18.0.0/15", "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": "https://example.com"},
@@ -113,7 +113,7 @@ def test_rejects_mixed_allowed_fake_and_private_answers(self):
     with self.assertRaises(BlockedNetworkTarget):
         validate_public_url(
             "https://example.com/",
-            resolver=resolver_for("198.18.100.99", "10.0.0.2"),
+            resolver=resolver_for("198.18.100.99", "::1"),
             fake_ip_allowance=fake_ip_allowance("example.com"),
         )
 ```
