@@ -569,7 +569,8 @@ class BrowserSessionManagerTests(unittest.TestCase):
     def test_logout_revokes_valid_session_despite_malformed_neighbor_cookie(self):
         manager, _clock, _result, cookie = logged_in_manager()
 
-        manager.logout({"Cookie": "; ".join(("malformed", cookie))})
+        malformed_header = "; ".join(("malformed", cookie))
+        manager.logout({"Cookie": malformed_header})
 
         self.assertIsNone(
             manager.authorize_session({"Cookie": cookie}, [], mutation=False)
@@ -586,9 +587,8 @@ class BrowserSessionManagerTests(unittest.TestCase):
         self.assertIsNotNone(
             manager.authorize_session({"Cookie": cookie}, [], mutation=False)
         )
-        manager.logout(
-            {"Cookie": "; ".join((cookie, "osint_admin_session=unknown"))}
-        )
+        ambiguous_header = "; ".join((cookie, "osint_admin_session=unknown"))
+        manager.logout({"Cookie": ambiguous_header})
         self.assertIsNotNone(
             manager.authorize_session({"Cookie": cookie}, [], mutation=False)
         )

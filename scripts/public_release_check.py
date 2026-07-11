@@ -44,6 +44,10 @@ ASSIGNMENT_START_RE = re.compile(
     r"(?:^|[\s,{;])(?:export\s+)?(?P<quote>['\"]?)(?P<key>[A-Za-z_][\w.-]*)(?P=quote)\s*(?P<separator>=|:(?!-))\s*",
     re.IGNORECASE,
 )
+JAVASCRIPT_ASSIGNMENT_START_RE = re.compile(
+    r"(?<![A-Za-z0-9_$])(?P<quote>['\"]?)(?P<key>[A-Za-z_$][A-Za-z0-9_$.-]*)"
+    r"(?P=quote)\s*(?P<separator>\?\?=|\|\|=|&&=|[+\-*/%]=|=(?!=|>)|:)",
+)
 BEARER_RE = re.compile(
     r"(?<![A-Za-z0-9_-])Bearer\s+"
     r"(?![=:])(?P<value>\$?\{[A-Za-z_$][A-Za-z0-9_$]*"
@@ -88,44 +92,83 @@ GENERATED_TOKEN_RE = re.compile(
     r"(?:['\"]?\s*>>?\s*[^\s]+)?",
     re.IGNORECASE,
 )
-TEST_FIXTURE_CREDENTIAL_HASHES = frozenset(
-    {
-        "0535db08797e7f1f47348a64480b933620fe87c6a965cab62787c9a62d68684d",
-        "0c390947fd354ea5bdf4231b34bc549d63aa67254ebc5f0d00d877c456d6c3bb",
+TEST_FIXTURE_CREDENTIAL_HASHES_BY_PATH: dict[str, frozenset[str]] = {
+    "backend/tests/test_agent_auth.py": frozenset({
         "16175223c8ddce5ace0493c948569c211b03c4c6bb3d3e484434999448cffe01",
-        "26143e7e04e9b21b16c199bec7536fb05325e5f9f9eb82a26b36e74819e7cb23",
         "2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b",
-        "307904106c9d0b5b2abeba51f4d1d94f3d77f8d8a52382cd4731db0a12612219",
         "3316348dbadfb7b11c7c2ea235949419e23f9fa898ad2c198f999617912a9925",
-        "364c654dcb00148e3f3e82a87a1540a094e874a50ee97b9ea1f30547a8425ab9",
-        "3f6f36ef4d060436a9ebe8029c2ae4566c983c31afadb2ca5f6a25d0b56d43a1",
-        "4530d17b2e02de0145531ae4b5b62e504e7612316ea27348e9b9fab63f178499",
-        "648f312cf893d191028cba09f60f8ffe95624c9ef2d40a0c2f0db0e356e37e0f",
-        "677c8e9c78d800b49c65f355300cdb087555c05bf8392e114fa973f767823ce8",
-        "6830e85a6f2b0f09b1d1883ccef2e6a419b3fe4d9b16fb6ce2c0f95a9b03db58",
-        "6a011d29036329dbf8f931028a5261aacd372f52bfbc8a29d1735237248e484a",
-        "6a34e9cf66e854e6e1b79ceebaac12897fd6845a57d2cf367ca33a74fdbc1afb",
-        "7de71b17706987178b1d84b2e9ce2ce40ed3f1a63a9d9a716071c3e2345eea77",
         "81f859a7853a6c6aa4c32e5be83bbd415a11ad99ff9fedae38281ee1d89e1e09",
         "8810ad581e59f2bc3928b261707a71308f7e139eb04820366dc4d5c18d980225",
-        "8b6f210d19b901c1f28182760db2450e6a3209354923cd8b09e649f09f17abe6",
         "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918",
-        "90dbafc65a833aca47d839c3e6b879ba420db258087347b34340ff6b4789a174",
         "a39a67c5e6ddd5d607180e3c781bb0f62bdbfdfc66a897b603d4e670e1d41cbb",
-        "b6d751546e93970143442c7294ba9559bed847676d2492b00c2fbc809bc16b94",
-        "bbd3bb4ec39b07f215d1c58c1faed306dcbf5caad8c538c6c1e1ad9c46001923",
-        "c91a3cc769f870fddc83082ba1274ed09441626dfe257c2c434684373a72e4ad",
         "cc000e626ba67bed4834794d42288b228f012823877440d2bc5a3787cc6ffce9",
-        "d67e2e944994496c8d8ec76eed0cf9f09679448d584b532bebf941852a37f5ed",
-        "d6836c01b5baf9e5a56115e086ae3875a208576b034511749985f0bb17b63742",
-        "e2d349dc4d34e58532d4e162998448e6d958ef1f3bfba65dd8ddcc513704e4c0",
-        "ec585b7be286a5088d8687af4ce027f389cd098e2bb0dee876d5521fa4468f59",
-        "ef21d1c7da6d7e23deeae2c52c47c9b163813e48cddc992d48ff3000dc0bfbcf",
         "f0fd6c09405cb6d3707d04067d8509cb924e62ae66fa02067c2bc467b0d721e4",
+    }),
+    "backend/tests/test_agent_client.py": frozenset({
+        "0c390947fd354ea5bdf4231b34bc549d63aa67254ebc5f0d00d877c456d6c3bb",
+        "307904106c9d0b5b2abeba51f4d1d94f3d77f8d8a52382cd4731db0a12612219",
+        "6a011d29036329dbf8f931028a5261aacd372f52bfbc8a29d1735237248e484a",
+        "b6d751546e93970143442c7294ba9559bed847676d2492b00c2fbc809bc16b94",
+        "c91a3cc769f870fddc83082ba1274ed09441626dfe257c2c434684373a72e4ad",
+        "d6836c01b5baf9e5a56115e086ae3875a208576b034511749985f0bb17b63742",
+        "ef21d1c7da6d7e23deeae2c52c47c9b163813e48cddc992d48ff3000dc0bfbcf",
+    }),
+    "backend/tests/test_agent_identity_auth.py": frozenset({
+        "16175223c8ddce5ace0493c948569c211b03c4c6bb3d3e484434999448cffe01",
+        "648f312cf893d191028cba09f60f8ffe95624c9ef2d40a0c2f0db0e356e37e0f",
+        "7de71b17706987178b1d84b2e9ce2ce40ed3f1a63a9d9a716071c3e2345eea77",
+        "f0fd6c09405cb6d3707d04067d8509cb924e62ae66fa02067c2bc467b0d721e4",
+    }),
+    "backend/tests/test_agent_protocol.py": frozenset({
+        "1fa13edd587a2bad97f18f9880c58ee74212d298e127d15e52127e1cbf123b0c",
+    }),
+    "backend/tests/test_browser_auth.py": frozenset({
+        "0535db08797e7f1f47348a64480b933620fe87c6a965cab62787c9a62d68684d",
+        "16175223c8ddce5ace0493c948569c211b03c4c6bb3d3e484434999448cffe01",
+        "4530d17b2e02de0145531ae4b5b62e504e7612316ea27348e9b9fab63f178499",
+        "7a74316cbd7bff4ff5254596c29c3985b4479d1491e7711e8a16860a5f69cd5d",
+        "8810ad581e59f2bc3928b261707a71308f7e139eb04820366dc4d5c18d980225",
+        "8b6f210d19b901c1f28182760db2450e6a3209354923cd8b09e649f09f17abe6",
+        "bbd3bb4ec39b07f215d1c58c1faed306dcbf5caad8c538c6c1e1ad9c46001923",
+        "d67e2e944994496c8d8ec76eed0cf9f09679448d584b532bebf941852a37f5ed",
         "f1d9cb4151761d2cb60eace21765b6c7b616bcce35f0ad74c95667c35c3466ff",
         "fb881b8333ba364435f8ec2b6a1dd6d0f81ecdbe7372da2829e5197643fa81a2",
-    }
-)
+    }),
+    "backend/tests/test_customs_api_route.py": frozenset({
+        "16175223c8ddce5ace0493c948569c211b03c4c6bb3d3e484434999448cffe01",
+    }),
+    "backend/tests/test_healthcheck_script.py": frozenset({
+        "364c654dcb00148e3f3e82a87a1540a094e874a50ee97b9ea1f30547a8425ab9",
+    }),
+    "backend/tests/test_llm_client.py": frozenset({
+        "6a34e9cf66e854e6e1b79ceebaac12897fd6845a57d2cf367ca33a74fdbc1afb",
+        "e2d349dc4d34e58532d4e162998448e6d958ef1f3bfba65dd8ddcc513704e4c0",
+    }),
+    "backend/tests/test_production_readiness.py": frozenset({
+        "3316348dbadfb7b11c7c2ea235949419e23f9fa898ad2c198f999617912a9925",
+        "81f859a7853a6c6aa4c32e5be83bbd415a11ad99ff9fedae38281ee1d89e1e09",
+        "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918",
+        "a39a67c5e6ddd5d607180e3c781bb0f62bdbfdfc66a897b603d4e670e1d41cbb",
+        "f0fd6c09405cb6d3707d04067d8509cb924e62ae66fa02067c2bc467b0d721e4",
+    }),
+    "backend/tests/test_upkuajing_customs.py": frozenset({
+        "2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b",
+    }),
+    "frontend/src/api.test.ts": frozenset({
+        "3f6f36ef4d060436a9ebe8029c2ae4566c983c31afadb2ca5f6a25d0b56d43a1",
+        "677c8e9c78d800b49c65f355300cdb087555c05bf8392e114fa973f767823ce8",
+    }),
+    "frontend/src/auth.test.ts": frozenset({
+        "26143e7e04e9b21b16c199bec7536fb05325e5f9f9eb82a26b36e74819e7cb23",
+        "3f6f36ef4d060436a9ebe8029c2ae4566c983c31afadb2ca5f6a25d0b56d43a1",
+        "90dbafc65a833aca47d839c3e6b879ba420db258087347b34340ff6b4789a174",
+        "ec585b7be286a5088d8687af4ce027f389cd098e2bb0dee876d5521fa4468f59",
+    }),
+    "frontend/src/main.test.tsx": frozenset({
+        "6830e85a6f2b0f09b1d1883ccef2e6a419b3fe4d9b16fb6ce2c0f95a9b03db58",
+        "90dbafc65a833aca47d839c3e6b879ba420db258087347b34340ff6b4789a174",
+    }),
+}
 
 # Exact source fixtures and policy examples may describe forbidden values without
 # making those values part of a release. Each SHA-256 digest covers the complete
@@ -277,10 +320,12 @@ def _display_path(path: Path | str) -> str:
 def scan_public_text(relative_path: Path | str, text: str) -> list[ReleaseFinding]:
     path = _display_path(relative_path)
     suffix = Path(path).suffix.casefold()
+    javascript_suffixes = {".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"}
     python_assignments = _python_credential_assignments(text) if suffix == ".py" else None
     findings: list[ReleaseFinding] = []
     allowlist_occurrences: dict[tuple[str, str, str], int] = {}
     evaluated_locations: set[tuple[str, int, str]] = set()
+    userinfo_separator = ":"
     lines = text.splitlines()
     for line_number, line in enumerate(lines, start=1):
         for match in PERSONAL_PATH_RE.finditer(line):
@@ -312,14 +357,13 @@ def scan_public_text(relative_path: Path | str, text: str) -> list[ReleaseFindin
                     allowlist_occurrences,
                     evaluated_locations,
                 )
-        assignments = (
-            python_assignments.get(line_number, [])
-            if python_assignments is not None
-            else _credential_assignments(line)
-        )
+        if python_assignments is not None:
+            assignments = python_assignments.get(line_number, [])
+        elif suffix in javascript_suffixes:
+            assignments = _javascript_credential_assignments(line)
+        else:
+            assignments = _credential_assignments(line)
         for key, separator, value in assignments:
-            if suffix in {".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"} and not _quoted_source_rhs(value):
-                continue
             if separator == ":" and _block_scalar_indicator(value):
                 block_value = _yaml_block_value(lines, line_number - 1)
                 if block_value and not _placeholder_credential(block_value):
@@ -333,6 +377,18 @@ def scan_public_text(relative_path: Path | str, text: str) -> list[ReleaseFindin
                         allowlist_occurrences,
                         evaluated_locations,
                     )
+                continue
+            if separator not in {"=", ":"}:
+                _append_finding(
+                    findings,
+                    path,
+                    line_number,
+                    "PUBLIC_CREDENTIAL_VALUE",
+                    "Credential assignment must use an explicit placeholder.",
+                    line,
+                    allowlist_occurrences,
+                    evaluated_locations,
+                )
                 continue
             if _test_fixture_credential(path, value):
                 continue
@@ -361,7 +417,9 @@ def scan_public_text(relative_path: Path | str, text: str) -> list[ReleaseFindin
                 evaluated_locations,
             )
         for url_userinfo in URL_USERINFO_RE.finditer(line):
-            _username, separator, password = url_userinfo.group("userinfo").partition(":")
+            _username, separator, password = url_userinfo.group("userinfo").partition(
+                userinfo_separator
+            )
             if separator and password and not _placeholder_credential(password):
                 _append_finding(
                     findings,
@@ -378,7 +436,7 @@ def scan_public_text(relative_path: Path | str, text: str) -> list[ReleaseFindin
             bearer
             and not _placeholder_credential(bearer.group("value"))
             and not _dynamic_bearer_reference(bearer.group("value"))
-            and not _test_fixture_credential(path, bearer.group("value"))
+            and not _test_fixture_bearer(path, line, bearer.group("value"))
         ):
             _append_finding(
                 findings,
@@ -423,6 +481,84 @@ def _credential_assignments(line: str) -> list[tuple[str, str, str]]:
     return assignments
 
 
+def _javascript_credential_assignments(line: str) -> list[tuple[str, str, str]]:
+    assignments = []
+    for match in JAVASCRIPT_ASSIGNMENT_START_RE.finditer(line):
+        key = match.group("key")
+        separator = match.group("separator")
+        if not _credential_key(key):
+            continue
+        if separator == ":":
+            prefix = line[: match.start()].rstrip()
+            if prefix and not prefix.endswith(("{", ",")):
+                continue
+        value = _javascript_rhs(line, match.end())
+        if separator == ":" and _javascript_type_expression(value):
+            continue
+        assignments.append((key, separator, value))
+    return assignments
+
+
+def _javascript_rhs(line: str, start: int) -> str:
+    base_depth = _javascript_nesting_depth(line[:start])
+    depth = base_depth
+    quote = ""
+    escaped = False
+    index = start
+    while index < len(line):
+        character = line[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = ""
+            index += 1
+            continue
+        if character in {"'", '"', "`"}:
+            quote = character
+        elif character in "([{":
+            depth += 1
+        elif character in ")]}":
+            if depth <= base_depth:
+                break
+            depth -= 1
+            if depth < base_depth:
+                break
+        elif depth == base_depth and character in {",", ";"}:
+            break
+        index += 1
+    return line[start:index].strip()
+
+
+def _javascript_nesting_depth(text: str) -> int:
+    depth = 0
+    quote = ""
+    escaped = False
+    for character in text:
+        if quote:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = ""
+            continue
+        if character in {"'", '"', "`"}:
+            quote = character
+        elif character in "([{":
+            depth += 1
+        elif character in ")]}" and depth:
+            depth -= 1
+    return depth
+
+
+def _javascript_type_expression(value: str) -> bool:
+    atom = r"(?:boolean|never|null|number|string|undefined|unknown)(?:\[\])?"
+    return bool(re.fullmatch(rf"{atom}(?:\s*\|\s*{atom})*", value.strip()))
+
+
 def _python_credential_assignments(
     text: str,
 ) -> dict[int, list[tuple[str, str, str]]] | None:
@@ -431,64 +567,90 @@ def _python_credential_assignments(
     except SyntaxError:
         return None
 
-    assignments: dict[int, list[tuple[str, str, str]]] = {}
+    visitor = _PythonCredentialVisitor(text)
+    visitor.visit(tree)
+    return visitor.assignments
 
-    def add(key: str | None, value: ast.AST, line: int) -> None:
+
+class _PythonCredentialVisitor(ast.NodeVisitor):
+    def __init__(self, text: str):
+        self.text = text
+        self.assignments: dict[int, list[tuple[str, str, str]]] = {}
+
+    def _add(self, key: str | None, value: ast.AST, line: int, separator: str = "=") -> None:
         if key is None or not _credential_key(key):
             return
-        source = ast.get_source_segment(text, value)
-        if source is None:
-            return
-        assignments.setdefault(line, []).append((key, "=", source))
+        source = ast.get_source_segment(self.text, value)
+        if source is not None:
+            self.assignments.setdefault(line, []).append((key, separator, source))
 
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Assign, ast.NamedExpr)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for target in targets:
-                add(_python_assignment_key(target), node.value, target.lineno)
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            add(_python_assignment_key(node.target), node.value, node.target.lineno)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            positional = [*node.args.posonlyargs, *node.args.args]
-            default_args = positional[len(positional) - len(node.args.defaults) :]
-            for argument, default in zip(default_args, node.args.defaults):
-                add(argument.arg, default, argument.lineno)
-            for argument, default in zip(node.args.kwonlyargs, node.args.kw_defaults):
-                if default is not None:
-                    add(argument.arg, default, argument.lineno)
-        elif isinstance(node, ast.Dict):
-            for key_node, value_node in zip(node.keys, node.values):
-                if (
-                    isinstance(key_node, ast.Constant)
-                    and isinstance(key_node.value, str)
-                    and _python_hardcoded_string_expression(value_node)
-                ):
-                    add(key_node.value, value_node, key_node.lineno)
-    return assignments
+    def _add_defaults(self, arguments: ast.arguments) -> None:
+        positional = [*arguments.posonlyargs, *arguments.args]
+        default_args = positional[len(positional) - len(arguments.defaults) :]
+        for argument, default in zip(default_args, arguments.defaults):
+            self._add(argument.arg, default, argument.lineno)
+        for argument, default in zip(arguments.kwonlyargs, arguments.kw_defaults):
+            if default is not None:
+                self._add(argument.arg, default, argument.lineno)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        for target in node.targets:
+            for key in _python_assignment_keys(target):
+                self._add(key, node.value, target.lineno)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if node.value is not None:
+            for key in _python_assignment_keys(node.target):
+                self._add(key, node.value, node.target.lineno)
+        self.generic_visit(node)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        for key in _python_assignment_keys(node.target):
+            self._add(key, node.value, node.target.lineno)
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        for key in _python_assignment_keys(node.target):
+            self._add(key, node.value, node.target.lineno, type(node.op).__name__)
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._add_defaults(node.args)
+        self.generic_visit(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._add_defaults(node.args)
+        self.generic_visit(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        self._add_defaults(node.args)
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        for keyword in node.keywords:
+            self._add(keyword.arg, keyword.value, keyword.value.lineno)
+        self.generic_visit(node)
+
+    def visit_Dict(self, node: ast.Dict) -> None:
+        for key_node, value_node in zip(node.keys, node.values):
+            if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
+                self._add(key_node.value, value_node, key_node.lineno)
+        self.generic_visit(node)
 
 
-def _python_assignment_key(target: ast.AST) -> str | None:
+def _python_assignment_keys(target: ast.AST) -> list[str]:
     if isinstance(target, ast.Name):
-        return target.id
+        return [target.id]
     if isinstance(target, ast.Attribute):
-        return target.attr
+        return [target.attr]
     if isinstance(target, ast.Subscript):
         key = target.slice
         if isinstance(key, ast.Constant) and isinstance(key.value, str):
-            return key.value
-    return None
-
-
-def _python_hardcoded_string_expression(node: ast.AST) -> bool:
-    if isinstance(node, ast.Constant):
-        return isinstance(node.value, (str, bytes))
-    if isinstance(node, ast.JoinedStr):
-        return True
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        return _python_hardcoded_string_expression(
-            node.left
-        ) or _python_hardcoded_string_expression(node.right)
-    return False
+            return [key.value]
+    if isinstance(target, (ast.List, ast.Tuple)):
+        return [key for item in target.elts for key in _python_assignment_keys(item)]
+    return []
 
 
 def _quoted_source_rhs(value: str) -> bool:
@@ -496,7 +658,11 @@ def _quoted_source_rhs(value: str) -> bool:
 
 
 def _credential_key(key: str) -> bool:
-    lowered = key.casefold().replace("-", "_").replace(".", "_")
+    snake_key = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key)
+    normalized_keys = {
+        candidate.casefold().replace("-", "_").replace(".", "_")
+        for candidate in (key, snake_key)
+    }
     exact = {
         "api_key",
         "apikey",
@@ -523,17 +689,26 @@ def _credential_key(key: str) -> bool:
         "_secret",
         "_token",
     )
-    if lowered == "gap_token":
+    if "gap_token" in normalized_keys:
         return False
-    if "-" in key and lowered == "tough_cookie":
+    if "-" in key and "tough_cookie" in normalized_keys:
         return False
-    return lowered in exact or lowered.endswith(suffixes)
+    return any(
+        lowered in exact or lowered.endswith(suffixes)
+        for lowered in normalized_keys
+    )
 
 
 def _safe_source_credential_rhs(path: str, key: str, value: str) -> bool:
     source_suffixes = {".cjs", ".go", ".java", ".js", ".jsx", ".mjs", ".py", ".rs", ".ts", ".tsx"}
-    if Path(path).suffix.casefold() not in source_suffixes:
+    suffix = Path(path).suffix.casefold()
+    if suffix not in source_suffixes:
         return False
+    if suffix == ".py":
+        expression = _parse_python_expression(value)
+        return expression is not None and _safe_python_credential_expression(
+            expression
+        )
     if _placeholder_credential(value):
         return True
 
@@ -571,52 +746,167 @@ def _safe_source_credential_rhs(path: str, key: str, value: str) -> bool:
         r"uuid\.uuid4\(\s*\)",
         r"crypto\.randomUUID\(\s*\)",
         r"crypto\.randomBytes\(\s*\d+\s*\)(?:\.toString\(\s*['\"](?:base64|base64url|hex)['\"]\s*\))?",
+        rf"authenticatedCsrfToken\(\s*{identifier}(?:\.{identifier})*\s*\)",
     )
     if any(re.fullmatch(pattern, raw) for pattern in safe_patterns):
         return True
-    return Path(path).suffix.casefold() == ".py" and _safe_python_credential_expression(
-        raw
-    )
+    return False
 
 
-def _safe_python_credential_expression(value: str) -> bool:
+def _parse_python_expression(value: str) -> ast.AST | None:
     try:
-        node = ast.parse(f"({value})", mode="eval").body
+        return ast.parse(f"({value})", mode="eval").body
     except SyntaxError:
-        return False
+        return None
 
-    approved_calls = {
+
+def _safe_python_credential_expression(node: ast.AST) -> bool:
+    environment_calls = {"os.environ.get", "os.getenv"}
+    generator_calls = {
+        "_allocate_agent_token",
+        "generate_agent_token",
+        "secrets.token_bytes",
+        "secrets.token_hex",
+        "secrets.token_urlsafe",
+        "self._generate_unique_token",
+        "uuid.uuid4",
+    }
+    accessor_calls = {
         "SimpleCookie",
         "Message",
+        "_active_tokens_locked",
         "_configured_cookie_secure",
+        "_configured_known_bearer_tokens",
         "_env_true",
+        "_single_header_value",
         "authentication_required_for_environment",
         "cookie_from_set_cookie",
         "cookie_header",
         "generate_agent_token",
         "header_value",
         "json_payload",
+        "logged_in_manager",
         "manager.logout",
-        "os.environ.get",
-        "os.getenv",
         "request.headers.get",
         "resolve_browser_or_bearer_authorization",
-        "self._generate_unique_token",
+        "self._active_tokens_locked",
         "self._header",
+        "self.login",
+        "self._set_cookie",
         "session_manager.logout",
+        "group",
+        "partition",
     }
+    selector_strings = {
+        "ADMIN_API_TOKEN",
+        "Authorization",
+        "Cookie",
+        "OSINT_ALLOW_LEGACY_AGENT_TOKEN",
+        "Set-Cookie",
+        "admin_token",
+        "cookie",
+        "csrf_token",
+        "userinfo",
+        ":",
+    }
+
+    def direct_reference(expression: ast.AST) -> bool:
+        if isinstance(expression, ast.Name):
+            return True
+        if isinstance(expression, ast.Attribute):
+            return direct_reference(expression.value)
+        if isinstance(expression, ast.Subscript):
+            return direct_reference(expression.value)
+        return False
+
+    def safe_argument(expression: ast.AST) -> bool:
+        if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+            return expression.value in selector_strings or _placeholder_credential(
+                expression.value
+            )
+        if isinstance(expression, ast.Dict):
+            return all(
+                isinstance(key, ast.Constant)
+                and isinstance(key.value, str)
+                and key.value in selector_strings
+                and safe(value)
+                for key, value in zip(expression.keys, expression.values)
+            )
+        return safe(expression)
+
+    def safe_call(expression: ast.Call) -> bool:
+        name = _python_qualified_name(expression.func)
+        receiver = expression.func.value if isinstance(expression.func, ast.Attribute) else None
+        receiver_safe = receiver is None or safe(receiver)
+        if name in environment_calls or name.endswith(".get"):
+            if not receiver_safe or not 1 <= len(expression.args) <= 2 or expression.keywords:
+                return False
+            lookup_key = expression.args[0]
+            if not isinstance(lookup_key, ast.Constant) or not isinstance(
+                lookup_key.value, str
+            ):
+                return False
+            return len(expression.args) == 1 or safe(expression.args[1])
+        if name in generator_calls:
+            return receiver_safe and all(safe(item) for item in expression.args) and all(
+                keyword.arg is not None and safe(keyword.value)
+                for keyword in expression.keywords
+            )
+        if name in accessor_calls or name.endswith((".group", ".partition")):
+            return receiver_safe and all(safe_argument(item) for item in expression.args) and all(
+                keyword.arg is not None and safe_argument(keyword.value)
+                for keyword in expression.keywords
+            )
+        if name.endswith((".items", ".keys", ".values")):
+            return receiver_safe and not expression.args and not expression.keywords
+        return False
+
+    def safe_dynamic_bearer(expression: ast.JoinedStr) -> bool:
+        if len(expression.values) != 2:
+            return False
+        prefix, reference = expression.values
+        return (
+            isinstance(prefix, ast.Constant)
+            and prefix.value == "Bearer "
+            and isinstance(reference, ast.FormattedValue)
+            and reference.conversion == -1
+            and reference.format_spec is None
+            and direct_reference(reference.value)
+        )
 
     def safe(expression: ast.AST) -> bool:
         if isinstance(expression, ast.Constant):
-            return expression.value == ""
-        if isinstance(expression, (ast.Name, ast.Attribute)):
+            if isinstance(expression.value, str):
+                return _placeholder_credential(expression.value)
+            return expression.value is None or isinstance(
+                expression.value, (bool, int, float)
+            )
+        if direct_reference(expression):
             return True
         if isinstance(expression, ast.Subscript):
             return safe(expression.value)
         if isinstance(expression, ast.BoolOp):
             return all(safe(item) for item in expression.values)
+        if isinstance(expression, ast.IfExp):
+            return safe(expression.body) and safe(expression.orelse)
+        if isinstance(expression, ast.Compare):
+            return safe(expression.left) and all(
+                safe(item) for item in expression.comparators
+            )
+        if isinstance(expression, ast.JoinedStr):
+            return safe_dynamic_bearer(expression)
+        if isinstance(expression, ast.UnaryOp):
+            return safe(expression.operand)
+        if isinstance(expression, (ast.List, ast.Set, ast.Tuple)):
+            return all(safe(item) for item in expression.elts)
+        if isinstance(expression, (ast.GeneratorExp, ast.ListComp, ast.SetComp)):
+            return safe(expression.elt) and all(
+                safe(generator.iter)
+                and all(safe(condition) for condition in generator.ifs)
+                for generator in expression.generators
+            )
         if isinstance(expression, ast.Call):
-            return _python_qualified_name(expression.func) in approved_calls
+            return safe_call(expression)
         return False
 
     return safe(node)
@@ -707,46 +997,31 @@ def _placeholder_credential(value: str) -> bool:
 
 
 def _test_fixture_credential(path: str, value: str) -> bool:
-    relative = Path(path)
-    backend_test = relative.parts[:2] == ("backend", "tests")
-    frontend_test = (
-        bool(relative.parts)
-        and relative.parts[0] == "frontend"
-        and ".test." in relative.name
-    )
-    if not backend_test and not frontend_test:
+    allowed_hashes = TEST_FIXTURE_CREDENTIAL_HASHES_BY_PATH.get(path)
+    if not allowed_hashes:
         return False
-    normalized = _test_fixture_normalized_value(value)
+    expression = _parse_python_expression(value)
+    if not isinstance(expression, ast.Constant) or not isinstance(expression.value, str):
+        return False
+    normalized = expression.value.strip()
     if normalized.casefold().startswith("bearer "):
         normalized = normalized[7:].strip()
     signature = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-    return signature in TEST_FIXTURE_CREDENTIAL_HASHES
+    return signature in allowed_hashes
 
 
-def _test_fixture_normalized_value(value: str) -> str:
-    raw = value.strip()
-    if raw.startswith(("'", '"')):
-        quote = raw[0]
-        escaped = False
-        for index, character in enumerate(raw[1:], start=1):
-            if escaped:
-                escaped = False
-                continue
-            if character == "\\":
-                escaped = True
-                continue
-            if character != quote:
-                continue
-            tail = raw[index + 1 :].lstrip()
-            if not tail.startswith("+"):
-                try:
-                    decoded = ast.literal_eval(raw[: index + 1])
-                except (SyntaxError, ValueError):
-                    break
-                if isinstance(decoded, str):
-                    return decoded.strip()
-            break
-    return _normalize_credential_value(value)
+def _test_fixture_bearer(path: str, line: str, value: str) -> bool:
+    allowed_hashes = TEST_FIXTURE_CREDENTIAL_HASHES_BY_PATH.get(path)
+    if not allowed_hashes:
+        return False
+    signature = hashlib.sha256(value.strip().encode("utf-8")).hexdigest()
+    if signature not in allowed_hashes:
+        return False
+    literal = re.compile(
+        rf"(?P<quote>['\"])Bearer\s+{re.escape(value)}(?P=quote)",
+        re.IGNORECASE,
+    )
+    return literal.search(line) is not None
 
 
 def _dynamic_bearer_reference(value: str) -> bool:

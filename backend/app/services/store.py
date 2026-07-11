@@ -1880,14 +1880,13 @@ class SQLiteStore:
                 """,
                 (agent_name,),
             ).fetchone()
-            token, token_hash = _allocate_agent_token(
-                {
-                    row["token_hash"]
-                    for row in conn.execute(
-                        "SELECT token_hash FROM agents WHERE token_hash IS NOT NULL"
-                    ).fetchall()
-                }
-            )
+            allocated_hashes = {
+                row["token_hash"]
+                for row in conn.execute(
+                    "SELECT token_hash FROM agents WHERE token_hash IS NOT NULL"
+                ).fetchall()
+            }
+            token, token_hash = _allocate_agent_token(allocated_hashes)
             now = _now()
             agent_id = existing["id"] if existing is not None else str(uuid4())
             if existing is None:
@@ -1994,14 +1993,13 @@ class SQLiteStore:
                 or row["role_tier"] not in AGENT_ROLE_TIERS
             ):
                 return None
-            token, token_hash = _allocate_agent_token(
-                {
-                    item["token_hash"]
-                    for item in conn.execute(
-                        "SELECT token_hash FROM agents WHERE token_hash IS NOT NULL"
-                    ).fetchall()
-                }
-            )
+            allocated_hashes = {
+                item["token_hash"]
+                for item in conn.execute(
+                    "SELECT token_hash FROM agents WHERE token_hash IS NOT NULL"
+                ).fetchall()
+            }
+            token, token_hash = _allocate_agent_token(allocated_hashes)
             now = _now()
             conn.execute(
                 "UPDATE agents SET token_hash = ?, token_created_at = ? WHERE id = ?",

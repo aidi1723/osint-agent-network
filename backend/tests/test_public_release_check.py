@@ -184,6 +184,10 @@ class PublicReleaseCheckTests(unittest.TestCase):
                 "    api_key = load_runtime_token()",
                 '    api_key = os.getenv("PRIMARY_API_KEY") or os.getenv("FALLBACK_API_KEY") or ""',
                 "    repeated_cookie = Message()",
+                "    token = self._generate_unique_token(forbidden)",
+                '    authorization = _single_header_value(headers, "Authorization")',
+                "    cookie = logged_in_manager()",
+                "    cookie = self.login(environment)",
                 '    headers["Authorization"] = f"Bearer {token}"',
                 '    headers["Authorization"] = f"Bearer {self.config.api_key}"',
                 '    gap_token = f"gap:{gap_key}"',
@@ -199,7 +203,88 @@ class PublicReleaseCheckTests(unittest.TestCase):
             [("PUBLIC_CREDENTIAL_VALUE", line) for line in range(3, 6)],
         )
 
-    def test_python_credential_dicts_block_literals_but_allow_dynamic_fixture_values(self):
+    def test_python_ast_visitor_covers_assignment_defaults_and_call_keywords(self):
+        value = "hardcoded-" + "visitor-value"
+        literal = repr(value)
+        text = "\n".join(
+            [
+                f"API_KEY = {literal}",
+                f"api_key: str = {literal}",
+                f"if (token := {literal}): pass",
+                f"secret += {literal}",
+                f"def sync(password={literal}, *, client_secret={literal}): pass",
+                f"async def async_fn(token={literal}, *, api_key={literal}): pass",
+                f"callback = lambda token={literal}, *, api_key={literal}: token",
+                f"connect(api_key={literal})",
+                f"@decorate(token={literal})",
+                "def decorated(): pass",
+                f"dict(API_KEY={literal})",
+            ]
+        )
+
+        findings = scan_public_text("app/visitor_matrix.py", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", line) for line in range(1, 10)]
+            + [("PUBLIC_CREDENTIAL_VALUE", 11)],
+        )
+
+    def test_python_nested_credential_expressions_fail_closed(self):
+        value = "hardcoded-" + "nested-value"
+        literal = repr(value)
+        text = "\n".join(
+            [
+                f'API_KEY = os.getenv("API_KEY", {literal})',
+                f'API_KEY = os.getenv("API_KEY") or {literal}',
+                f'API_KEY = {literal} if enabled else os.getenv("API_KEY")',
+                f"API_KEY = prefix + {literal}",
+                f'API_KEY = f"prefix-{{user}}-{value}"',
+                f'API_KEY = "{{}}".format({literal})',
+                f'API_KEY = "%s" % {literal}',
+                f"token = self._generate_unique_token({literal})",
+                f'config = {{"API_KEY": os.getenv("API_KEY") or {literal}}}',
+            ]
+        )
+
+        findings = scan_public_text("app/nested.py", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", line) for line in range(1, 10)],
+        )
+
+    def test_release_tree_blocks_python_complete_expression_bypasses(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            write_release_fixture(root)
+            value = "hardcoded-" + "release-value"
+            literal = repr(value)
+            (root / "security.py").write_text(
+                "\n".join(
+                    [
+                        f"connect(api_key={literal})",
+                        f"callback = lambda token={literal}: token",
+                        f'API_KEY = os.getenv("API_KEY", {literal})',
+                        f'config = {{"API_KEY": os.getenv("API_KEY") or {literal}}}',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = evaluate_public_release(root)
+
+        findings = [
+            finding
+            for finding in result["findings"]
+            if finding["rule_id"] == "PUBLIC_CREDENTIAL_VALUE"
+        ]
+        self.assertEqual(
+            [(finding["path"], finding["line"]) for finding in findings],
+            [("security.py", line) for line in range(1, 5)],
+        )
+
+    def test_python_credential_dicts_scan_literal_and_dynamic_values(self):
         key = "ADMIN_API_" + "TOKEN"
         hardcoded = "hardcoded-" + "dict-value"
         text = "\n".join(
@@ -213,7 +298,7 @@ class PublicReleaseCheckTests(unittest.TestCase):
 
         self.assertEqual(
             [(finding.rule_id, finding.line) for finding in findings],
-            [("PUBLIC_CREDENTIAL_VALUE", 1)],
+            [("PUBLIC_CREDENTIAL_VALUE", 1), ("PUBLIC_CREDENTIAL_VALUE", 2)],
         )
 
     def test_exact_synthetic_credential_fixture_is_allowed_only_in_test_paths(self):
@@ -221,16 +306,37 @@ class PublicReleaseCheckTests(unittest.TestCase):
         fixture = "admin-" + "secret"
         source = f'{key} = "{fixture}"'
 
-        self.assertEqual(scan_public_text("backend/tests/test_auth.py", source), [])
-        self.assertEqual(scan_public_text("frontend/src/auth.test.ts", source), [])
-        inline = f'call({{ {key}: "{fixture}" }}, fetchImpl)'
         self.assertEqual(
-            scan_public_text("frontend/src/auth.test.ts", inline), []
+            scan_public_text("backend/tests/test_agent_auth.py", source), []
         )
-        outside = scan_public_text("backend/app/config.py", source)
+        bearer_source = f'Authorization = "Bearer {fixture}"'
         self.assertEqual(
-            [(finding.rule_id, finding.line) for finding in outside],
-            [("PUBLIC_CREDENTIAL_VALUE", 1)],
+            scan_public_text("backend/tests/test_agent_auth.py", bearer_source), []
+        )
+        for path in ("backend/tests/test_auth.py", "backend/app/config.py"):
+            with self.subTest(path=path):
+                findings = scan_public_text(path, source)
+                self.assertEqual(
+                    [(finding.rule_id, finding.line) for finding in findings],
+                    [("PUBLIC_CREDENTIAL_VALUE", 1)],
+                )
+
+    def test_fixture_hash_requires_one_complete_string_literal_expression(self):
+        key = "ADMIN_API_" + "TOKEN"
+        fixture = "admin-" + "secret"
+        text = "\n".join(
+            [
+                f'{key} = "{fixture}" or fallback',
+                f'{key} = "{{}}".format("{fixture}")',
+                f'{key} = "%s" % "{fixture}"',
+            ]
+        )
+
+        findings = scan_public_text("backend/tests/test_agent_auth.py", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", line) for line in range(1, 4)],
         )
 
     def test_test_fixture_allowlist_rejects_realistic_modified_and_concatenated_values(self):
@@ -250,6 +356,48 @@ class PublicReleaseCheckTests(unittest.TestCase):
             [(finding.rule_id, finding.line) for finding in findings],
             [("PUBLIC_CREDENTIAL_VALUE", line) for line in range(1, 4)],
         )
+
+    def test_javascript_complete_expression_matrix_fails_closed(self):
+        value = "hardcoded-" + "javascript-tail"
+        literal = json.dumps(value)
+        text = "\n".join(
+            [
+                f"const API_KEY = process.env.API_KEY || {literal};",
+                f"const token = process.env.TOKEN ?? {literal};",
+                f"let password = arbitrary({literal});",
+                f"const clientSecret = String({literal});",
+                f"const GITHUB_PAT = enabled ? process.env.PAT : {literal};",
+                f"function connect(apiKey = {literal}) {{}}",
+                f"const fn = (token = {literal}) => token;",
+                f"const config = {{ API_KEY: {literal} }};",
+                f"connect({{ clientSecret: {literal} }});",
+                f"API_KEY += {literal};",
+                f"API_KEY ||= {literal};",
+            ]
+        )
+
+        findings = scan_public_text("frontend/security.ts", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", line) for line in range(1, 12)],
+        )
+
+    def test_javascript_allows_only_complete_safe_expressions(self):
+        text = "\n".join(
+            [
+                "const API_KEY = process.env.API_KEY;",
+                "const token = import.meta.env.VITE_TOKEN;",
+                "const password = config.password;",
+                "const clientSecret = crypto.randomUUID();",
+                'const GITHUB_PAT = crypto.randomBytes(32).toString("hex");',
+                'const authorization = `Bearer ${token}`;',
+                'const cookie = "placeholder";',
+                "type Props = { csrfToken: string | null };",
+            ]
+        )
+
+        self.assertEqual(scan_public_text("frontend/safe.ts", text), [])
 
     def test_typescript_annotations_and_bearer_constants_are_not_credentials(self):
         text = "\n".join(
