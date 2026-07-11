@@ -492,7 +492,6 @@ class PublicReleaseCheckTests(unittest.TestCase):
                 "  apiKey =",
                 f"    {literal},",
                 ") {}",
-                "const secret = process.env.SECRET /* unterminated",
             ]
         )
 
@@ -503,7 +502,252 @@ class PublicReleaseCheckTests(unittest.TestCase):
             [
                 ("PUBLIC_CREDENTIAL_VALUE", 3),
                 ("PUBLIC_CREDENTIAL_VALUE", 7),
-                ("PUBLIC_CREDENTIAL_VALUE", 10),
+            ],
+        )
+
+    def test_typescript_ast_covers_typed_defaults_and_computed_targets(self):
+        value = "hardcoded-" + "typed-target"
+        literal = json.dumps(value)
+        text = "\n".join(
+            [
+                f"const token: string = {literal};",
+                f"function connect(apiKey: string = {literal}) {{}}",
+                f'cfg["token"] = {literal};',
+                f'const config = {{ ["clientSecret"]: {literal} }};',
+            ]
+        )
+
+        findings = scan_public_text("frontend/typed-targets.ts", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", line) for line in range(1, 5)],
+        )
+        self.assertNotIn(
+            value, json.dumps([finding.to_dict() for finding in findings])
+        )
+
+    def test_typescript_ast_offsets_handle_non_bmp_prefixes(self):
+        value = "hardcoded-" + "unicode-offset"
+        literal = json.dumps(value)
+        marker = "\U0001f510"
+        text = "\n".join(
+            [
+                f'const marker = "{marker}"; const token: string = {literal};',
+                f'const second = "{marker}"; const apiKey: string = process.env.API_KEY;',
+            ]
+        )
+
+        findings = scan_public_text("frontend/unicode-offset.ts", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", 1)],
+        )
+
+    def test_javascript_template_expressions_are_scanned_as_code(self):
+        value = "hardcoded-" + "template-expression"
+        literal = json.dumps(value)
+        text = "\n".join(
+            [
+                f'const view = `safe ${{(() => {{ const token = {literal}; return token; }})()}}`;',
+                f'const nested = `outer ${{`inner ${{(() => {{ cfg["apiKey"] = {literal}; }})()}}`}}`;',
+            ]
+        )
+
+        findings = scan_public_text("frontend/template-code.ts", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", 1), ("PUBLIC_CREDENTIAL_VALUE", 2)],
+        )
+
+    def test_javascript_multiline_postfix_and_bitwise_tails_fail_closed(self):
+        value = "hardcoded-" + "postfix-tail"
+        literal = json.dumps(value)
+        text = "\n".join(
+            [
+                "const token = wrap",
+                f"({literal});",
+                "const API_KEY = tag",
+                f"`{value}`;",
+                "const password = process.env.PASSWORD",
+                f"  | {literal};",
+                "const clientSecret = config.clientSecret",
+                f"  & {literal};",
+            ]
+        )
+
+        findings = scan_public_text("frontend/postfix.ts", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [
+                ("PUBLIC_CREDENTIAL_VALUE", 1),
+                ("PUBLIC_CREDENTIAL_VALUE", 3),
+                ("PUBLIC_CREDENTIAL_VALUE", 5),
+                ("PUBLIC_CREDENTIAL_VALUE", 7),
+            ],
+        )
+
+    def test_bearer_scans_all_occurrences_and_multiline_expression_tails(self):
+        real = "hidden-" + "bearer-value"
+        bearer_scheme = "Bear" + "er"
+        cases = {
+            "backend/tests/test_agent_auth.py": (
+                "admin-" + "secret",
+                f'f"{bearer_scheme} {{token}}", "{bearer_scheme} {real}"',
+                "  if enabled else fallback,",
+            ),
+            "frontend/src/auth.test.ts": (
+                "operator-" + "secret",
+                f'`{bearer_scheme} ${{token}}`, "{bearer_scheme} {real}"',
+                "  ? enabled : fallback,",
+            ),
+        }
+        for path, (fixture, multiple, ternary_tail) in cases.items():
+            with self.subTest(path=path):
+                text = "\n".join(
+                    [
+                        "send(",
+                        f'  "{bearer_scheme} {fixture}"',
+                        "  + runtime_suffix,",
+                        ")",
+                        "send(",
+                        f'  "{bearer_scheme} {fixture}"',
+                        "  .strip(),",
+                        ")",
+                        "send(",
+                        f'  "{bearer_scheme} {fixture}"',
+                        "  (runtime_arg),",
+                        ")",
+                        "send(",
+                        f'  "{bearer_scheme} {fixture}"',
+                        ternary_tail,
+                        ")",
+                        f"send({multiple})",
+                        f'send("{bearer_scheme} {fixture}", "{bearer_scheme} {real}")',
+                    ]
+                )
+
+                findings = scan_public_text(path, text)
+
+                self.assertEqual(
+                    [(finding.rule_id, finding.line) for finding in findings],
+                    [
+                        ("PUBLIC_CREDENTIAL_VALUE", line)
+                        for line in (2, 6, 10, 14, 17, 18)
+                    ],
+                )
+                self.assertNotIn(
+                    real,
+                    json.dumps([finding.to_dict() for finding in findings]),
+                )
+
+    def test_release_tree_blocks_batch_g_complete_expression_bypasses(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            write_release_fixture(root)
+            (root / "frontend" / "src").mkdir()
+            value = "hardcoded-" + "batch-g-release"
+            literal = json.dumps(value)
+            fixture = "operator-" + "secret"
+            (root / "frontend" / "src" / "auth.test.ts").write_text(
+                "\n".join(
+                    [
+                        f"const token: string = {literal};",
+                        f'const view = `x ${{(() => {{ cfg["apiKey"] = {literal}; }})()}}`;',
+                        "const password = wrap",
+                        f"({literal});",
+                        "send(",
+                        f'  "Bearer {fixture}"',
+                        "  + runtime_suffix,",
+                        ")",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = evaluate_public_release(root)
+
+        findings = [
+            finding
+            for finding in result["findings"]
+            if finding["rule_id"] == "PUBLIC_CREDENTIAL_VALUE"
+        ]
+        self.assertFalse(result["ready"])
+        self.assertEqual(
+            [(finding["path"], finding["line"]) for finding in findings],
+            [
+                ("frontend/src/auth.test.ts", 1),
+                ("frontend/src/auth.test.ts", 2),
+                ("frontend/src/auth.test.ts", 3),
+                ("frontend/src/auth.test.ts", 6),
+            ],
+        )
+        self.assertNotIn(value, json.dumps(findings))
+
+    def test_javascript_parser_failures_block_release_without_reflecting_source(self):
+        value = "hardcoded-" + "parser-failure"
+        source = f'const token: string = "{value}";'
+        failure_cases = (
+            OSError("node unavailable"),
+            SimpleNamespace(returncode=1, stdout=b"", stderr=b"ignored"),
+            SimpleNamespace(returncode=0, stdout=b"not-json", stderr=b""),
+        )
+        for failure in failure_cases:
+            with self.subTest(failure=type(failure).__name__):
+                if isinstance(failure, OSError):
+                    mocked = patch(
+                        "scripts.public_release_check.subprocess.run",
+                        side_effect=failure,
+                    )
+                else:
+                    mocked = patch(
+                        "scripts.public_release_check.subprocess.run",
+                        return_value=failure,
+                    )
+                with mocked:
+                    findings = scan_public_text("frontend/parser.ts", source)
+                self.assertEqual(
+                    [(finding.rule_id, finding.line) for finding in findings],
+                    [("PUBLIC_CREDENTIAL_SCAN", 1)],
+                )
+                self.assertNotIn(
+                    value,
+                    json.dumps([finding.to_dict() for finding in findings]),
+                )
+
+        malformed = scan_public_text(
+            "frontend/malformed.ts", "const token: string ="
+        )
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in malformed],
+            [("PUBLIC_CREDENTIAL_SCAN", 1)],
+        )
+
+    def test_javascript_react_state_allows_only_proven_empty_initializers(self):
+        value = "hardcoded-" + "state-value"
+        literal = json.dumps(value)
+        text = "\n".join(
+            [
+                'const [token, setToken] = useState("");',
+                "const [csrfToken, setCsrfToken] = useState<string | null>(null);",
+                f"const [password, setPassword] = useState({literal});",
+                f'const [secret, setSecret] = useState("" || {literal});',
+                f'const [apiKey, setApiKey] = useState("", {literal});',
+                'const [clientSecret, setClientSecret] = wrapper("");',
+                'const [GITHUB_PAT, setPat] = React.useState("");',
+            ]
+        )
+
+        findings = scan_public_text("frontend/state.tsx", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [
+                ("PUBLIC_CREDENTIAL_VALUE", line)
+                for line in range(3, 8)
             ],
         )
 
@@ -543,7 +787,7 @@ class PublicReleaseCheckTests(unittest.TestCase):
         comparison_fixture = "secret-" + "read-token"
         comparison = scan_public_text(
             "backend/tests/test_healthcheck_script.py",
-            f'if authorization != "Bearer {comparison_fixture}":',
+            f'if authorization != "Bearer {comparison_fixture}":\n    pass',
         )
         self.assertEqual(comparison, [])
 

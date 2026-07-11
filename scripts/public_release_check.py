@@ -12,6 +12,8 @@ import tomllib
 
 REQUIRED_LICENSE_ID = "GPL-3.0-only"
 GPLV3_NORMALIZED_SHA256 = "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+JAVASCRIPT_SUFFIXES = frozenset({".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"})
+JAVASCRIPT_AST_HELPER = Path(__file__).with_name("public_release_ast.mjs")
 GENERATED_DEPENDENCY_DIRS = frozenset(
     {".git", ".mypy_cache", ".pytest_cache", ".tox", ".venv", "__pycache__", "node_modules", "venv"}
 )
@@ -43,10 +45,6 @@ PERSONAL_PATH_RE = re.compile(
 ASSIGNMENT_START_RE = re.compile(
     r"(?:^|[\s,{;])(?:export\s+)?(?P<quote>['\"]?)(?P<key>[A-Za-z_][\w.-]*)(?P=quote)\s*(?P<separator>=|:(?!-))\s*",
     re.IGNORECASE,
-)
-JAVASCRIPT_ASSIGNMENT_START_RE = re.compile(
-    r"(?<![A-Za-z0-9_$])(?P<quote>['\"]?)(?P<key>[A-Za-z_$][A-Za-z0-9_$.-]*)"
-    r"(?P=quote)\s*(?P<separator>\?\?=|\|\|=|&&=|[+\-*/%]=|=(?!=|>)|:)",
 )
 BEARER_RE = re.compile(
     r"(?<![A-Za-z0-9_-])Bearer\s+"
@@ -247,6 +245,13 @@ class ReleaseFinding:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class JavaScriptAstFile:
+    assignments: dict[int, list[tuple[str, str, str, bool]]]
+    pure_string_literals: tuple[tuple[int, int], ...]
+    error_line: int | None = None
+
+
 def tracked_files(root: Path) -> list[Path]:
     root = root.resolve()
     git_metadata = root / ".git"
@@ -317,21 +322,38 @@ def _display_path(path: Path | str) -> str:
     ).replace("\\x0a", "\\n").replace("\\x0d", "\\r").replace("\\x09", "\\t")
 
 
-def scan_public_text(relative_path: Path | str, text: str) -> list[ReleaseFinding]:
+def scan_public_text(
+    relative_path: Path | str,
+    text: str,
+    *,
+    javascript_ast: JavaScriptAstFile | None = None,
+) -> list[ReleaseFinding]:
     path = _display_path(relative_path)
     suffix = Path(path).suffix.casefold()
-    javascript_suffixes = {".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"}
     python_assignments = _python_credential_assignments(text) if suffix == ".py" else None
-    javascript_assignments = (
-        _javascript_credential_assignments(text)
-        if suffix in javascript_suffixes
-        else None
-    )
+    if suffix in JAVASCRIPT_SUFFIXES and javascript_ast is None:
+        javascript_ast = _javascript_ast_batch([(path, text)])[path]
+    javascript_assignments = javascript_ast.assignments if javascript_ast else None
     findings: list[ReleaseFinding] = []
     allowlist_occurrences: dict[tuple[str, str, str], int] = {}
     evaluated_locations: set[tuple[str, int, str]] = set()
     userinfo_separator = ":"
     lines = text.splitlines()
+    line_offsets = _line_offsets(text)
+    pure_string_literals = (
+        javascript_ast.pure_string_literals
+        if javascript_ast is not None
+        else _python_pure_string_literals(text) if suffix == ".py" else ()
+    )
+    if javascript_ast is not None and javascript_ast.error_line is not None:
+        findings.append(
+            ReleaseFinding(
+                "PUBLIC_CREDENTIAL_SCAN",
+                path,
+                javascript_ast.error_line,
+                "JavaScript credential scan could not parse this source file.",
+            )
+        )
     for line_number, line in enumerate(lines, start=1):
         for match in PERSONAL_PATH_RE.finditer(line):
             if match.group(0).startswith("/home/osint") and match.group("user") == "osint":
@@ -368,7 +390,10 @@ def scan_public_text(relative_path: Path | str, text: str) -> list[ReleaseFindin
             assignments = javascript_assignments.get(line_number, [])
         else:
             assignments = _credential_assignments(line)
-        for key, separator, value in assignments:
+        for assignment in assignments:
+            key, separator, value = assignment[:3]
+            if len(assignment) == 4 and assignment[3]:
+                continue
             if separator == ":" and _block_scalar_indicator(value):
                 block_value = _yaml_block_value(lines, line_number - 1)
                 if block_value and not _placeholder_credential(block_value):
@@ -436,13 +461,23 @@ def scan_public_text(relative_path: Path | str, text: str) -> list[ReleaseFindin
                     allowlist_occurrences,
                     evaluated_locations,
                 )
-        bearer = BEARER_RE.search(line)
-        if (
-            bearer
-            and not _placeholder_credential(bearer.group("value"))
-            and not _dynamic_bearer_reference(bearer.group("value"))
-            and not _test_fixture_bearer(path, line, bearer.group("value"))
-        ):
+        for authorization_match in BEARER_RE.finditer(line):
+            value = authorization_match.group("value")
+            absolute_start = line_offsets[line_number - 1] + authorization_match.start()
+            absolute_end = line_offsets[line_number - 1] + authorization_match.end()
+            if (
+                _placeholder_credential(value)
+                or _dynamic_bearer_reference(value)
+                or _test_fixture_bearer(
+                    path,
+                    text,
+                    absolute_start,
+                    absolute_end,
+                    value,
+                    pure_string_literals,
+                )
+            ):
+                continue
             _append_finding(
                 findings,
                 path,
@@ -486,284 +521,182 @@ def _credential_assignments(line: str) -> list[tuple[str, str, str]]:
     return assignments
 
 
-def _javascript_credential_assignments(
-    text: str,
-) -> dict[int, list[tuple[str, str, str]]]:
-    code_positions = _javascript_code_positions(text)
-    assignments: dict[int, list[tuple[str, str, str]]] = {}
-    for match in JAVASCRIPT_ASSIGNMENT_START_RE.finditer(text):
-        if not code_positions[match.start()]:
-            continue
-        key = match.group("key")
-        separator = match.group("separator")
-        if not _credential_key(key):
-            continue
-        if separator == ":" and not _javascript_property_colon(
-            text, code_positions, match.start()
-        ):
-            continue
-        end = _javascript_expression_end(text, match.end())
-        value = _javascript_strip_comments(text[match.end() : end]).strip()
-        if separator == ":" and _javascript_type_expression(value):
-            continue
-        line = text.count("\n", 0, match.start("key")) + 1
-        assignments.setdefault(line, []).append((key, separator, value))
-    return assignments
-
-
-def _javascript_code_positions(text: str) -> bytearray:
-    positions = bytearray(len(text))
-    index = 0
-    while index < len(text):
-        if text.startswith("//", index):
-            newline = text.find("\n", index + 2)
-            index = len(text) if newline < 0 else newline
-            continue
-        if text.startswith("/*", index):
-            closing = text.find("*/", index + 2)
-            index = len(text) if closing < 0 else closing + 2
-            continue
-        positions[index] = 1
-        if text[index] in {"'", '"', "`"}:
-            index = _javascript_string_end(text, index)
-            continue
-        if text[index] == "/" and _javascript_regex_start(text, index):
-            regex_end = _javascript_regex_end(text, index)
-            if regex_end is not None:
-                index = regex_end
-                continue
-        index += 1
-    return positions
-
-
-def _javascript_string_end(text: str, start: int) -> int:
-    quote = text[start]
-    if quote == "`":
-        return _javascript_template_end(text, start)
-    index = start + 1
-    escaped = False
-    while index < len(text):
-        character = text[index]
-        if escaped:
-            escaped = False
-        elif character == "\\":
-            escaped = True
-        elif character == quote:
-            return index + 1
-        index += 1
-    return len(text)
-
-
-def _javascript_template_end(text: str, start: int) -> int:
-    index = start + 1
-    escaped = False
-    while index < len(text):
-        character = text[index]
-        if escaped:
-            escaped = False
-        elif character == "\\":
-            escaped = True
-        elif character == "`":
-            return index + 1
-        elif text.startswith("${", index):
-            index = _javascript_template_interpolation_end(text, index + 2)
-            continue
-        index += 1
-    return len(text)
-
-
-def _javascript_template_interpolation_end(text: str, start: int) -> int:
-    depth = 1
-    index = start
-    while index < len(text):
-        if text.startswith("//", index):
-            newline = text.find("\n", index + 2)
-            index = len(text) if newline < 0 else newline + 1
-            continue
-        if text.startswith("/*", index):
-            closing = text.find("*/", index + 2)
-            index = len(text) if closing < 0 else closing + 2
-            continue
-        character = text[index]
-        if character in {"'", '"', "`"}:
-            index = _javascript_string_end(text, index)
-            continue
-        if character == "/" and _javascript_regex_start(text, index):
-            regex_end = _javascript_regex_end(text, index)
-            if regex_end is not None:
-                index = regex_end
-                continue
-        if character == "{":
-            depth += 1
-        elif character == "}":
-            depth -= 1
-            if depth == 0:
-                return index + 1
-        index += 1
-    return len(text)
-
-
-def _javascript_regex_start(text: str, start: int) -> bool:
-    index = start - 1
-    while index >= 0 and text[index].isspace():
-        index -= 1
-    if index < 0 or text[index] in "=([{,:;!?&|":
-        return True
-    end = index + 1
-    while index >= 0 and (text[index].isalnum() or text[index] in "_$"):
-        index -= 1
-    return text[index + 1 : end] in {"case", "return", "throw", "yield"}
-
-
-def _javascript_regex_end(text: str, start: int) -> int | None:
-    index = start + 1
-    escaped = False
-    in_character_class = False
-    while index < len(text):
-        character = text[index]
-        if character in "\r\n":
-            return None
-        if escaped:
-            escaped = False
-        elif character == "\\":
-            escaped = True
-        elif character == "[":
-            in_character_class = True
-        elif character == "]":
-            in_character_class = False
-        elif character == "/" and not in_character_class:
-            index += 1
-            while index < len(text) and text[index].isalpha():
-                index += 1
-            return index
-        index += 1
-    return None
-
-
-def _javascript_property_colon(
-    text: str, code_positions: bytearray, start: int
-) -> bool:
-    index = start - 1
-    while index >= 0:
-        if code_positions[index] and not text[index].isspace():
-            return text[index] in "{,"
-        index -= 1
-    return True
-
-
-def _javascript_expression_end(text: str, start: int) -> int:
-    closing_delimiters: list[str] = []
-    index = start
-    while index < len(text):
-        if text.startswith("//", index):
-            newline = text.find("\n", index + 2)
-            if newline < 0:
-                return len(text)
-            index = newline
-            continue
-        if text.startswith("/*", index):
-            closing = text.find("*/", index + 2)
-            if closing < 0:
-                return len(text)
-            index = closing + 2
-            continue
-        character = text[index]
-        if character in {"'", '"', "`"}:
-            index = _javascript_string_end(text, index)
-            continue
-        if character == "/" and _javascript_regex_start(text, index):
-            regex_end = _javascript_regex_end(text, index)
-            if regex_end is not None:
-                index = regex_end
-                continue
-        if character in "([{":
-            closing_delimiters.append({"(": ")", "[": "]", "{": "}"}[character])
-        elif character in ")]}":
-            if not closing_delimiters:
-                return index
-            if character == closing_delimiters[-1]:
-                closing_delimiters.pop()
-        elif not closing_delimiters and character in {",", ";"}:
-            return index
-        elif character == "\n" and not closing_delimiters:
-            next_index = _javascript_next_code_index(text, index + 1)
-            current = _javascript_strip_comments(text[start:index]).rstrip()
-            upcoming = text[next_index:] if next_index < len(text) else ""
-            if not _javascript_expression_continues(current, upcoming):
-                return index
-        index += 1
-    return len(text)
-
-
-def _javascript_next_code_index(text: str, start: int) -> int:
-    index = start
-    while index < len(text):
-        if text[index].isspace():
-            index += 1
-            continue
-        if text.startswith("//", index):
-            newline = text.find("\n", index + 2)
-            index = len(text) if newline < 0 else newline + 1
-            continue
-        if text.startswith("/*", index):
-            closing = text.find("*/", index + 2)
-            index = len(text) if closing < 0 else closing + 2
-            continue
-        return index
-    return len(text)
-
-
-def _javascript_expression_continues(current: str, upcoming: str) -> bool:
-    if not current:
-        return True
-    if re.search(r"(?:\?\?|\|\||&&|=>|[?:=+\-*/%.!])\s*$", current):
-        return True
-    return bool(
-        re.match(
-            r"(?:\?\?|\|\||&&|\?|:|\.|\+|-|\*|/|%|\bas\b|\bsatisfies\b)",
-            upcoming,
+def _javascript_ast_batch(
+    files: list[tuple[str, str]],
+) -> dict[str, JavaScriptAstFile]:
+    failed = {
+        path: JavaScriptAstFile({}, (), 1)
+        for path, _text in files
+    }
+    if not files:
+        return failed
+    payload = json.dumps(
+        {"files": [{"path": path, "text": text} for path, text in files]}
+    ).encode("utf-8")
+    try:
+        completed = subprocess.run(
+            ["node", str(JAVASCRIPT_AST_HELPER)],
+            check=False,
+            input=payload,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
         )
-    )
+    except (OSError, subprocess.TimeoutExpired):
+        return failed
+    if completed.returncode != 0:
+        return failed
+    try:
+        output = json.loads(completed.stdout.decode("utf-8"))
+    except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
+        return failed
+    records = output.get("files") if isinstance(output, dict) else None
+    if not isinstance(records, list):
+        return failed
 
-
-def _javascript_strip_comments(text: str) -> str:
-    result: list[str] = []
-    index = 0
-    while index < len(text):
-        if text.startswith("//", index):
-            newline = text.find("\n", index + 2)
-            if newline < 0:
-                break
-            result.append("\n")
-            index = newline + 1
+    results: dict[str, JavaScriptAstFile] = {}
+    requested_texts = dict(files)
+    requested_paths = set(requested_texts)
+    for record in records:
+        parsed = _javascript_ast_record(record, requested_texts)
+        if parsed is None:
             continue
-        if text.startswith("/*", index):
-            closing = text.find("*/", index + 2)
-            if closing < 0:
-                result.append("/*")
-                break
-            result.append(" ")
-            index = closing + 2
-            continue
-        if text[index] in {"'", '"', "`"}:
-            end = _javascript_string_end(text, index)
-            result.append(text[index:end])
-            index = end
-            continue
-        if text[index] == "/" and _javascript_regex_start(text, index):
-            regex_end = _javascript_regex_end(text, index)
-            if regex_end is not None:
-                result.append(text[index:regex_end])
-                index = regex_end
-                continue
-        result.append(text[index])
-        index += 1
-    return "".join(result)
+        path, ast_file = parsed
+        if path in results:
+            return failed
+        results[path] = ast_file
+    if results.keys() != requested_paths:
+        return failed
+    return results
 
 
-def _javascript_type_expression(value: str) -> bool:
-    atom = r"(?:boolean|never|null|number|string|undefined|unknown)(?:\[\])?"
-    return bool(re.fullmatch(rf"{atom}(?:\s*\|\s*{atom})*", value.strip()))
+def _javascript_ast_record(
+    record: object, requested_texts: dict[str, str]
+) -> tuple[str, JavaScriptAstFile] | None:
+    if not isinstance(record, dict):
+        return None
+    path = record.get("path")
+    if not isinstance(path, str) or path not in requested_texts:
+        return None
+    if record.get("ok") is not True:
+        error_line = record.get("errorLine")
+        return path, JavaScriptAstFile(
+            {}, (), error_line if isinstance(error_line, int) and error_line > 0 else 1
+        )
+    raw_assignments = record.get("assignments")
+    raw_literals = record.get("pureStringLiterals")
+    if not isinstance(raw_assignments, list) or not isinstance(raw_literals, list):
+        return None
+    source_text = requested_texts[path]
+    offset_map = _utf16_offset_map(source_text)
+    assignments: dict[int, list[tuple[str, str, str, bool]]] = {}
+    for assignment in raw_assignments:
+        if not isinstance(assignment, dict):
+            return None
+        line = assignment.get("line")
+        key = assignment.get("key")
+        operator = assignment.get("operator")
+        start = assignment.get("start")
+        end = assignment.get("end")
+        safe_initializer = assignment.get("safeInitializer")
+        if (
+            not isinstance(line, int)
+            or line < 1
+            or not isinstance(key, str)
+            or not isinstance(operator, str)
+            or not isinstance(start, int)
+            or not isinstance(end, int)
+            or start < 0
+            or end <= start
+            or start not in offset_map
+            or end not in offset_map
+            or not isinstance(safe_initializer, bool)
+        ):
+            return None
+        if _credential_key(key):
+            value = source_text[offset_map[start] : offset_map[end]]
+            assignments.setdefault(line, []).append(
+                (key, operator, value, safe_initializer)
+            )
+    literals: list[tuple[int, int]] = []
+    for literal in raw_literals:
+        if not isinstance(literal, dict):
+            return None
+        start = literal.get("start")
+        end = literal.get("end")
+        if (
+            not isinstance(start, int)
+            or not isinstance(end, int)
+            or start < 0
+            or end <= start
+            or start not in offset_map
+            or end not in offset_map
+        ):
+            return None
+        literals.append((offset_map[start], offset_map[end]))
+    return path, JavaScriptAstFile(assignments, tuple(literals))
+
+
+def _utf16_offset_map(text: str) -> dict[int, int]:
+    offsets = {0: 0}
+    utf16_offset = 0
+    for index, character in enumerate(text, start=1):
+        utf16_offset += 2 if ord(character) > 0xFFFF else 1
+        offsets[utf16_offset] = index
+    return offsets
+
+
+def _line_offsets(text: str) -> list[int]:
+    offsets = [0]
+    offsets.extend(match.end() for match in re.finditer("\n", text))
+    return offsets
+
+
+def _python_pure_string_literals(text: str) -> tuple[tuple[int, int], ...]:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return ()
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    offsets = _line_offsets(text)
+    literals = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and _python_string_expression_is_pure(node, parents)
+            and hasattr(node, "end_lineno")
+            and hasattr(node, "end_col_offset")
+        ):
+            start = offsets[node.lineno - 1] + node.col_offset
+            end = offsets[node.end_lineno - 1] + node.end_col_offset
+            literals.append((start, end))
+    return tuple(literals)
+
+
+def _python_string_expression_is_pure(
+    node: ast.Constant, parents: dict[ast.AST, ast.AST]
+) -> bool:
+    parent = parents.get(node)
+    if parent is None or isinstance(parent, ast.Expr):
+        return True
+    if isinstance(parent, (ast.Assign, ast.AnnAssign, ast.NamedExpr, ast.Return)):
+        return getattr(parent, "value", None) is node
+    if isinstance(parent, ast.keyword):
+        return parent.value is node
+    if isinstance(parent, ast.Call):
+        return node in parent.args
+    if isinstance(parent, ast.Compare):
+        return parent.left is node or node in parent.comparators
+    if isinstance(parent, (ast.List, ast.Set, ast.Tuple)):
+        return node in parent.elts
+    if isinstance(parent, ast.Dict):
+        return node in parent.values
+    return False
 
 
 def _python_credential_assignments(
@@ -1217,30 +1150,29 @@ def _test_fixture_credential(path: str, value: str) -> bool:
     return signature in allowed_hashes
 
 
-def _test_fixture_bearer(path: str, line: str, value: str) -> bool:
+def _test_fixture_bearer(
+    path: str,
+    text: str,
+    occurrence_start: int,
+    occurrence_end: int,
+    value: str,
+    pure_string_literals: tuple[tuple[int, int], ...],
+) -> bool:
     allowed_hashes = TEST_FIXTURE_CREDENTIAL_HASHES_BY_PATH.get(path)
     if not allowed_hashes:
         return False
     signature = hashlib.sha256(value.strip().encode("utf-8")).hexdigest()
     if signature not in allowed_hashes:
         return False
-    literal = re.compile(
-        rf"(?P<quote>['\"])Bearer\s+{re.escape(value)}(?P=quote)",
-        re.IGNORECASE,
-    )
-    match = literal.search(line)
-    if match is None:
-        return False
-    before = line[: match.start()].rstrip()
-    after = line[match.end() :].lstrip()
-    literal_start = (
-        not before
-        or before[-1] in "=:[{(,"
-        or re.search(r"(?:===|!==|==|!=)$", before) is not None
-    )
-    return literal_start and (
-        not after or after[0] in ":;,)]}"
-    )
+    for start, end in pure_string_literals:
+        if start <= occurrence_start and occurrence_end <= end:
+            literal = text[start:end]
+            return re.fullmatch(
+                rf"(?:[rubRUB]{{0,3}})?(?P<quote>['\"])Bearer\s+{re.escape(value)}(?P=quote)",
+                literal,
+                re.IGNORECASE,
+            ) is not None
+    return False
 
 
 def _dynamic_bearer_reference(value: str) -> bool:
@@ -1308,6 +1240,7 @@ def evaluate_public_release(root: Path) -> dict:
             )
         )
 
+    source_entries: list[tuple[Path, str]] = []
     for relative_path in tracked_files(root):
         runtime_finding = _runtime_artifact_finding(relative_path)
         if runtime_finding is not None:
@@ -1315,7 +1248,23 @@ def evaluate_public_release(root: Path) -> dict:
             continue
         text = _repository_entry_text(root, relative_path)
         if text is not None:
-            findings.extend(scan_public_text(relative_path, text))
+            source_entries.append((relative_path, text))
+
+    javascript_files = [
+        (_display_path(relative_path), text)
+        for relative_path, text in source_entries
+        if relative_path.suffix.casefold() in JAVASCRIPT_SUFFIXES
+    ]
+    javascript_ast = _javascript_ast_batch(javascript_files)
+    for relative_path, text in source_entries:
+        path = _display_path(relative_path)
+        findings.extend(
+            scan_public_text(
+                relative_path,
+                text,
+                javascript_ast=javascript_ast.get(path),
+            )
+        )
 
     findings.sort(key=_finding_key)
     checks = {
