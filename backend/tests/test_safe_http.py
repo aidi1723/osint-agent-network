@@ -9,12 +9,15 @@ from app.core import safe_http as safe_http_module
 from app.core.normalization import NormalizationError, normalize_target
 from app.core.safe_http import (
     BlockedNetworkTarget,
+    FakeIpAllowance,
+    InvalidFakeIpConfiguration,
     InvalidHttpTarget,
     RedirectLimitExceeded,
     ResponseTooLarge,
     SafeHttpError,
     ValidatedTarget,
     connect_pinned,
+    fake_ip_allowance_from_env,
     safe_fetch,
     validate_public_url,
 )
@@ -31,6 +34,15 @@ def resolver_for(*addresses):
         ]
 
     return resolve
+
+
+def fake_ip_allowance(*hosts):
+    return fake_ip_allowance_from_env(
+        {
+            "OSINT_SAFE_HTTP_FAKE_IP_CIDRS": "198.18.0.0/15",
+            "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": ",".join(hosts),
+        }
+    )
 
 
 class FakeResponse:
@@ -56,6 +68,102 @@ class FakeConnection:
 
 
 class SafeHttpValidationTests(unittest.TestCase):
+    def test_empty_fake_ip_configuration_preserves_strict_default(self):
+        allowance = fake_ip_allowance_from_env({})
+
+        self.assertEqual(allowance, FakeIpAllowance())
+        with self.assertRaises(BlockedNetworkTarget):
+            validate_public_url(
+                "https://example.com/",
+                resolver=resolver_for("198.18.100.99"),
+                fake_ip_allowance=allowance,
+            )
+
+    def test_parses_exact_hosts_and_contained_fake_ip_subnets(self):
+        allowance = fake_ip_allowance_from_env(
+            {
+                "OSINT_SAFE_HTTP_FAKE_IP_CIDRS": "198.18.0.0/16, 198.19.0.0/16",
+                "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": "Example.COM., www.example.com",
+            }
+        )
+
+        self.assertEqual(
+            tuple(str(network) for network in allowance.networks),
+            ("198.18.0.0/16", "198.19.0.0/16"),
+        )
+        self.assertEqual(
+            allowance.hosts,
+            frozenset({"example.com", "www.example.com"}),
+        )
+
+    def test_invalid_fake_ip_configuration_fails_closed(self):
+        invalid = (
+            {
+                "OSINT_SAFE_HTTP_FAKE_IP_CIDRS": "198.18.0.0/14",
+                "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": "example.com",
+            },
+            {
+                "OSINT_SAFE_HTTP_FAKE_IP_CIDRS": "127.0.0.0/8",
+                "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": "example.com",
+            },
+            {
+                "OSINT_SAFE_HTTP_FAKE_IP_CIDRS": "2001:db8::/32",
+                "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": "example.com",
+            },
+            {
+                "OSINT_SAFE_HTTP_FAKE_IP_CIDRS": "198.18.0.0/15",
+                "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": "*.example.com",
+            },
+            {
+                "OSINT_SAFE_HTTP_FAKE_IP_CIDRS": "198.18.0.0/15",
+                "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": "https://example.com",
+            },
+            {
+                "OSINT_SAFE_HTTP_FAKE_IP_CIDRS": "198.18.0.0/15",
+                "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": "198.18.100.99",
+            },
+            {
+                "OSINT_SAFE_HTTP_FAKE_IP_CIDRS": "198.18.0.0/15",
+                "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": "",
+            },
+        )
+        for environ in invalid:
+            with self.subTest(environ=environ):
+                with self.assertRaises(InvalidFakeIpConfiguration):
+                    fake_ip_allowance_from_env(environ)
+
+    def test_accepts_fake_ip_only_for_exact_allowed_dns_hostname(self):
+        target = validate_public_url(
+            "https://example.com/",
+            resolver=resolver_for("198.18.100.99"),
+            fake_ip_allowance=fake_ip_allowance("example.com"),
+        )
+
+        self.assertEqual(target.validated_ips, ("198.18.100.99",))
+
+    def test_rejects_fake_ip_when_hostname_is_not_allowlisted(self):
+        with self.assertRaises(BlockedNetworkTarget):
+            validate_public_url(
+                "https://other.example.com/",
+                resolver=resolver_for("198.18.100.99"),
+                fake_ip_allowance=fake_ip_allowance("example.com"),
+            )
+
+    def test_rejects_direct_fake_ip_literal_even_when_network_is_configured(self):
+        with self.assertRaises(BlockedNetworkTarget):
+            validate_public_url(
+                "https://198.18.100.99/",
+                fake_ip_allowance=fake_ip_allowance("example.com"),
+            )
+
+    def test_rejects_mixed_allowed_fake_and_private_answers(self):
+        with self.assertRaises(BlockedNetworkTarget):
+            validate_public_url(
+                "https://example.com/",
+                resolver=resolver_for("198.18.100.99", "::1"),
+                fake_ip_allowance=fake_ip_allowance("example.com"),
+            )
+
     def test_accepts_public_target_and_preserves_request_identity(self):
         calls = []
 
@@ -293,6 +401,54 @@ class SafeHttpValidationTests(unittest.TestCase):
 
 
 class SafeFetchTests(unittest.TestCase):
+    def test_fake_ip_redirect_requires_each_exact_hostname(self):
+        connector_calls = []
+
+        def connector(target, timeout_seconds, headers):
+            connector_calls.append(target.original_hostname)
+            return FakeResponse(302, headers={"Location": "https://www.example.com/final"}), FakeConnection()
+
+        with self.assertRaises(BlockedNetworkTarget):
+            safe_fetch(
+                "https://example.com/start",
+                timeout_seconds=1,
+                max_bytes=10,
+                resolver=resolver_for("198.18.100.99"),
+                connector=connector,
+                fake_ip_allowance=fake_ip_allowance("example.com"),
+            )
+
+        self.assertEqual(connector_calls, ["example.com"])
+
+    def test_fake_ip_redirect_succeeds_when_both_hosts_are_exactly_allowed(self):
+        connector_calls = []
+        responses = [
+            (FakeResponse(302, headers={"Location": "https://www.example.com/final"}), FakeConnection()),
+            (FakeResponse(200, body=b"done"), FakeConnection()),
+        ]
+
+        def connector(target, timeout_seconds, headers):
+            connector_calls.append((target.original_hostname, target.validated_ips))
+            return responses.pop(0)
+
+        result = safe_fetch(
+            "https://example.com/start",
+            timeout_seconds=1,
+            max_bytes=10,
+            resolver=resolver_for("198.18.100.99"),
+            connector=connector,
+            fake_ip_allowance=fake_ip_allowance("example.com", "www.example.com"),
+        )
+
+        self.assertEqual(result.body, b"done")
+        self.assertEqual(
+            connector_calls,
+            [
+                ("example.com", ("198.18.100.99",)),
+                ("www.example.com", ("198.18.100.99",)),
+            ],
+        )
+
     def test_address_attempts_share_decreasing_timeout_budget(self):
         target = ValidatedTarget(
             "http",

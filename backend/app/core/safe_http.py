@@ -4,6 +4,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 import http.client
 import ipaddress
+import os
 import queue
 import re
 import socket
@@ -34,6 +35,16 @@ class ResponseTooLarge(SafeHttpError):
     pass
 
 
+class InvalidFakeIpConfiguration(SafeHttpError):
+    pass
+
+
+@dataclass(frozen=True)
+class FakeIpAllowance:
+    networks: tuple[ipaddress.IPv4Network, ...] = ()
+    hosts: frozenset[str] = frozenset()
+
+
 @dataclass(frozen=True)
 class ValidatedTarget:
     scheme: str
@@ -61,8 +72,46 @@ _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 MAX_RESOLVED_ADDRESSES = 8  # Bound raw DNS fan-out before deduplication.
 MAX_VALIDATED_ADDRESSES = 8  # Bound sequential connection failover.
+_FAKE_IP_SUPERNET = ipaddress.ip_network("198.18.0.0/15")
 _RESOLVER_WORKERS = 4
 _RESOLVER_QUEUE: queue.Queue = queue.Queue(maxsize=32)
+
+
+def fake_ip_allowance_from_env(environ: Mapping[str, str] | None = None) -> FakeIpAllowance:
+    environ = os.environ if environ is None else environ
+    raw_cidrs = str(environ.get("OSINT_SAFE_HTTP_FAKE_IP_CIDRS", "")).strip()
+    raw_hosts = str(environ.get("OSINT_SAFE_HTTP_FAKE_IP_HOSTS", "")).strip()
+    if not raw_cidrs and not raw_hosts:
+        return FakeIpAllowance()
+    if not raw_cidrs or not raw_hosts:
+        raise InvalidFakeIpConfiguration("invalid fake-IP allowance configuration")
+
+    networks: list[ipaddress.IPv4Network] = []
+    hosts: set[str] = set()
+    try:
+        for raw_network in _config_items(raw_cidrs):
+            network = ipaddress.ip_network(raw_network, strict=True)
+            if not isinstance(network, ipaddress.IPv4Network) or not network.subnet_of(_FAKE_IP_SUPERNET):
+                raise ValueError
+            if network not in networks:
+                networks.append(network)
+        for raw_host in _config_items(raw_hosts):
+            host = raw_host.encode("idna").decode("ascii").lower().rstrip(".")
+            if not host or not _valid_hostname(host) or _literal_address(host) is not None:
+                raise ValueError
+            hosts.add(host)
+    except (TypeError, UnicodeError, ValueError):
+        raise InvalidFakeIpConfiguration("invalid fake-IP allowance configuration") from None
+    if not networks or not hosts:
+        raise InvalidFakeIpConfiguration("invalid fake-IP allowance configuration")
+    return FakeIpAllowance(tuple(networks), frozenset(hosts))
+
+
+def _config_items(value: str) -> tuple[str, ...]:
+    items = tuple(item.strip() for item in value.split(","))
+    if not items or any(not item for item in items):
+        raise ValueError
+    return items
 
 
 def _resolver_worker() -> None:
@@ -89,6 +138,7 @@ def validate_public_url(
     resolver: Resolver = socket.getaddrinfo,
     *,
     deadline: float | None = None,
+    fake_ip_allowance: FakeIpAllowance | None = None,
 ) -> ValidatedTarget:
     if not isinstance(url, str) or not url or any(ord(char) <= 32 or ord(char) == 127 for char in url):
         raise InvalidHttpTarget("invalid HTTP target")
@@ -137,7 +187,15 @@ def validate_public_url(
             raise InvalidHttpTarget("target resolution failed") from None
     if not addresses:
         raise InvalidHttpTarget("target resolution failed")
-    if any(not _is_global_address(address) for address in addresses):
+    if any(
+        not _is_allowed_address(
+            address,
+            hostname=ascii_hostname,
+            is_literal=literal_address is not None,
+            fake_ip_allowance=fake_ip_allowance,
+        )
+        for address in addresses
+    ):
         raise BlockedNetworkTarget("network target is blocked")
     if len(addresses) > MAX_VALIDATED_ADDRESSES:
         raise InvalidHttpTarget("too many resolved addresses")
@@ -157,6 +215,7 @@ def safe_fetch(
     resolver: Resolver = socket.getaddrinfo,
     connector: Connector | None = None,
     headers: Mapping[str, str] | None = None,
+    fake_ip_allowance: FakeIpAllowance | None = None,
 ) -> SafeHttpResponse:
     if max_bytes < 0 or max_redirects < 0 or timeout_seconds <= 0:
         raise ValueError("safe_fetch limits must be positive")
@@ -168,7 +227,12 @@ def safe_fetch(
 
     while True:
         _remaining(deadline)
-        target = validate_public_url(current_url, resolver=resolver, deadline=deadline)
+        target = validate_public_url(
+            current_url,
+            resolver=resolver,
+            deadline=deadline,
+            fake_ip_allowance=fake_ip_allowance,
+        )
         request_headers = dict(base_headers)
         request_headers["Host"] = _host_header(target)
         response = None
@@ -328,6 +392,22 @@ def _is_global_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -
             address.is_reserved,
             address.is_unspecified,
         )
+    )
+
+
+def _is_allowed_address(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    *,
+    hostname: str,
+    is_literal: bool,
+    fake_ip_allowance: FakeIpAllowance | None,
+) -> bool:
+    if _is_global_address(address):
+        return True
+    if is_literal or not isinstance(address, ipaddress.IPv4Address) or fake_ip_allowance is None:
+        return False
+    return hostname in fake_ip_allowance.hosts and any(
+        address in network for network in fake_ip_allowance.networks
     )
 
 
