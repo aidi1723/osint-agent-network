@@ -54,6 +54,36 @@ class CrossVerificationTests(unittest.TestCase):
         self.assertEqual(email["status"], "CONFLICTED")
         self.assertIn("directory", email["contradicting_sources"])
 
+    def test_same_official_source_can_publish_multiple_phone_numbers(self):
+        detail = {
+            "entities": [
+                {
+                    "id": "phone-primary",
+                    "type": "phone",
+                    "value": "+12125550101",
+                    "source_tool": "official_site_extractor",
+                    "confidence": 0.82,
+                },
+                {
+                    "id": "phone-secondary",
+                    "type": "phone",
+                    "value": "+12125550102",
+                    "source_tool": "official_site_extractor",
+                    "confidence": 0.78,
+                },
+            ],
+            "evidence": [],
+            "evidence_ledger": [],
+            "facts": [],
+            "relationships": [],
+        }
+
+        rows = build_cross_verification_matrix(detail)
+        phone = next(row for row in rows if row["field_key"] == "contact_phone")
+
+        self.assertNotEqual(phone["status"], "CONFLICTED")
+        self.assertEqual(phone["contradicting_sources"], [])
+
     def test_equivalent_official_website_url_and_domain_do_not_conflict(self):
         detail = {
             "entities": [

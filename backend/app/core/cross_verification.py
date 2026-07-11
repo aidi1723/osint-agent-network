@@ -42,6 +42,7 @@ SOURCE_FAMILY_WEIGHT = {
 
 # Minimum value length for ledger substring matching to avoid false positives
 _MIN_LEDGER_MATCH_LENGTH = 4
+MULTI_VALUE_FIELD_KEYS = {"contact_email", "contact_phone"}
 
 
 def classify_source_family(source_type: str | None, source_tool: str | None) -> str:
@@ -256,18 +257,26 @@ def _normalize_official_website(value: str) -> str:
 
 def _contradiction_sources(values: list[str], candidate_value: str, candidates: list[dict], field_key: str = "") -> set[str]:
     norm_candidate = _normalize_for_comparison(candidate_value, field_key)
-    distinct = {
-        value for value in values
-        if value and value != candidate_value
-        and _normalize_for_comparison(value, field_key) != norm_candidate
-    }
-    if not candidate_value or not distinct:
+    distinct_candidates = [
+        item
+        for item in candidates
+        if str(item.get("value") or "")
+        and _normalize_for_comparison(str(item.get("value") or ""), field_key) != norm_candidate
+    ]
+    if not candidate_value or not distinct_candidates:
         return set()
-    return {
+    contradiction_families = {
+        classify_source_family("", item.get("source_tool"))
+        for item in distinct_candidates
+    }
+    if field_key not in MULTI_VALUE_FIELD_KEYS:
+        return contradiction_families
+    candidate_families = {
         classify_source_family("", item.get("source_tool"))
         for item in candidates
-        if str(item.get("value") or "") in distinct
+        if _normalize_for_comparison(str(item.get("value") or ""), field_key) == norm_candidate
     }
+    return contradiction_families - candidate_families
 
 
 def _contradiction_details(candidate_value: str, candidates: list[dict], field_key: str) -> list[str]:
