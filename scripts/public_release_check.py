@@ -322,6 +322,11 @@ def scan_public_text(relative_path: Path | str, text: str) -> list[ReleaseFindin
     suffix = Path(path).suffix.casefold()
     javascript_suffixes = {".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"}
     python_assignments = _python_credential_assignments(text) if suffix == ".py" else None
+    javascript_assignments = (
+        _javascript_credential_assignments(text)
+        if suffix in javascript_suffixes
+        else None
+    )
     findings: list[ReleaseFinding] = []
     allowlist_occurrences: dict[tuple[str, str, str], int] = {}
     evaluated_locations: set[tuple[str, int, str]] = set()
@@ -359,8 +364,8 @@ def scan_public_text(relative_path: Path | str, text: str) -> list[ReleaseFindin
                 )
         if python_assignments is not None:
             assignments = python_assignments.get(line_number, [])
-        elif suffix in javascript_suffixes:
-            assignments = _javascript_credential_assignments(line)
+        elif javascript_assignments is not None:
+            assignments = javascript_assignments.get(line_number, [])
         else:
             assignments = _credential_assignments(line)
         for key, separator, value in assignments:
@@ -481,77 +486,279 @@ def _credential_assignments(line: str) -> list[tuple[str, str, str]]:
     return assignments
 
 
-def _javascript_credential_assignments(line: str) -> list[tuple[str, str, str]]:
-    assignments = []
-    for match in JAVASCRIPT_ASSIGNMENT_START_RE.finditer(line):
+def _javascript_credential_assignments(
+    text: str,
+) -> dict[int, list[tuple[str, str, str]]]:
+    code_positions = _javascript_code_positions(text)
+    assignments: dict[int, list[tuple[str, str, str]]] = {}
+    for match in JAVASCRIPT_ASSIGNMENT_START_RE.finditer(text):
+        if not code_positions[match.start()]:
+            continue
         key = match.group("key")
         separator = match.group("separator")
         if not _credential_key(key):
             continue
-        if separator == ":":
-            prefix = line[: match.start()].rstrip()
-            if prefix and not prefix.endswith(("{", ",")):
-                continue
-        value = _javascript_rhs(line, match.end())
+        if separator == ":" and not _javascript_property_colon(
+            text, code_positions, match.start()
+        ):
+            continue
+        end = _javascript_expression_end(text, match.end())
+        value = _javascript_strip_comments(text[match.end() : end]).strip()
         if separator == ":" and _javascript_type_expression(value):
             continue
-        assignments.append((key, separator, value))
+        line = text.count("\n", 0, match.start("key")) + 1
+        assignments.setdefault(line, []).append((key, separator, value))
     return assignments
 
 
-def _javascript_rhs(line: str, start: int) -> str:
-    base_depth = _javascript_nesting_depth(line[:start])
-    depth = base_depth
-    quote = ""
+def _javascript_code_positions(text: str) -> bytearray:
+    positions = bytearray(len(text))
+    index = 0
+    while index < len(text):
+        if text.startswith("//", index):
+            newline = text.find("\n", index + 2)
+            index = len(text) if newline < 0 else newline
+            continue
+        if text.startswith("/*", index):
+            closing = text.find("*/", index + 2)
+            index = len(text) if closing < 0 else closing + 2
+            continue
+        positions[index] = 1
+        if text[index] in {"'", '"', "`"}:
+            index = _javascript_string_end(text, index)
+            continue
+        if text[index] == "/" and _javascript_regex_start(text, index):
+            regex_end = _javascript_regex_end(text, index)
+            if regex_end is not None:
+                index = regex_end
+                continue
+        index += 1
+    return positions
+
+
+def _javascript_string_end(text: str, start: int) -> int:
+    quote = text[start]
+    if quote == "`":
+        return _javascript_template_end(text, start)
+    index = start + 1
     escaped = False
+    while index < len(text):
+        character = text[index]
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == quote:
+            return index + 1
+        index += 1
+    return len(text)
+
+
+def _javascript_template_end(text: str, start: int) -> int:
+    index = start + 1
+    escaped = False
+    while index < len(text):
+        character = text[index]
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == "`":
+            return index + 1
+        elif text.startswith("${", index):
+            index = _javascript_template_interpolation_end(text, index + 2)
+            continue
+        index += 1
+    return len(text)
+
+
+def _javascript_template_interpolation_end(text: str, start: int) -> int:
+    depth = 1
     index = start
-    while index < len(line):
-        character = line[index]
-        if quote:
-            if escaped:
-                escaped = False
-            elif character == "\\":
-                escaped = True
-            elif character == quote:
-                quote = ""
+    while index < len(text):
+        if text.startswith("//", index):
+            newline = text.find("\n", index + 2)
+            index = len(text) if newline < 0 else newline + 1
+            continue
+        if text.startswith("/*", index):
+            closing = text.find("*/", index + 2)
+            index = len(text) if closing < 0 else closing + 2
+            continue
+        character = text[index]
+        if character in {"'", '"', "`"}:
+            index = _javascript_string_end(text, index)
+            continue
+        if character == "/" and _javascript_regex_start(text, index):
+            regex_end = _javascript_regex_end(text, index)
+            if regex_end is not None:
+                index = regex_end
+                continue
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
+    return len(text)
+
+
+def _javascript_regex_start(text: str, start: int) -> bool:
+    index = start - 1
+    while index >= 0 and text[index].isspace():
+        index -= 1
+    if index < 0 or text[index] in "=([{,:;!?&|":
+        return True
+    end = index + 1
+    while index >= 0 and (text[index].isalnum() or text[index] in "_$"):
+        index -= 1
+    return text[index + 1 : end] in {"case", "return", "throw", "yield"}
+
+
+def _javascript_regex_end(text: str, start: int) -> int | None:
+    index = start + 1
+    escaped = False
+    in_character_class = False
+    while index < len(text):
+        character = text[index]
+        if character in "\r\n":
+            return None
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == "[":
+            in_character_class = True
+        elif character == "]":
+            in_character_class = False
+        elif character == "/" and not in_character_class:
+            index += 1
+            while index < len(text) and text[index].isalpha():
+                index += 1
+            return index
+        index += 1
+    return None
+
+
+def _javascript_property_colon(
+    text: str, code_positions: bytearray, start: int
+) -> bool:
+    index = start - 1
+    while index >= 0:
+        if code_positions[index] and not text[index].isspace():
+            return text[index] in "{,"
+        index -= 1
+    return True
+
+
+def _javascript_expression_end(text: str, start: int) -> int:
+    closing_delimiters: list[str] = []
+    index = start
+    while index < len(text):
+        if text.startswith("//", index):
+            newline = text.find("\n", index + 2)
+            if newline < 0:
+                return len(text)
+            index = newline
+            continue
+        if text.startswith("/*", index):
+            closing = text.find("*/", index + 2)
+            if closing < 0:
+                return len(text)
+            index = closing + 2
+            continue
+        character = text[index]
+        if character in {"'", '"', "`"}:
+            index = _javascript_string_end(text, index)
+            continue
+        if character == "/" and _javascript_regex_start(text, index):
+            regex_end = _javascript_regex_end(text, index)
+            if regex_end is not None:
+                index = regex_end
+                continue
+        if character in "([{":
+            closing_delimiters.append({"(": ")", "[": "]", "{": "}"}[character])
+        elif character in ")]}":
+            if not closing_delimiters:
+                return index
+            if character == closing_delimiters[-1]:
+                closing_delimiters.pop()
+        elif not closing_delimiters and character in {",", ";"}:
+            return index
+        elif character == "\n" and not closing_delimiters:
+            next_index = _javascript_next_code_index(text, index + 1)
+            current = _javascript_strip_comments(text[start:index]).rstrip()
+            upcoming = text[next_index:] if next_index < len(text) else ""
+            if not _javascript_expression_continues(current, upcoming):
+                return index
+        index += 1
+    return len(text)
+
+
+def _javascript_next_code_index(text: str, start: int) -> int:
+    index = start
+    while index < len(text):
+        if text[index].isspace():
             index += 1
             continue
-        if character in {"'", '"', "`"}:
-            quote = character
-        elif character in "([{":
-            depth += 1
-        elif character in ")]}":
-            if depth <= base_depth:
-                break
-            depth -= 1
-            if depth < base_depth:
-                break
-        elif depth == base_depth and character in {",", ";"}:
-            break
-        index += 1
-    return line[start:index].strip()
-
-
-def _javascript_nesting_depth(text: str) -> int:
-    depth = 0
-    quote = ""
-    escaped = False
-    for character in text:
-        if quote:
-            if escaped:
-                escaped = False
-            elif character == "\\":
-                escaped = True
-            elif character == quote:
-                quote = ""
+        if text.startswith("//", index):
+            newline = text.find("\n", index + 2)
+            index = len(text) if newline < 0 else newline + 1
             continue
-        if character in {"'", '"', "`"}:
-            quote = character
-        elif character in "([{":
-            depth += 1
-        elif character in ")]}" and depth:
-            depth -= 1
-    return depth
+        if text.startswith("/*", index):
+            closing = text.find("*/", index + 2)
+            index = len(text) if closing < 0 else closing + 2
+            continue
+        return index
+    return len(text)
+
+
+def _javascript_expression_continues(current: str, upcoming: str) -> bool:
+    if not current:
+        return True
+    if re.search(r"(?:\?\?|\|\||&&|=>|[?:=+\-*/%.!])\s*$", current):
+        return True
+    return bool(
+        re.match(
+            r"(?:\?\?|\|\||&&|\?|:|\.|\+|-|\*|/|%|\bas\b|\bsatisfies\b)",
+            upcoming,
+        )
+    )
+
+
+def _javascript_strip_comments(text: str) -> str:
+    result: list[str] = []
+    index = 0
+    while index < len(text):
+        if text.startswith("//", index):
+            newline = text.find("\n", index + 2)
+            if newline < 0:
+                break
+            result.append("\n")
+            index = newline + 1
+            continue
+        if text.startswith("/*", index):
+            closing = text.find("*/", index + 2)
+            if closing < 0:
+                result.append("/*")
+                break
+            result.append(" ")
+            index = closing + 2
+            continue
+        if text[index] in {"'", '"', "`"}:
+            end = _javascript_string_end(text, index)
+            result.append(text[index:end])
+            index = end
+            continue
+        if text[index] == "/" and _javascript_regex_start(text, index):
+            regex_end = _javascript_regex_end(text, index)
+            if regex_end is not None:
+                result.append(text[index:regex_end])
+                index = regex_end
+                continue
+        result.append(text[index])
+        index += 1
+    return "".join(result)
 
 
 def _javascript_type_expression(value: str) -> bool:
@@ -1021,7 +1228,19 @@ def _test_fixture_bearer(path: str, line: str, value: str) -> bool:
         rf"(?P<quote>['\"])Bearer\s+{re.escape(value)}(?P=quote)",
         re.IGNORECASE,
     )
-    return literal.search(line) is not None
+    match = literal.search(line)
+    if match is None:
+        return False
+    before = line[: match.start()].rstrip()
+    after = line[match.end() :].lstrip()
+    literal_start = (
+        not before
+        or before[-1] in "=:[{(,"
+        or re.search(r"(?:===|!==|==|!=)$", before) is not None
+    )
+    return literal_start and (
+        not after or after[0] in ":;,)]}"
+    )
 
 
 def _dynamic_bearer_reference(value: str) -> bool:

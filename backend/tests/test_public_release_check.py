@@ -383,6 +383,170 @@ class PublicReleaseCheckTests(unittest.TestCase):
             [("PUBLIC_CREDENTIAL_VALUE", line) for line in range(1, 12)],
         )
 
+    def test_javascript_multiline_complete_expression_matrix_fails_closed(self):
+        value = "hardcoded-" + "multiline-tail"
+        literal = json.dumps(value)
+        text = "\n".join(
+            [
+                "const API_KEY = process.env.API_KEY",
+                f"  || {literal};",
+                "const token = process.env.TOKEN",
+                f"  ?? {literal};",
+                "const GITHUB_PAT = enabled",
+                "  ? process.env.PAT",
+                f"  : {literal};",
+                "function connect(",
+                "  apiKey =",
+                f"    {literal},",
+                ") {}",
+                "const fn = (",
+                "  password =",
+                f"    {literal},",
+                ") => password;",
+                "const config = {",
+                "  clientSecret:",
+                f"    {literal},",
+                "};",
+                "connect({",
+                "  API_KEY:",
+                f"    {literal},",
+                "});",
+                "const authorization = `prefix-",
+                f"${{user}}-{value}`;",
+                "const cookie = wrapper(",
+                f"  {literal}",
+                ");",
+                "const safe = { API_KEY: process.env.API_KEY, token: config.token };",
+                "type Props = {",
+                "  csrfToken: string | null;",
+                "  clientSecret?: string;",
+                "};",
+                f'const prose = "token = {value}";',
+                f"// API_KEY = {literal};",
+                "const safeTemplate = `token = ${token}`;",
+                "const first = 1; const API_KEY = process.env.API_KEY; const token = process.env.TOKEN;",
+            ]
+        )
+
+        findings = scan_public_text("frontend/multiline-security.ts", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [
+                ("PUBLIC_CREDENTIAL_VALUE", line)
+                for line in (1, 3, 5, 9, 13, 17, 21, 24, 26)
+            ],
+        )
+
+    def test_release_tree_blocks_javascript_multiline_expression_bypasses(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            write_release_fixture(root)
+            value = "hardcoded-" + "release-js-tail"
+            literal = json.dumps(value)
+            (root / "frontend" / "security.ts").write_text(
+                "\n".join(
+                    [
+                        "const API_KEY = process.env.API_KEY",
+                        f"  || {literal};",
+                        "const config = {",
+                        "  clientSecret:",
+                        f"    {literal},",
+                        "};",
+                        "const fn = (",
+                        "  password =",
+                        f"    {literal},",
+                        ") => password;",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = evaluate_public_release(root)
+
+        findings = [
+            finding
+            for finding in result["findings"]
+            if finding["rule_id"] == "PUBLIC_CREDENTIAL_VALUE"
+        ]
+        self.assertEqual(
+            [(finding["path"], finding["line"]) for finding in findings],
+            [
+                ("frontend/security.ts", 1),
+                ("frontend/security.ts", 4),
+                ("frontend/security.ts", 8),
+            ],
+        )
+
+    def test_javascript_lexer_handles_crlf_comments_regex_and_nested_templates(self):
+        value = "hardcoded-" + "lexer-tail"
+        literal = json.dumps(value)
+        text = "\r\n".join(
+            [
+                f"const pattern = /token = {literal}/g;",
+                "const description = `outer ${format(`token = ${token}`)}`;",
+                "const API_KEY = process.env.API_KEY /*",
+                f"  comment with token = {literal}",
+                f"*/ || {literal};",
+                "function connect(",
+                "  apiKey =",
+                f"    {literal},",
+                ") {}",
+                "const secret = process.env.SECRET /* unterminated",
+            ]
+        )
+
+        findings = scan_public_text("frontend/lexer.ts", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [
+                ("PUBLIC_CREDENTIAL_VALUE", 3),
+                ("PUBLIC_CREDENTIAL_VALUE", 7),
+                ("PUBLIC_CREDENTIAL_VALUE", 10),
+            ],
+        )
+
+    def test_bearer_fixture_requires_one_complete_string_expression(self):
+        fixtures = {
+            "backend/tests/test_agent_auth.py": "admin-" + "secret",
+            "frontend/src/auth.test.ts": "operator-" + "secret",
+        }
+        for path, fixture in fixtures.items():
+            with self.subTest(path=path):
+                text = "\n".join(
+                    [
+                        f'send("Bearer {fixture}")',
+                        f'send("Bearer {fixture}" + runtime_suffix)',
+                    ]
+                )
+                findings = scan_public_text(path, text)
+                self.assertEqual(
+                    [(finding.rule_id, finding.line) for finding in findings],
+                    [("PUBLIC_CREDENTIAL_VALUE", 2)],
+                )
+                self.assertNotIn(
+                    fixture,
+                    json.dumps([finding.to_dict() for finding in findings]),
+                )
+
+        bearer_scheme = "Bear" + "er"
+        cross_fixture = "admin-" + "secret"
+        cross_path = scan_public_text(
+            "frontend/src/not-auth.test.ts",
+            f'send("{bearer_scheme} {cross_fixture}")',
+        )
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in cross_path],
+            [("PUBLIC_CREDENTIAL_VALUE", 1)],
+        )
+        comparison_fixture = "secret-" + "read-token"
+        comparison = scan_public_text(
+            "backend/tests/test_healthcheck_script.py",
+            f'if authorization != "Bearer {comparison_fixture}":',
+        )
+        self.assertEqual(comparison, [])
+
     def test_javascript_allows_only_complete_safe_expressions(self):
         text = "\n".join(
             [
