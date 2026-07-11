@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 
 from app.core.normalization import NormalizationError, normalize_target
-from app.core.safe_http import SafeHttpError, safe_fetch
+from app.core.safe_http import SafeHttpError, fake_ip_allowance_from_env, safe_fetch
 from app.tools.base import (
     NormalizedEntity,
     NormalizedEvidence,
@@ -103,6 +103,7 @@ class OfficialSiteExtractorAdapter:
             timeout_seconds=timeout_seconds,
         )
         try:
+            fake_ip_allowance = fake_ip_allowance_from_env()
             url = self.validate_target(target_type, target_value)
             command = self.build_command(target_type, url, workdir, timeout_seconds)
             response = safe_fetch(
@@ -113,6 +114,7 @@ class OfficialSiteExtractorAdapter:
                     "User-Agent": "osint-agent-network/1.0 (+official-site-extractor)",
                     "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
                 },
+                fake_ip_allowance=fake_ip_allowance,
             )
             body = _decode_http_body(response.body, response)
             status = response.status

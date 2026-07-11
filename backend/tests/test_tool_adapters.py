@@ -5,7 +5,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.core.safe_http import SafeHttpError, SafeHttpResponse
+from app.core.safe_http import (
+    FakeIpAllowance,
+    InvalidFakeIpConfiguration,
+    SafeHttpError,
+    SafeHttpResponse,
+)
 
 from app.tools.sherlock import SherlockAdapter
 from app.tools.theharvester import TheHarvesterAdapter
@@ -638,6 +643,57 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
         self.assertTrue(artifact_exists)
         self.assertIn(("email", "sales@example.com"), {(item.type, item.value) for item in parsed.entities})
 
+    def test_run_passes_configured_fake_ip_allowance_to_safe_fetch(self):
+        allowance = FakeIpAllowance()
+        fetched = SafeHttpResponse(200, {}, b"<html></html>", "https://example.com/")
+        with patch(
+            "app.tools.official_site_extractor.fake_ip_allowance_from_env",
+            return_value=allowance,
+        ), patch(
+            "app.tools.official_site_extractor.safe_fetch",
+            return_value=fetched,
+        ) as safe_fetch_mock:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                result = OfficialSiteExtractorAdapter().run(
+                    "url",
+                    "https://example.com/",
+                    Path(tmpdir),
+                    timeout_seconds=5,
+                )
+
+        self.assertEqual(result.returncode, 0)
+        safe_fetch_mock.assert_called_once_with(
+            "https://example.com/",
+            timeout_seconds=5,
+            max_bytes=MAX_HTML_BYTES,
+            headers={
+                "User-Agent": "osint-agent-network/1.0 (+official-site-extractor)",
+                "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
+            },
+            fake_ip_allowance=allowance,
+        )
+
+    def test_run_fails_closed_on_invalid_fake_ip_configuration(self):
+        with patch(
+            "app.tools.official_site_extractor.fake_ip_allowance_from_env",
+            side_effect=InvalidFakeIpConfiguration("sensitive configuration details"),
+        ), patch("app.tools.official_site_extractor.safe_fetch") as safe_fetch_mock:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                result = OfficialSiteExtractorAdapter().run(
+                    "url",
+                    "https://example.com/private-token",
+                    Path(tmpdir),
+                    timeout_seconds=5,
+                )
+                artifact = result.command.expected_artifact.read_bytes()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr_excerpt, "official site fetch failed")
+        self.assertEqual(artifact, b"")
+        self.assertNotIn("sensitive", repr(result))
+        self.assertNotIn("private-token", repr(result))
+        safe_fetch_mock.assert_not_called()
+
     def test_run_bounds_high_ratio_gzip_expansion(self):
         expanded = b"A" * (32 * 1024 * 1024)
         fetched = SafeHttpResponse(
@@ -713,7 +769,7 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
         self.assertNotIn("private-token", result.stderr_excerpt)
 
     def test_run_maps_lazy_resolver_failure_without_leaking_details(self):
-        def failing_fetch(url, timeout_seconds, max_bytes, headers):
+        def failing_fetch(url, timeout_seconds, max_bytes, headers, fake_ip_allowance):
             def lazy_answers():
                 yield (2, 1, 6, "", ("8.8.8.8", 443))
                 raise OSError("secret.internal resolver detail")
@@ -725,6 +781,7 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
                 timeout_seconds=timeout_seconds,
                 max_bytes=max_bytes,
                 headers=headers,
+                fake_ip_allowance=fake_ip_allowance,
                 resolver=lambda *args, **kwargs: lazy_answers(),
                 connector=lambda *args: self.fail("connector must not run"),
             )
