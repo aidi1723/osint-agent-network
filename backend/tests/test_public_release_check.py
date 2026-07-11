@@ -1,9 +1,12 @@
 import json
+import os
 import subprocess
 import tempfile
 import unittest
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from scripts.public_release_check import (
     ReleaseFinding,
@@ -13,14 +16,8 @@ from scripts.public_release_check import (
 )
 
 
-GPL_TEXT = "\n".join(
-    [
-        "GNU GENERAL PUBLIC LICENSE",
-        "Version 3, 29 June 2007",
-        "Everyone is permitted to copy and distribute verbatim copies",
-        "END OF TERMS AND CONDITIONS",
-    ]
-)
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+GPL_TEXT = (REPOSITORY_ROOT / "LICENSE").read_text(encoding="utf-8")
 
 
 def write_release_fixture(root: Path, *, backend_license: str = "GPL-3.0-only") -> None:
@@ -412,15 +409,89 @@ class PublicReleaseCheckTests(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             (root / "tracked.txt").write_text("tracked", encoding="utf-8")
             (root / "binary.dat").write_bytes(b"\xff\xfe")
+            (root / "z space.txt").write_text("space", encoding="utf-8")
+            (root / "a\nline.txt").write_text("newline", encoding="utf-8")
             (root / "untracked.txt").write_text("untracked", encoding="utf-8")
             subprocess.run(
-                ["git", "-C", str(root), "add", "tracked.txt", "binary.dat"],
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "add",
+                    "tracked.txt",
+                    "binary.dat",
+                    "z space.txt",
+                    "a\nline.txt",
+                ],
                 check=True,
             )
 
             paths = tracked_files(root)
 
-        self.assertEqual(paths, [Path("binary.dat"), Path("tracked.txt")])
+        self.assertEqual(
+            paths,
+            [Path("a\nline.txt"), Path("binary.dat"), Path("tracked.txt"), Path("z space.txt")],
+        )
+
+    def test_nested_directory_without_own_git_metadata_uses_filesystem_fallback(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            parent = Path(tmpdir)
+            subprocess.run(["git", "init", "-q", str(parent)], check=True)
+            root = parent / "fixture"
+            root.mkdir()
+            (root / "visible.txt").write_text("visible", encoding="utf-8")
+            subprocess.run(["git", "-C", str(parent), "add", "fixture/visible.txt"], check=True)
+
+            with patch(
+                "scripts.public_release_check.subprocess.run",
+                side_effect=AssertionError("nested root must not query parent Git repository"),
+            ):
+                try:
+                    paths = tracked_files(root)
+                except AssertionError as exc:
+                    self.fail(str(exc))
+
+        self.assertEqual(paths, [Path("visible.txt")])
+
+    @unittest.skipUnless(os.name == "posix", "invalid filename bytes require POSIX paths")
+    def test_invalid_utf8_git_filename_is_policy_checked_and_safely_displayed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            write_release_fixture(root)
+            (root / ".git").mkdir()
+            raw_name = b"runtime-\xff\n.sqlite"
+            completed = SimpleNamespace(returncode=0, stdout=raw_name + b"\0")
+
+            with (
+                patch("scripts.public_release_check.subprocess.run", return_value=completed),
+                patch("scripts.public_release_check._safe_regular_file", return_value=True),
+            ):
+                result = evaluate_public_release(root)
+
+        runtime = [
+            finding
+            for finding in result["findings"]
+            if finding["rule_id"] == "PUBLIC_RUNTIME_ARTIFACT"
+        ]
+        self.assertEqual(
+            [finding["path"] for finding in runtime], ["runtime-\\xff\\n.sqlite"]
+        )
+        self.assertNotIn("\udcff", json.dumps(result))
+
+    def test_tracked_symlinks_are_scanned_without_following_outside_root(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            write_release_fixture(root)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / "personal-link").symlink_to("/home/" + "alice/private")
+            (root / "runtime.sqlite").symlink_to("/outside/runtime.db")
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+
+            result = evaluate_public_release(root)
+
+        findings = {(finding["rule_id"], finding["path"]) for finding in result["findings"]}
+        self.assertIn(("PUBLIC_PERSONAL_PATH", "personal-link"), findings)
+        self.assertIn(("PUBLIC_RUNTIME_ARTIFACT", "runtime.sqlite"), findings)
 
     def test_tracked_files_falls_back_when_git_command_fails(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -444,6 +515,64 @@ class PublicReleaseCheckTests(unittest.TestCase):
         self.assertEqual(result["checks"]["package_license"], "ok")
         self.assertEqual(result["checks"]["backend_license"], "ok")
         self.assertEqual(result["findings"], [])
+
+    def test_rejects_four_marker_license_spoof(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            write_release_fixture(root)
+            (root / "LICENSE").write_text(
+                "\n".join(
+                    [
+                        "GNU GENERAL PUBLIC LICENSE",
+                        "Version 3, 29 June 2007",
+                        "Everyone is permitted to copy and distribute verbatim copies",
+                        "END OF TERMS AND CONDITIONS",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = evaluate_public_release(root)
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["checks"]["license_file"], "fail")
+        self.assertTrue(any(item["rule_id"] == "LICENSE_FILE" for item in result["findings"]))
+
+    def test_accepts_canonical_gplv3_with_crlf_and_trailing_newline_normalization(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            write_release_fixture(root)
+            normalized = GPL_TEXT.rstrip("\r\n").replace("\n", "\r\n") + "\r\n\r\n"
+            (root / "LICENSE").write_bytes(normalized.encode("utf-8"))
+
+            result = evaluate_public_release(root)
+
+        self.assertTrue(result["ready"])
+
+    def test_malformed_license_metadata_roots_return_stable_findings(self):
+        cases = [
+            ("[]", '[project]\nlicense = "GPL-3.0-only"\n', "LICENSE_FRONTEND"),
+            ('"GPL-3.0-only"', '[project]\nlicense = "GPL-3.0-only"\n', "LICENSE_FRONTEND"),
+            ('{"license":"GPL-3.0-only"}', 'project = "bad"\n', "LICENSE_BACKEND"),
+            ('{"license":"GPL-3.0-only"}', 'name = "missing-project"\n', "LICENSE_BACKEND"),
+        ]
+        for package_json, backend_toml, expected_rule in cases:
+            with self.subTest(expected_rule=expected_rule, backend_toml=backend_toml):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    root = Path(tmpdir)
+                    write_release_fixture(root)
+                    (root / "frontend" / "package.json").write_text(package_json, encoding="utf-8")
+                    (root / "backend" / "pyproject.toml").write_text(backend_toml, encoding="utf-8")
+
+                    try:
+                        result = evaluate_public_release(root)
+                    except (AttributeError, TypeError) as exc:
+                        self.fail(f"malformed metadata raised {type(exc).__name__}")
+
+                self.assertFalse(result["ready"])
+                self.assertTrue(
+                    any(item["rule_id"] == expected_rule for item in result["findings"])
+                )
 
     def test_rejects_invalid_backend_toml_without_crashing(self):
         with tempfile.TemporaryDirectory() as tmpdir:

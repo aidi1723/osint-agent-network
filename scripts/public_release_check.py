@@ -10,12 +10,7 @@ import tomllib
 
 
 REQUIRED_LICENSE_ID = "GPL-3.0-only"
-GPLV3_TEXT_MARKERS = (
-    "GNU GENERAL PUBLIC LICENSE",
-    "Version 3, 29 June 2007",
-    "Everyone is permitted to copy and distribute verbatim copies",
-    "END OF TERMS AND CONDITIONS",
-)
+GPLV3_NORMALIZED_SHA256 = "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
 GENERATED_DEPENDENCY_DIRS = frozenset(
     {".git", ".mypy_cache", ".pytest_cache", ".tox", ".venv", "__pycache__", "node_modules", "venv"}
 )
@@ -138,27 +133,30 @@ class ReleaseFinding:
 
 def tracked_files(root: Path) -> list[Path]:
     root = root.resolve()
-    try:
-        completed = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "-z"],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-    except OSError:
-        completed = None
+    git_metadata = root / ".git"
+    completed = None
+    if not git_metadata.is_symlink() and (git_metadata.is_file() or git_metadata.is_dir()):
+        try:
+            completed = subprocess.run(
+                ["git", "-C", str(root), "ls-files", "-z"],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            completed = None
     if completed is not None and completed.returncode == 0:
         paths: list[Path] = []
         for raw_path in completed.stdout.split(b"\0"):
             if not raw_path:
                 continue
             try:
-                relative = Path(raw_path.decode("utf-8", errors="strict"))
-            except UnicodeDecodeError:
+                relative = Path(raw_path.decode("utf-8", errors="surrogateescape"))
+            except ValueError:
                 continue
-            if _safe_regular_file(root, relative):
+            if _safe_regular_file(root, relative, allow_symlink=True):
                 paths.append(relative)
-        return sorted(paths, key=lambda item: item.as_posix())
+        return sorted(paths, key=_path_sort_key)
 
     paths = []
     for candidate in root.rglob("*"):
@@ -170,15 +168,17 @@ def tracked_files(root: Path) -> list[Path]:
             continue
         if _safe_regular_file(root, relative):
             paths.append(relative)
-    return sorted(paths, key=lambda item: item.as_posix())
+    return sorted(paths, key=_path_sort_key)
 
 
-def _safe_regular_file(root: Path, relative: Path) -> bool:
+def _safe_regular_file(root: Path, relative: Path, allow_symlink: bool = False) -> bool:
     if relative.is_absolute() or ".." in relative.parts:
         return False
     candidate = root / relative
     try:
-        if candidate.is_symlink() or not candidate.is_file():
+        if candidate.is_symlink():
+            return allow_symlink
+        if not candidate.is_file():
             return False
         candidate.resolve(strict=True).relative_to(root)
     except (OSError, RuntimeError, ValueError):
@@ -186,8 +186,23 @@ def _safe_regular_file(root: Path, relative: Path) -> bool:
     return True
 
 
+def _path_sort_key(path: Path) -> bytes:
+    return path.as_posix().encode("utf-8", errors="surrogateescape")
+
+
+def _display_path(path: Path | str) -> str:
+    raw_path = Path(path).as_posix().encode("utf-8", errors="surrogateescape")
+    decoded = raw_path.decode("utf-8", errors="backslashreplace")
+    return "".join(
+        f"\\x{ord(character):02x}"
+        if ord(character) < 32 or ord(character) == 127
+        else character
+        for character in decoded
+    ).replace("\\x0a", "\\n").replace("\\x0d", "\\r").replace("\\x09", "\\t")
+
+
 def scan_public_text(relative_path: Path | str, text: str) -> list[ReleaseFinding]:
-    path = Path(relative_path).as_posix()
+    path = _display_path(relative_path)
     findings: list[ReleaseFinding] = []
     lines = text.splitlines()
     for line_number, line in enumerate(lines, start=1):
@@ -484,7 +499,7 @@ def evaluate_public_release(root: Path) -> dict:
         if runtime_finding is not None:
             findings.append(runtime_finding)
             continue
-        text = _strict_text(root / relative_path)
+        text = _repository_entry_text(root, relative_path)
         if text is not None:
             findings.extend(scan_public_text(relative_path, text))
 
@@ -515,7 +530,7 @@ def evaluate_public_release(root: Path) -> dict:
 
 
 def _runtime_artifact_finding(relative_path: Path) -> ReleaseFinding | None:
-    path = relative_path.as_posix()
+    path = _display_path(relative_path)
     lower_path = path.lower()
     forbidden = relative_path.name != ".gitkeep" and (
         bool(RUNTIME_DATABASE_RE.search(relative_path.name))
@@ -539,29 +554,53 @@ def _finding_key(finding: ReleaseFinding) -> tuple[str, int, str, str]:
 
 
 def _detect_license_text(text: str) -> str:
-    if all(marker in text for marker in GPLV3_TEXT_MARKERS):
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
+    if hashlib.sha256(normalized.encode("utf-8")).hexdigest() == GPLV3_NORMALIZED_SHA256:
         return REQUIRED_LICENSE_ID
     return ""
 
 
 def _package_license(path: Path) -> str:
+    if path.is_symlink():
+        return ""
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return ""
+    if not isinstance(payload, dict):
         return ""
     return str(payload.get("license") or "").strip()
 
 
 def _backend_license(path: Path) -> str:
+    if path.is_symlink():
+        return ""
     try:
         payload = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return ""
-    return str(payload.get("project", {}).get("license") or "").strip()
+    if not isinstance(payload, dict):
+        return ""
+    project = payload.get("project")
+    if not isinstance(project, dict):
+        return ""
+    return str(project.get("license") or "").strip()
+
+
+def _repository_entry_text(root: Path, relative_path: Path) -> str | None:
+    path = root / relative_path
+    try:
+        if path.is_symlink():
+            return path.readlink().as_posix()
+    except (OSError, ValueError):
+        return None
+    return _strict_text(path)
 
 
 def _strict_text(path: Path) -> str | None:
     try:
+        if path.is_symlink():
+            return None
         text = path.read_text(encoding="utf-8", errors="strict")
     except (OSError, UnicodeDecodeError):
         return None
