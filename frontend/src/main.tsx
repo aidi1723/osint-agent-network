@@ -159,6 +159,7 @@ function OperationsConsole({ csrfToken, onLogout }: OperationsConsoleProps) {
   const [confirm, setConfirm] = useState<ConfirmState>(null);
   const dataBoardRef = useRef<HTMLElement | null>(null);
   const selectedIdRef = useRef<string | null>(null);
+  const createFormRef = useRef<HTMLFormElement | null>(null);
 
   function csrfHeaders(): Record<string, string> | undefined {
     return csrfToken ? { "X-CSRF-Token": csrfToken } : undefined;
@@ -675,11 +676,23 @@ function OperationsConsole({ csrfToken, onLogout }: OperationsConsoleProps) {
               </section>
             </div>
           ) : (
-            <div className="empty">点击任务池中的任一任务查看数据看板。</div>
+            <div className="data-board-empty-state">
+              <div>
+                <strong>尚未选择调查任务</strong>
+                <span>从任务池载入现有调查，或先创建调查任务。</span>
+              </div>
+              <a
+                className="secondary-button data-board-empty-action"
+                href="#create-investigation-form"
+                onClick={() => window.requestAnimationFrame(() => createFormRef.current?.focus())}
+              >
+                创建调查任务
+              </a>
+            </div>
           )}
         </section>
 
-        <details className="ops-console">
+        <details className="ops-console" open={!selected}>
           <summary className="ops-console-summary">
             <span>任务与操作台</span>
             <strong>创建任务 / Agent 状态 / 任务池</strong>
@@ -698,7 +711,13 @@ function OperationsConsole({ csrfToken, onLogout }: OperationsConsoleProps) {
             <SystemStatusPanel status={systemStatus} />
   
           <section className="content-grid">
-            <form className="panel form-panel" onSubmit={createInvestigation}>
+            <form
+              id="create-investigation-form"
+              ref={createFormRef}
+              className="panel form-panel"
+              tabIndex={-1}
+              onSubmit={createInvestigation}
+            >
               <div className="panel-heading">
                 <h2>创建开放任务</h2>
                 <button type="submit"><Play size={16} />发布</button>
