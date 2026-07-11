@@ -1,15 +1,17 @@
 # Agent Protocol
 
-Version: 0.2
+Version: 0.3
 Base URL: `http://127.0.0.1:8088`
 
 This project treats the web UI as a display board. Execution is done by external agents such as Codex Desktop, OpenHuman on <production-host>, or any CLI agent that can make HTTP requests.
 
-If `AGENT_API_TOKEN` is configured on the API service, every `/api/agent/*` and `/api/agents/*` request must include:
+Each external Agent uses the token returned once by administrator-authorized registration. Every `/api/agent/*` request must include:
 
 ```http
-Authorization: Bearer <AGENT_API_TOKEN>
+Authorization: Bearer <issued-agent-token>
 ```
+
+`POST /api/agents/register` requires `ADMIN_API_TOKEN`; it never accepts a shared Agent token as a registration credential. The legacy `AGENT_API_TOKEN` path is disabled by default and production startup/readiness reject `OSINT_ALLOW_LEGACY_AGENT_TOKEN=true`.
 
 ## Roles
 
@@ -252,9 +254,12 @@ Supported target types:
 {
   "agent_name": "codex-desktop",
   "agent_type": "codex",
-  "capabilities": ["company", "domain", "username", "email", "sherlock", "theharvester", "amass"]
+  "capabilities": ["company", "domain", "username", "email", "sherlock", "theharvester", "amass"],
+  "role_tier": "reader"
 }
 ```
+
+Allowed tiers are `reader`, `verifier`, `reporter`, and `tool_agent`. They are explicit, non-hierarchical contracts: collection writes require `reader`, confirmed facts and hypotheses require `verifier`, final completion/report writes require `reporter`, and atomic tool output requires `tool_agent`. Register separate identities when one runtime needs more than one contract.
 
 Response:
 
@@ -264,15 +269,27 @@ Response:
   "agent_name": "codex-desktop",
   "agent_type": "codex",
   "capabilities": ["domain", "username"],
+  "role_tier": "reader",
+  "agent_token": "<redacted>",
   "status": "ONLINE",
   "registered_at": "2026-05-19T00:00:00+00:00",
   "last_seen_at": "2026-05-19T00:00:00+00:00"
 }
 ```
 
+Store `agent_token` immediately in that Agent's secret runtime environment; the API persists only its hash and never returns the plaintext again. Re-registering the same stable `agent_name` rotates the token, updates tier/capabilities, and invalidates the old token immediately. This is also the migration path for legacy agents. Do not put the token in events, evidence, reports, screenshots, shell history, or source-controlled files.
+
+Authorization outcomes:
+
+- `401 Unauthorized`: missing, malformed, unknown, rotated, or disabled Agent credential. Re-register/rotate through an administrator when appropriate.
+- `403 Forbidden`: the credential is known but the body `agent_id`, `role_tier`, registered capability, action, or management/Agent credential class is not permitted.
+- `409 Conflict`: the task/Job is not actively owned by this exact Agent, has been released/closed, or the requested output is outside the active claim contract. Refresh state and obtain a current claim instead of replaying the mutation.
+
 ## Heartbeat
 
 `POST /api/agents/heartbeat`
+
+Heartbeat remains a management write route: use an authenticated administrator browser session or `ADMIN_API_TOKEN`. The issued Agent token is scoped to `/api/agent/*` claim/write routes and is not accepted for this plural management endpoint.
 
 ```json
 {
@@ -487,24 +504,20 @@ If important data is missing, write `待补充` or `未在公开来源中确认`
 ## Minimal Curl Flow
 
 ```bash
-BASE=http://127.0.0.1:8088
-
-AGENT_ID=$(curl -sS -X POST "$BASE/api/agents/register" \
+curl -sS -X POST "http://127.0.0.1:8088/api/agents/register" \
   -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer $AGENT_API_TOKEN" \
-  -d '{"agent_name":"cli-agent","agent_type":"cli","capabilities":["domain","amass"]}' \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+  -H 'Authorization: Bearer <admin-token>' \
+  -d '{"agent_name":"cli-agent","agent_type":"cli","role_tier":"reader","capabilities":["domain","amass"]}'
 
-TASK_ID=$(curl -sS -X POST "$BASE/api/agent/tasks/claim" \
+curl -sS -X POST "http://127.0.0.1:8088/api/agent/tasks/claim" \
   -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer $AGENT_API_TOKEN" \
-  -d "{\"agent_id\":\"$AGENT_ID\",\"capabilities\":[\"domain\",\"amass\"]}" \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["task"]["id"])')
+  -H 'Authorization: Bearer <issued-agent-token>' \
+  -d '{"agent_id":"<agent-id>","capabilities":["domain","amass"]}'
 
-curl -sS -X POST "$BASE/api/agent/events" \
+curl -sS -X POST "http://127.0.0.1:8088/api/agent/events" \
   -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer $AGENT_API_TOKEN" \
-  -d "{\"task_id\":\"$TASK_ID\",\"agent_id\":\"$AGENT_ID\",\"level\":\"info\",\"message\":\"开始执行\",\"metadata\":{}}"
+  -H 'Authorization: Bearer <issued-agent-token>' \
+  -d '{"task_id":"<task-id>","agent_id":"<agent-id>","level":"info","message":"开始执行","metadata":{}}'
 ```
 
 ## Standard CLI Flow
@@ -512,12 +525,21 @@ curl -sS -X POST "$BASE/api/agent/events" \
 外部 Agent 可以直接使用后端内置 CLI，不必手写 `curl`。默认读取：
 
 - `OSINT_AGENT_HUB_URL`: 默认 `http://127.0.0.1:8088`
-- `AGENT_API_TOKEN`: 可选鉴权 Token
+- `ADMIN_API_TOKEN`: 仅用于注册或重新注册 Agent
+- `AGENT_API_TOKEN`: CLI 对非注册命令读取此环境变量；这里应存放当前 Agent 独立签发的 Token，而不是旧版全局共享值
+
+以下命令从仓库根目录执行。先为当前 shell 设置模块搜索路径：
+
+```bash
+cd /path/to/osint-agent-network
+export PYTHONPATH="$PWD/backend"
+```
 
 注册 Agent：
 
 ```bash
 python3 -m app.agent_client register \
+  --role-tier reader \
   --agent-name codex-desktop \
   --agent-type codex \
   --capability domain \

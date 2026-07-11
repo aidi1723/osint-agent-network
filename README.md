@@ -123,7 +123,8 @@ Compose 会启动：
 ```bash
 cd /path/to/osint-agent-network
 cp .env.example .env
-# 设置 APP_ENV=production，并配置 ADMIN_API_TOKEN、AGENT_API_TOKEN、READ_API_TOKEN
+# 按下文生产安全要求配置管理员、只读凭证和安全 Cookie
+# 禁用旧版共享 Agent Token，并通过 HTTPS 反向代理提供 API 和 Web
 docker compose -f docker-compose.prod.yml up --build
 ```
 
@@ -137,10 +138,12 @@ docker compose -f docker-compose.prod.yml up --build
 
 - `APP_PORT`: 后端端口，默认 `8088`
 - `OSINT_DB_PATH`: SQLite 数据库路径，默认 `data/osint.sqlite`
-- `AGENT_API_TOKEN`: 外部 Agent 写回 API 的 Bearer Token，生产环境建议设置
-- `ADMIN_API_TOKEN`: 管理类写操作的 Bearer Token；未设置时回退使用 `AGENT_API_TOKEN`
-- `READ_API_TOKEN`: 读取调查、Agent、系统状态等敏感接口的 Bearer Token；生产环境建议与写 token 分离
-- `VITE_ADMIN_API_TOKEN`: 前端调用管理类写接口时使用的 Bearer Token；启用 `ADMIN_API_TOKEN` 后前端构建环境也需要设置
+- `ADMIN_API_TOKEN`: 管理员登录和非浏览器管理调用的 Bearer Token；生产环境必须设置
+- `READ_API_TOKEN`: 非浏览器读取调查、Agent、系统状态等敏感接口的 Bearer Token；生产环境必须与管理凭证分离
+- `OSINT_COOKIE_SECURE`: 生产环境必须为 `true`，让管理员会话 Cookie 仅通过 HTTPS 发送
+- `OSINT_SESSION_TTL_SECONDS`: 管理员浏览器会话有效期；会话只保存在 API 进程内，重启后需要重新登录
+- `OSINT_ALLOW_LEGACY_AGENT_TOKEN`: 仅用于非生产迁移，生产环境必须保持 `false`
+- `AGENT_API_TOKEN`: 旧版共享 Agent Token，仅在显式启用兼容模式时使用；新部署应使用管理员注册后签发的独立 Agent Token
 - `OSINT_LLM_BASE_URL` / `OSINT_LLM_API_KEY` / `OSINT_LLM_MODEL`: 情报官模型中转配置
 - `UPKUAJING_BASE_URL`: 跨境魔方后台地址，默认 `https://saas.upkuajing.com`
 - `UPKUAJING_AUTHORIZATION`: 跨境魔方 API 的 `Authorization` 请求头完整值，例如 `Bearer ...`
@@ -152,6 +155,16 @@ docker compose -f docker-compose.prod.yml up --build
 `OFFICIAL_SITE_SEARCH_BASE_URL` 可指向 SearXNG 兼容的 JSON 搜索端点。配置后，`company` 和 `sparse_lead` standard/deep 任务会先搜索官网候选 URL，再递进触发 `httpx`、`katana` 和 `official_site_extractor`。
 
 凭证只放在运行环境或 `.env`，不要写入事件、证据、报告或截图。
+
+### 浏览器管理员登录
+
+前端不再读取或打包管理 Token。打开 Web 后，在登录界面输入 `ADMIN_API_TOKEN`；API 验证后设置 `HttpOnly`、`SameSite=Strict` 会话 Cookie，前端只在内存中保存轮换的 CSRF Token。生产环境必须在受信任的 TLS 终止层后运行，设置 `OSINT_COOKIE_SECURE=true`，并把 `CORS_ALLOWED_ORIGINS` 限定为实际 HTTPS Web Origin。API 重启会清空内存会话，这是预期的重新登录边界。
+
+本地开发可保留 `APP_ENV=development`、`OSINT_COOKIE_SECURE=false` 和回环地址 Origin。脚本、运维 CLI 与服务间调用仍可用 `Authorization: Bearer $ADMIN_API_TOKEN` 或只读的 `$READ_API_TOKEN`，但浏览器构建中不得出现这些值。
+
+### Agent 凭证迁移
+
+管理员通过 `/api/agents/register` 或 `app.agent_client register --role-tier ...` 注册 Agent。响应中的 `agent_token` 只显示一次，应立即写入该 Agent 的私密运行环境；后续认领和写回使用这个独立 Token。用同一 `agent_name` 重新注册会轮换凭证并立即使旧 Token 失效。`reader`、`verifier`、`reporter`、`tool_agent` 权限互不隐式继承，服务端还会校验已注册能力、任务/Job 认领所有权和输出契约。完整迁移与状态码说明见 [docs/AGENT_PROTOCOL.md](docs/AGENT_PROTOCOL.md)。
 
 <production-host> 当前已验证的 ProjectDiscovery 配置：
 
@@ -165,7 +178,7 @@ KATANA_COMMAND=<osint-bin>/katana
 
 ### 跨境魔方海关 API
 
-后端提供代理接口 `POST /api/customs/trade/list`，请求体与跨境魔方 `POST /customs/trade/list` 保持一致。该代理接口属于管理类写接口，生产环境需要 `ADMIN_API_TOKEN` 或 `AGENT_API_TOKEN` 授权；第三方后台的 `UPKUAJING_AUTHORIZATION` 只保存在服务器环境变量中，不暴露给前端。
+后端提供代理接口 `POST /api/customs/trade/list`，请求体与跨境魔方 `POST /customs/trade/list` 保持一致。该代理接口属于管理类写接口，生产环境使用管理员浏览器会话或 `ADMIN_API_TOKEN` 授权；第三方后台的 `UPKUAJING_AUTHORIZATION` 只保存在服务器环境变量中，不暴露给前端。
 
 直接调用情报官代理：
 

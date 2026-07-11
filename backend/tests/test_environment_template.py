@@ -17,11 +17,11 @@ def _env_example_keys() -> set[str]:
 
 
 class EnvironmentTemplateTests(unittest.TestCase):
-    def test_env_example_lists_frontend_and_readiness_variables(self):
+    def test_env_example_lists_frontend_and_readiness_variables_without_browser_secret(self):
         keys = _env_example_keys()
 
         self.assertIn("VITE_API_BASE_URL", keys)
-        self.assertIn("VITE_ADMIN_API_TOKEN", keys)
+        self.assertNotIn("VITE_ADMIN_API_TOKEN", keys)
         self.assertIn("VITE_DEV_API_PROXY_TARGET", keys)
         self.assertIn("API_URL", keys)
         self.assertIn("WEB_URL", keys)

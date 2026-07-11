@@ -76,8 +76,8 @@ grep -E 'UPKUAJING_AUTHORIZATION|ADMIN_API_TOKEN' .env
 Expected:
 
 - `UPKUAJING_AUTHORIZATION` is present and non-empty on the backend host.
-- `ADMIN_API_TOKEN` or `AGENT_API_TOKEN` is present on the backend.
-- `VITE_ADMIN_API_TOKEN` is present in the frontend build environment when management auth is enabled.
+- `ADMIN_API_TOKEN` is present on the backend.
+- The browser has an authenticated administrator session; no management credential is present in the frontend build environment.
 
 Do not paste real token values into reports or screenshots.
 
@@ -132,4 +132,3 @@ Keep these tests in the verification path:
 - `frontend/src/api.test.ts`
 
 If one of these tests needs to change, update the corresponding runtime semantics in this document in the same change.
-

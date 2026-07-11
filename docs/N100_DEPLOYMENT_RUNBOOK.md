@@ -112,9 +112,12 @@ APP_PORT=8088
 WEB_PORT=3008
 OSINT_DB_PATH=/opt/osint-agent-network/data/osint.sqlite
 
-AGENT_API_TOKEN=<strong-agent-token>
+APP_ENV=production
 ADMIN_API_TOKEN=<strong-admin-token>
 READ_API_TOKEN=<strong-read-token>
+OSINT_COOKIE_SECURE=true
+OSINT_ALLOW_LEGACY_AGENT_TOKEN=false
+CORS_ALLOWED_ORIGINS=https://osint.example.com
 
 OSINT_LLM_BASE_URL=http://192.0.2.10:6780/v1
 OSINT_LLM_API_KEY=<redacted>
@@ -122,17 +125,16 @@ OSINT_LLM_MODEL=gpt-5.4
 OSINT_LLM_TIMEOUT=30
 ```
 
-Frontend build-time token:
+Frontend build-time public configuration:
 
 ```bash
 cd /opt/osint-agent-network/frontend
 cat > .env.production <<'EOF'
-VITE_API_BASE_URL=http://192.0.2.10:8088
-VITE_ADMIN_API_TOKEN=<same-value-as-ADMIN_API_TOKEN>
+VITE_API_BASE_URL=https://osint.example.com
 EOF
 ```
 
-If the web UI is only used locally on <production-host>, `VITE_API_BASE_URL=http://127.0.0.1:8088` is acceptable. For LAN browser access, use `http://192.0.2.10:8088`.
+Do not put management or read credentials in Vite variables. Production browser access must use HTTPS so the secure session Cookie can be sent; plain HTTP loopback URLs are for `APP_ENV=development` only.
 
 ## 5. Optional OSINT Tool Configuration
 
@@ -564,8 +566,8 @@ systemctl --user start osint-agent-network-api.service osint-agent-network-web.s
 - `scripts/start.sh` is suitable for normal shell use. In some Codex sandbox sessions, background processes may not align with PID files; systemd is preferred on <production-host>.
 - Missing external tools are not fatal. They should show as `BLOCKED` jobs and appear in the queue panel.
 - A run where every executed tool job is blocked by missing commands or credentials should finish as investigation status `BLOCKED`, not `FAILED`.
-- `ADMIN_API_TOKEN` protects management write routes. If enabled, the web build must include `VITE_ADMIN_API_TOKEN`.
-- `AGENT_API_TOKEN` protects `/api/agent/*` writeback routes.
+- `ADMIN_API_TOKEN` authenticates browser login and explicit non-browser management calls; it must never be included in the web build.
+- Each `/api/agent/*` caller uses its own administrator-issued Agent token and explicit role tier. Production keeps legacy shared-token mode disabled.
 - `NEEDS_REVIEW` is a terminal review state, not an active-running state.
 - Whitepaper is the primary operator report area; quality gate remains visible but secondary.
 

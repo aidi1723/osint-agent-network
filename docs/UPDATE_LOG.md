@@ -446,7 +446,7 @@ Deployment readiness:
 
 - All code tested locally and verified
 - Comprehensive deployment checklist in `DEPLOYMENT_INTELLIGENCE_FEATURES.md`
-- Environment variables documented (UPKUAJING_*, ADMIN_API_TOKEN, VITE_ADMIN_API_TOKEN)
+- Environment variables documented (UPKUAJING_* and the then-current management-token configuration; the later browser-session hardening supersedes that build-time design)
 - No database schema changes required (reads existing tables)
 - Production build successful, ready for <production-host> deployment
 - Rollback plan documented
@@ -678,7 +678,7 @@ Security and reliability changes:
 - Added read-side authorization for sensitive API routes. The API now checks `READ_API_TOKEN`, then falls back to `ADMIN_API_TOKEN` or `AGENT_API_TOKEN`.
 - Kept `/api/health` and `/api/tools/health` available for unauthenticated health checks.
 - Added management authorization to `POST /api/investigations`.
-- Updated the web app so read and write API calls include the configured `VITE_ADMIN_API_TOKEN`.
+- Historical behavior: the web app once attached a build-time management token to API calls. The 2026-07 security-hardening rollout replaced this with administrator login, an HttpOnly session Cookie, and CSRF protection.
 - Replaced regex-only report HTML filtering with a DOM whitelist sanitizer before `dangerouslySetInnerHTML`.
 - Added regression coverage for unsafe report HTML, including unquoted `javascript:` URLs and unsafe tags.
 - Made the Vite dev API proxy configurable through `VITE_DEV_API_PROXY_TARGET`.

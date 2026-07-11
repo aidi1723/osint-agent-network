@@ -85,7 +85,7 @@ Content-Type: application/json
 | 状态码 | 含义 | 维护判断 |
 |-------|------|----------|
 | 200 | 查询完成 | `total_count=0` 才表示真实无结果 |
-| 401 | 管理授权失败 | 检查 `ADMIN_API_TOKEN` / `VITE_ADMIN_API_TOKEN` |
+| 401 | 管理授权失败 | 浏览器重新登录；非浏览器调用检查 `ADMIN_API_TOKEN` |
 | 503 | 海关 API 未配置 | 检查后端 `UPKUAJING_AUTHORIZATION` |
 | 502 | 上游海关 API 错误或不可达 | 检查第三方服务和网络 |
 | 504 | 上游请求超时 | 检查第三方服务响应时间和超时设置 |
@@ -210,8 +210,8 @@ UPKUAJING_TIMEOUT_SECONDS=30
 ### 权限要求
 
 供应链查询接口需要管理员权限：
-- 需要 `ADMIN_API_TOKEN` 或 `AGENT_API_TOKEN`
-- 前端需要配置 `VITE_ADMIN_API_TOKEN`
+- 浏览器通过管理员登录获得安全会话，不在前端构建中配置凭证
+- 非浏览器管理调用使用 `ADMIN_API_TOKEN`
 
 ---
 

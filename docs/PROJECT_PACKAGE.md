@@ -108,22 +108,27 @@ APP_HOST=0.0.0.0
 APP_PORT=8088
 WEB_PORT=3008
 OSINT_DB_PATH=/opt/osint-agent-network/data/osint.sqlite
-AGENT_API_TOKEN=<strong-agent-token>
+APP_ENV=production
 ADMIN_API_TOKEN=<strong-admin-token>
+READ_API_TOKEN=<strong-read-token>
+OSINT_COOKIE_SECURE=true
+OSINT_ALLOW_LEGACY_AGENT_TOKEN=false
+CORS_ALLOWED_ORIGINS=https://osint.example.com
 OSINT_LLM_BASE_URL=http://192.0.2.10:6780/v1
 OSINT_LLM_API_KEY=<redacted>
 OSINT_LLM_MODEL=gpt-5.4
 ```
 
-前端生产构建需要写入 API 地址和管理 Token：
+前端生产构建只写入公开 API 地址，不得写入管理 Token：
 
 ```bash
 cd /opt/osint-agent-network/frontend
 cat > .env.production <<'EOF'
-VITE_API_BASE_URL=http://192.0.2.10:8088
-VITE_ADMIN_API_TOKEN=<same-value-as-ADMIN_API_TOKEN>
+VITE_API_BASE_URL=https://osint.example.com
 EOF
 ```
+
+在 TLS 终止层同时提供 Web 与 API，或把 `CORS_ALLOWED_ORIGINS` 精确限制为实际 HTTPS Web Origin。浏览器在登录界面提交 `ADMIN_API_TOKEN` 后使用 `HttpOnly`、`SameSite=Strict`、`Secure` 会话 Cookie 和 CSRF 保护；API 进程重启后内存会话失效，需要重新登录。非浏览器运维脚本仍可使用管理或只读 Bearer Token。
 
 工具路径按实际安装补齐：
 
@@ -287,14 +292,21 @@ npm run build
 
 Agent 写回 401：
 
-- 检查 `AGENT_API_TOKEN`。
+- 检查是否使用注册响应中仅显示一次的独立 `agent_token`，以及该 Agent 是否已重新注册或轮换凭证。
 - 请求头必须是 `Authorization: Bearer <token>`。
+
+Agent 写回 403 或 409：
+
+- `403` 表示 Token 已识别，但 `role_tier`、注册能力、请求中的 `agent_id` 或动作权限不匹配。
+- `409` 表示任务/Job 不再由该 Agent 活跃认领，或输出契约/认领状态冲突；重新读取任务状态，不要重放旧写入。
+- 生产环境必须保持 `OSINT_ALLOW_LEGACY_AGENT_TOKEN=false`。迁移旧 Agent 时，以稳定的 `agent_name` 重新注册并安全保存新 Token。
 
 前端管理操作 401：
 
 - 检查后端 `.env` 中的 `ADMIN_API_TOKEN`。
-- 检查 `frontend/.env.production` 中的 `VITE_ADMIN_API_TOKEN`。
-- 修改前端环境变量后必须重新 `npm run build`。
+- 在登录界面重新登录；API 重启后旧会话按设计失效。
+- 检查 TLS 终止、`OSINT_COOKIE_SECURE=true` 和 `CORS_ALLOWED_ORIGINS` 是否与实际 HTTPS Origin 一致。
+- 不要在 `frontend/.env.production` 或 Vite 构建环境中设置管理 Token。
 
 后端健康检查失败：
 
