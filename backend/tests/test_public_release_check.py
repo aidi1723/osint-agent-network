@@ -576,6 +576,54 @@ class PublicReleaseCheckTests(unittest.TestCase):
             value, json.dumps([finding.to_dict() for finding in findings])
         )
 
+    def test_typescript_ast_uses_semantic_keys_for_renamed_bindings(self):
+        value = "hardcoded-" + "renamed-binding"
+        literal = json.dumps(value)
+        text = "\n".join(
+            [
+                f"const {{ token: alias = {literal} }} = config;",
+                f"const {{ auth: {{ apiKey: fallback = {literal} }} }} = config;",
+                f"function connect({{ clientSecret: value = {literal} }} = config) {{}}",
+                f"const {{ displayName: token = {literal} }} = profile;",
+            ]
+        )
+
+        findings = scan_public_text("frontend/renamed-bindings.ts", text)
+
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", line) for line in range(1, 4)],
+        )
+
+    def test_release_tree_blocks_renamed_binding_credentials(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            write_release_fixture(root)
+            value = "hardcoded-" + "renamed-release"
+            literal = json.dumps(value)
+            (root / "frontend" / "renamed.ts").write_text(
+                "\n".join(
+                    [
+                        f"const {{ token: alias = {literal} }} = config;",
+                        f"const {{ auth: {{ apiKey: fallback = {literal} }} }} = config;",
+                        f"function connect({{ clientSecret: value = {literal} }} = config) {{}}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            result = evaluate_public_release(root)
+
+        findings = [
+            finding for finding in result["findings"]
+            if finding["rule_id"] == "PUBLIC_CREDENTIAL_VALUE"
+        ]
+        self.assertFalse(result["ready"])
+        self.assertEqual(
+            [(finding["path"], finding["line"]) for finding in findings],
+            [("frontend/renamed.ts", line) for line in range(1, 4)],
+        )
+        self.assertNotIn(value, json.dumps(findings))
+
     def test_release_tree_blocks_typescript_declaration_initializers(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -805,7 +853,6 @@ class PublicReleaseCheckTests(unittest.TestCase):
             "start": source.index("token"),
             "valueStart": value_start,
             "end": value_start + len(literal),
-            "line": 999,
             "safeInitializer": False,
         }
 
@@ -823,7 +870,18 @@ class PublicReleaseCheckTests(unittest.TestCase):
             [{**valid, "key": "token\nforged"}],
             [{**valid, "operator": "=>"}],
             [{**valid, "safeInitializer": "false"}],
+            [{**valid, "line": 999}],
             [valid, dict(valid)],
+            [
+                valid,
+                {
+                    **valid,
+                    "key": "apiKey",
+                    "start": valid["valueStart"],
+                    "valueStart": valid["valueStart"],
+                    "end": valid["end"] - 1,
+                },
+            ],
             [
                 {**valid, "end": len(source) - 1},
                 {
@@ -841,6 +899,59 @@ class PublicReleaseCheckTests(unittest.TestCase):
                 self.assertEqual(
                     [(finding.rule_id, finding.line) for finding in findings],
                     [("PUBLIC_CREDENTIAL_SCAN", 1)],
+                )
+
+    def test_javascript_ast_schema_rejects_unknown_fields_at_every_level(self):
+        source = 'const token = "schema-secret";'
+        value_start = source.index('"')
+        assignment = {
+            "key": "token", "operator": "=", "start": source.index("token"),
+            "valueStart": value_start, "end": source.rindex('"') + 1,
+            "safeInitializer": False,
+        }
+        literal = {"start": value_start, "end": source.rindex('"') + 1}
+        cases = (
+            ({"unknownFile": True}, [assignment], [literal]),
+            ({}, [{**assignment, "unknownAssignment": True}], [literal]),
+            ({}, [assignment], [{**literal, "unknownLiteral": True}]),
+        )
+        for file_extra, assignments, literals in cases:
+            with self.subTest(file_extra=file_extra):
+                payload = {"path": "frontend/schema.ts", "ok": True,
+                           "assignments": assignments,
+                           "pureStringLiterals": literals, **file_extra}
+                findings = self._scan_with_javascript_ast_file(source, payload)
+                self.assertEqual(
+                    [(finding.rule_id, finding.line) for finding in findings],
+                    [("PUBLIC_CREDENTIAL_SCAN", 1)],
+                )
+
+    def test_javascript_ast_schema_allows_adjacent_ranges(self):
+        source = 'const token = "first";\nconst apiKey = "second";'
+        assignments = []
+        for key, value in (("token", '"first"'), ("apiKey", '"second"')):
+            start = source.index(key)
+            value_start = source.index(value)
+            assignments.append({"key": key, "operator": "=", "start": start,
+                                "valueStart": value_start,
+                                "end": value_start + len(value),
+                                "safeInitializer": False})
+        findings = self._scan_with_javascript_ast_record(source, assignments)
+        self.assertEqual(
+            [(finding.rule_id, finding.line) for finding in findings],
+            [("PUBLIC_CREDENTIAL_VALUE", 1), ("PUBLIC_CREDENTIAL_VALUE", 2)],
+        )
+
+    def test_javascript_ast_local_lines_use_universal_newlines(self):
+        value = "hardcoded-" + "newline"
+        literal = json.dumps(value)
+        for separator in ("\n", "\r\n", "\r"):
+            with self.subTest(separator=repr(separator)):
+                source = separator.join(("const safe = true;", f"const token = {literal};"))
+                findings = scan_public_text("frontend/newlines.ts", source)
+                self.assertEqual(
+                    [(finding.rule_id, finding.line) for finding in findings],
+                    [("PUBLIC_CREDENTIAL_VALUE", 2)],
                 )
                 self.assertNotIn(
                     value,
@@ -931,16 +1042,12 @@ class PublicReleaseCheckTests(unittest.TestCase):
         self.assertNotIn(value, json.dumps(result["findings"]))
 
     def _scan_with_javascript_ast_record(self, source, assignments):
-        payload = {
-            "files": [
-                {
-                    "path": "frontend/schema.ts",
-                    "ok": True,
-                    "assignments": assignments,
-                    "pureStringLiterals": [],
-                }
-            ]
-        }
+        ast_file = {"path": "frontend/schema.ts", "ok": True,
+                    "assignments": assignments, "pureStringLiterals": []}
+        return self._scan_with_javascript_ast_file(source, ast_file)
+
+    def _scan_with_javascript_ast_file(self, source, ast_file):
+        payload = {"files": [ast_file]}
         completed = SimpleNamespace(
             returncode=0, stdout=json.dumps(payload).encode(), stderr=b""
         )

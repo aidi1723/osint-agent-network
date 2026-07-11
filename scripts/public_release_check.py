@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from bisect import bisect_right
 from dataclasses import asdict, dataclass
 import hashlib
 import json
@@ -591,9 +592,16 @@ def _javascript_ast_record(
     path = record.get("path")
     if not isinstance(path, str) or path not in requested_texts:
         return None
+    expected_file_keys = (
+        {"path", "ok", "assignments", "pureStringLiterals"}
+        if record.get("ok") is True
+        else {"path", "ok", "errorLine", "assignments", "pureStringLiterals"}
+    )
+    if set(record) != expected_file_keys:
+        return None
     if record.get("ok") is not True:
         error_line = record.get("errorLine")
-        line_count = max(1, len(requested_texts[path].splitlines()))
+        line_count = len(_line_offsets(requested_texts[path]))
         return path, JavaScriptAstFile(
             {},
             (),
@@ -607,11 +615,16 @@ def _javascript_ast_record(
         return None
     source_text = requested_texts[path]
     offset_map = _utf16_offset_map(source_text)
+    source_line_offsets = _line_offsets(source_text)
     assignments: dict[int, list[tuple[str, str, str, bool]]] = {}
     assignment_records: list[tuple[int, int, int, str]] = []
     assignment_identities: set[tuple[int, int, int, str]] = set()
     for assignment in raw_assignments:
         if not isinstance(assignment, dict):
+            return None
+        if set(assignment) != {
+            "key", "operator", "start", "valueStart", "end", "safeInitializer"
+        }:
             return None
         key = assignment.get("key")
         operator = assignment.get("operator")
@@ -641,21 +654,25 @@ def _javascript_ast_record(
         assignment_identities.add(identity)
         assignment_records.append(identity)
         if _credential_key(key):
-            line = source_text.count("\n", 0, offset_map[start]) + 1
+            line = bisect_right(source_line_offsets, offset_map[start])
             value = source_text[offset_map[value_start] : offset_map[end]]
             assignments.setdefault(line, []).append(
                 (key, operator, value, safe_initializer)
             )
-    for index, (start, _value_start, end, _key) in enumerate(assignment_records):
-        for other_start, _other_value, other_end, _other_key in assignment_records[index + 1 :]:
-            if (start < other_start < end < other_end) or (
-                other_start < start < other_end < end
-            ):
+    credential_records = [
+        record for record in assignment_records if _credential_key(record[3])
+    ]
+    for index, (start, _value_start, end, _key) in enumerate(credential_records):
+        for other_start, _other_value, other_end, _other_key in credential_records[index + 1 :]:
+            overlaps = start < other_end and other_start < end
+            if overlaps and (start, end) != (other_start, other_end):
                 return None
     literals: list[tuple[int, int]] = []
     literal_ranges: set[tuple[int, int]] = set()
     for literal in raw_literals:
         if not isinstance(literal, dict):
+            return None
+        if set(literal) != {"start", "end"}:
             return None
         start = literal.get("start")
         end = literal.get("end")
@@ -670,6 +687,8 @@ def _javascript_ast_record(
             return None
         literal_range = (start, end)
         if literal_range in literal_ranges:
+            return None
+        if any(start < other_end and other_start < end for other_start, other_end in literal_ranges):
             return None
         literal_ranges.add(literal_range)
         literals.append((offset_map[start], offset_map[end]))
@@ -687,7 +706,7 @@ def _utf16_offset_map(text: str) -> dict[int, int]:
 
 def _line_offsets(text: str) -> list[int]:
     offsets = [0]
-    offsets.extend(match.end() for match in re.finditer("\n", text))
+    offsets.extend(match.end() for match in re.finditer(r"\r\n|\r|\n", text))
     return offsets
 
 

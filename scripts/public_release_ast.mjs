@@ -85,7 +85,18 @@ function parseFile(entry) {
   function collectAssignment(node) {
     if (node.initializer && node.name) {
       const operator = ts.isPropertyAssignment(node) ? ":" : "=";
-      for (const key of declarationKeys(node.name)) {
+      let keys;
+      if (ts.isBindingElement(node)) {
+        keys = bindingElementKeys(node);
+      } else if (
+        (ts.isVariableDeclaration(node) || ts.isParameter(node)) &&
+        (ts.isObjectBindingPattern(node.name) || ts.isArrayBindingPattern(node.name))
+      ) {
+        keys = bindingPatternKeysWithoutDefaults(node.name);
+      } else {
+        keys = declarationKeys(node.name);
+      }
+      for (const key of keys) {
         addAssignment(key, operator, node.initializer, node.name);
       }
     }
@@ -125,10 +136,31 @@ function targetKeys(node) {
 }
 
 function declarationKeys(node) {
+  if (ts.isObjectBindingPattern(node) || ts.isArrayBindingPattern(node)) {
+    return node.elements.flatMap((element) =>
+      ts.isBindingElement(element) ? bindingElementKeys(element) : [],
+    );
+  }
   const targets = targetKeys(node);
   if (targets.length) return targets;
   const key = propertyKey(node);
   return key ? [key] : [];
+}
+
+function bindingElementKeys(node) {
+  return node.propertyName
+    ? declarationKeys(node.propertyName)
+    : declarationKeys(node.name);
+}
+
+function bindingPatternKeysWithoutDefaults(node) {
+  return node.elements.flatMap((element) => {
+    if (!ts.isBindingElement(element) || element.initializer) return [];
+    if (ts.isObjectBindingPattern(element.name) || ts.isArrayBindingPattern(element.name)) {
+      return bindingPatternKeysWithoutDefaults(element.name);
+    }
+    return bindingElementKeys(element);
+  });
 }
 
 function propertyKey(node) {
