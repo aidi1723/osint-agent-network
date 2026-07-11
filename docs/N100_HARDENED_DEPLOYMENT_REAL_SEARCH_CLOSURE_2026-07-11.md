@@ -52,8 +52,8 @@ Production security settings confirmed after deployment:
 APP_ENV=production
 OSINT_COOKIE_SECURE=true
 OSINT_ALLOW_LEGACY_AGENT_TOKEN=false
-ADMIN_API_TOKEN=configured
-READ_API_TOKEN=configured
+ADMIN_API_TOKEN=<configured-admin-token>
+READ_API_TOKEN=<configured-read-token>
 OFFICIAL_SITE_SEARCH_BASE_URL=configured
 ```
 
