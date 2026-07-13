@@ -21,6 +21,12 @@ from app.tools.maigret import MaigretAdapter
 from app.tools.phoneinfoga import PhoneInfogaAdapter
 from app.tools.profile_parser import ProfileParserAdapter
 from app.tools.official_site_extractor import MAX_HTML_BYTES, OfficialSiteExtractorAdapter
+from app.tools.official_site_semantics import (
+    MAX_CONTACT_CANDIDATES,
+    MAX_JSON_LD_NODES,
+    extract_contact_candidates,
+    extract_scope_candidates,
+)
 from app.tools.official_site_search import OfficialSiteSearchAdapter
 from app.tools.spiderfoot import SpiderFootAdapter
 from app.tools.socialscan import SocialScanAdapter
@@ -483,6 +489,55 @@ class KatanaAdapterTests(unittest.TestCase):
         self.assertIn(("url", "https://example.com"), {(item.type, item.value) for item in parsed.entities})
 
 
+class OfficialSiteSemanticsTests(unittest.TestCase):
+    def test_semantics_bounds_self_referential_json_ld_containers(self):
+        related = []
+        product = {"@type": "Product", "name": "Top Pump", "related": related}
+        related.extend([product, related])
+
+        scopes = extract_scope_candidates([product], [], [], [], fixed_patterns=())
+        contacts = extract_contact_candidates([], [product])
+
+        self.assertEqual([candidate.value for candidate in scopes], ["Top Pump"])
+        self.assertEqual(contacts, [])
+
+    def test_parser_bounds_deep_json_ld(self):
+        payload = {"@type": "Product", "name": "Deep Product"}
+        for _ in range(80):
+            payload = {"child": payload}
+        html = (
+            '<html><head><script type="application/ld+json">'
+            + json.dumps(payload)
+            + "</script></head><body></body></html>"
+        )
+
+        parsed = OfficialSiteExtractorAdapter().parse_html(html, url="https://example.com/catalog")
+
+        self.assertNotIn(("business_scope", "Deep Product"), {(item.type, item.value) for item in parsed.entities})
+
+    def test_contact_extraction_stops_after_candidate_cap(self):
+        class ContactNodes:
+            def __iter__(self):
+                for index in range(MAX_CONTACT_CANDIDATES):
+                    yield {"email": f"person{index}@example.com"}
+                raise AssertionError("contact traversal exceeded the candidate cap")
+
+        contacts = extract_contact_candidates([], ContactNodes())
+
+        self.assertEqual(len(contacts), MAX_CONTACT_CANDIDATES)
+
+    def test_scope_traversal_stops_after_node_budget_for_primitive_roots(self):
+        class PrimitiveRoots:
+            def __iter__(self):
+                for _ in range(MAX_JSON_LD_NODES):
+                    yield "ignored"
+                raise AssertionError("scope traversal exceeded the node budget")
+
+        scopes = extract_scope_candidates(PrimitiveRoots(), [], [], [], fixed_patterns=())
+
+        self.assertEqual(scopes, [])
+
+
 class OfficialSiteExtractorAdapterTests(unittest.TestCase):
     def test_parser_extracts_visible_text_decision_maker_candidate(self):
         adapter = OfficialSiteExtractorAdapter()
@@ -682,6 +737,79 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
             ("Bob Jones", "bob.jones@example.com", "person_has_role_linked_contact"),
             relationships,
         )
+
+    def test_parser_does_not_cross_link_unrecognized_following_role(self):
+        parsed = OfficialSiteExtractorAdapter().parse_html(
+            """
+            <html><body>
+              <p>Alice Brown, Sales Manager; Bob Jones, Vice President; Email: bob.jones@example.com</p>
+            </body></html>
+            """,
+            url="https://example.com/team",
+        )
+
+        relationships = {
+            (item.from_value, item.to_value, item.relationship_type)
+            for item in parsed.relationships
+        }
+
+        self.assertNotIn(
+            ("Alice Brown", "bob.jones@example.com", "person_has_role_linked_contact"),
+            relationships,
+        )
+        self.assertNotIn(
+            ("Bob Jones", "bob.jones@example.com", "person_has_role_linked_contact"),
+            relationships,
+        )
+
+    def test_parser_does_not_link_department_contacts_to_named_person(self):
+        parsed = OfficialSiteExtractorAdapter().parse_html(
+            """
+            <html><body>
+              <p>Alice Brown, Sales Manager; Sales Team Phone: +1 202 555 0130 Email: team.contact@example.com</p>
+            </body></html>
+            """,
+            url="https://example.com/team",
+        )
+
+        relationships = {
+            (item.from_value, item.to_value, item.relationship_type)
+            for item in parsed.relationships
+        }
+
+        self.assertNotIn(
+            ("Alice Brown", "+12025550130", "person_has_role_linked_contact"),
+            relationships,
+        )
+        self.assertNotIn(
+            ("Alice Brown", "team.contact@example.com", "person_has_role_linked_contact"),
+            relationships,
+        )
+
+    def test_parser_rejects_generic_mission_heading_and_quote_scope(self):
+        parsed = OfficialSiteExtractorAdapter().parse_html(
+            "<html><body><h2>Our Mission</h2><p>We provide a quote.</p></body></html>",
+            url="https://example.com/about",
+        )
+
+        scopes = {item.value for item in parsed.entities if item.type == "business_scope"}
+
+        self.assertNotIn("Our Mission", scopes)
+        self.assertNotIn("a quote", scopes)
+
+    def test_parser_keeps_fixed_scope_when_heading_is_semantic(self):
+        parsed = OfficialSiteExtractorAdapter().parse_html(
+            "<html><body><h2>Industrial Pumps</h2><p>Auto parts</p></body></html>",
+            url="https://example.com/products",
+        )
+
+        entities = {(item.type, item.value) for item in parsed.entities}
+        evidence = {(item.entity_value, item.evidence_kind) for item in parsed.evidence}
+
+        self.assertIn(("business_scope", "Industrial Pumps"), entities)
+        self.assertIn(("business_scope", "auto parts"), entities)
+        self.assertIn(("Industrial Pumps", "official_site_business_scope_heading"), evidence)
+        self.assertIn(("auto parts", "official_site_business_scope"), evidence)
 
     def test_parser_preserves_fixed_automotive_scope_fallback(self):
         parsed = OfficialSiteExtractorAdapter().parse_html(

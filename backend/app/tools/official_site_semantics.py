@@ -22,6 +22,9 @@ BUSINESS_SCOPE_PATTERNS = (
 MAX_SCOPE_CANDIDATES = 8
 MAX_CONTACT_CANDIDATES = 12
 MAX_SNIPPET_CHARS = 280
+MAX_JSON_LD_DEPTH = 32
+MAX_JSON_LD_NODES = 256
+MAX_JSON_LD_STRING_VALUES = 32
 
 
 @dataclass(frozen=True)
@@ -63,12 +66,20 @@ _HEADING_PREFIX_RE = re.compile(
     r"\u4ea7\u54c1|\u670d\u52a1|\u4e1a\u52a1\u8303\u56f4)\s*[:\uff1a-]\s*",
     flags=re.IGNORECASE,
 )
+_HEADING_SCOPE_VOCAB_RE = re.compile(
+    r"\b(?:products?|services?|equipment|systems?|pumps?|windows?|doors?|parts?|components?|"
+    r"filtration|filters?|machinery|hardware|curtain\s+wall|pompes?|maintenance|hydraulique)\b|"
+    r"\u4ea7\u54c1|\u670d\u52a1|\u8bbe\u5907|\u7cfb\u7edf|\u6cf5|\u8fc7\u6ee4",
+    flags=re.IGNORECASE,
+)
 _ORGANIZATION_SUFFIX_RE = re.compile(
     r"\b(?:llc|inc|ltd|limited|company|corporation|corp|co\.?\s*ltd\.?)\b", flags=re.IGNORECASE
 )
 _EXCLUDED_SCOPE_VALUES = {
     "about",
     "about us",
+    "a quotation",
+    "a quote",
     "catalog",
     "contact",
     "contact us",
@@ -80,6 +91,8 @@ _EXCLUDED_SCOPE_VALUES = {
     "products",
     "product",
     "quality",
+    "quotation",
+    "quote",
     "services",
     "service",
     "solutions",
@@ -122,6 +135,9 @@ _GENERIC_EMAIL_LOCALS = {
 _NON_PERSONAL_CONTACT_CONTEXT_RE = re.compile(
     r"\b(?:generic|public)\s+(?:contact|inbox|email|phone|hotline|line)\b|"
     r"\b(?:general\s+(?:inquiries|contact)|main\s+(?:line|phone)|switchboard)\b|"
+    r"\b(?:sales|support|service|customer|marketing|procurement|purchasing|export)\s+"
+    r"(?:team|department|dept|desk|hotline|line|phone|email|contact|inbox)\b|"
+    r"\b(?:team|department|dept|desk)\s+(?:phone|email|hotline|line|contact|inbox)\b|\bhotline\b|"
     r"\u901a\u7528(?:\u90ae\u7bb1|\u7535\u8bdd)|\u516c\u5f00(?:\u8054\u7cfb|\u7535\u8bdd)|\u603b\u673a",
     flags=re.IGNORECASE,
 )
@@ -190,18 +206,17 @@ def extract_scope_candidates(
             for value in _cued_scope_values(sentence):
                 add(value, "official_site_business_scope_text", sentence, 0.70)
 
-    if not candidates:
-        fallback_text = _normalize_space(" ".join(text_blocks))
-        lowered_text = fallback_text.casefold()
-        for pattern in fixed_patterns:
-            if pattern.casefold() not in lowered_text:
-                continue
-            add(
-                pattern,
-                "official_site_business_scope",
-                _snippet_around(fallback_text, pattern),
-                0.64,
-            )
+    fallback_text = _normalize_space(" ".join(text_blocks))
+    lowered_text = fallback_text.casefold()
+    for pattern in fixed_patterns:
+        if pattern.casefold() not in lowered_text:
+            continue
+        add(
+            pattern,
+            "official_site_business_scope",
+            _snippet_around(fallback_text, pattern),
+            0.64,
+        )
 
     return candidates
 
@@ -212,11 +227,18 @@ def extract_contact_candidates(
     candidates: list[ContactCandidate] = []
     indexes: dict[str, int] = {}
 
-    for context in static_contexts:
+    static_context_iter = iter(static_contexts)
+    while len(candidates) < MAX_CONTACT_CANDIDATES:
+        try:
+            context = next(static_context_iter)
+        except StopIteration:
+            break
         normalized_context = _normalize_space(context)
         if not normalized_context:
             continue
         for match in _EMAIL_RE.finditer(normalized_context):
+            if len(candidates) >= MAX_CONTACT_CANDIDATES:
+                break
             contact_context, block_context, field_label = _contact_field_context(
                 normalized_context, match.start(), match.end()
             )
@@ -224,9 +246,11 @@ def extract_contact_candidates(
             _add_contact_candidate(
                 candidates,
                 indexes,
-                ContactCandidate("email", match.group(), classification, _bounded_snippet(contact_context)),
+                ContactCandidate("email", match.group(), classification, _bounded_snippet(block_context)),
             )
         for match in _PHONE_RE.finditer(normalized_context):
+            if len(candidates) >= MAX_CONTACT_CANDIDATES:
+                break
             contact_context, block_context, field_label = _contact_field_context(
                 normalized_context, match.start(), match.end()
             )
@@ -235,13 +259,22 @@ def extract_contact_candidates(
             _add_contact_candidate(
                 candidates,
                 indexes,
-                ContactCandidate(entity_type, match.group(), classification, _bounded_snippet(contact_context)),
+                ContactCandidate(entity_type, match.group(), classification, _bounded_snippet(block_context)),
             )
 
-    for node in _iter_json_nodes(structured_items):
+    structured_iter = iter(_iter_json_nodes(structured_items))
+    while len(candidates) < MAX_CONTACT_CANDIDATES:
+        try:
+            node = next(structured_iter)
+        except StopIteration:
+            break
         context = _json_contact_context(node)
         for field in ("email", "telephone", "phone", "faxNumber"):
+            if len(candidates) >= MAX_CONTACT_CANDIDATES:
+                break
             for value in _string_values(node.get(field)):
+                if len(candidates) >= MAX_CONTACT_CANDIDATES:
+                    break
                 classification = "fax" if field == "faxNumber" else _contact_classification(context)
                 entity_type = "fax" if classification == "fax" and field != "email" else (
                     "email" if field == "email" else "phone"
@@ -268,23 +301,44 @@ def is_role_linkable_contact(candidate: ContactCandidate) -> bool:
 
 
 def _iter_json_nodes(items: Iterable[dict]) -> Iterable[dict]:
-    seen: set[int] = set()
+    try:
+        roots = iter(items)
+    except TypeError:
+        return
 
-    def walk(value):
+    seen_containers: dict[int, object] = {}
+    stack = []
+    visited_nodes = 0
+    while visited_nodes < MAX_JSON_LD_NODES:
+        if not stack:
+            try:
+                stack.append((next(roots), 0))
+            except StopIteration:
+                break
+            except (RuntimeError, TypeError):
+                break
+        value, depth = stack.pop()
+        visited_nodes += 1
+        if not isinstance(value, (dict, list)):
+            continue
+        marker = id(value)
+        if marker in seen_containers:
+            continue
+        seen_containers[marker] = value
         if isinstance(value, dict):
-            marker = id(value)
-            if marker in seen:
-                return
-            seen.add(marker)
             yield value
-            for nested in value.values():
-                yield from walk(nested)
-        elif isinstance(value, list):
-            for nested in value:
-                yield from walk(nested)
-
-    for item in items:
-        yield from walk(item)
+        if depth >= MAX_JSON_LD_DEPTH:
+            continue
+        try:
+            children = value.values() if isinstance(value, dict) else value
+            bounded_children = []
+            for child in children:
+                if len(bounded_children) >= MAX_JSON_LD_NODES - visited_nodes:
+                    break
+                bounded_children.append(child)
+            stack.extend((child, depth + 1) for child in reversed(bounded_children))
+        except (RuntimeError, TypeError):
+            continue
 
 
 def _has_schema_scope_type(node: dict) -> bool:
@@ -294,14 +348,34 @@ def _has_schema_scope_type(node: dict) -> bool:
 
 
 def _string_values(value) -> list[str]:
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, list):
-        values: list[str] = []
-        for item in value:
-            values.extend(_string_values(item))
-        return values
-    return []
+    values: list[str] = []
+    seen_containers: dict[int, object] = {}
+    stack = [(value, 0)]
+    visited_nodes = 0
+    while stack and len(values) < MAX_JSON_LD_STRING_VALUES:
+        current, depth = stack.pop()
+        visited_nodes += 1
+        if isinstance(current, str):
+            values.append(current)
+            continue
+        if not isinstance(current, list):
+            continue
+        marker = id(current)
+        if marker in seen_containers or visited_nodes > MAX_JSON_LD_NODES:
+            continue
+        seen_containers[marker] = current
+        if depth >= MAX_JSON_LD_DEPTH:
+            continue
+        try:
+            bounded_items = []
+            for item in current:
+                if len(bounded_items) >= MAX_JSON_LD_NODES - visited_nodes:
+                    break
+                bounded_items.append(item)
+            stack.extend((item, depth + 1) for item in reversed(bounded_items))
+        except (RuntimeError, TypeError):
+            continue
+    return values
 
 
 def _cued_scope_values(value: str) -> list[str]:
@@ -316,10 +390,16 @@ def _heading_scope_values(value: str) -> list[str]:
     heading = _normalize_space(value).strip(" .,:;:-")
     if not heading or _ORGANIZATION_SUFFIX_RE.search(heading):
         return []
+    has_scope_prefix = bool(_HEADING_PREFIX_RE.match(heading))
     stripped = _HEADING_PREFIX_RE.sub("", heading)
-    if not _is_scope_value(stripped):
+    fragments = _scope_fragments(stripped)
+    if not fragments:
         return []
-    return _scope_fragments(stripped) or [stripped]
+    if has_scope_prefix or _HEADING_SCOPE_VOCAB_RE.search(stripped):
+        return fragments
+    if len(fragments) >= 2 and _SCOPE_FRAGMENT_SPLIT_RE.search(stripped):
+        return fragments
+    return []
 
 
 def _scope_fragments(value: str) -> list[str]:

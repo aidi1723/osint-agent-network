@@ -67,6 +67,12 @@ GENERIC_PERSON_LABELS = {
 }
 PERSON_HEADING_PREFIXES = {"leadership", "team", "management", "about", "contact"}
 MAX_HTML_BYTES = 2 * 1024 * 1024
+_PERSON_NAME_PATTERN = r"(?:[A-Z][A-Za-z'\u2019-]+(?:\s+[A-Z][A-Za-z'\u2019-]+){1,3}|[\u4e00-\u9fff]{2,4})"
+_TITLE_SHAPE_PATTERN = r"(?:[A-Z][A-Za-z'\u2019-]+(?:\s+[A-Z][A-Za-z'\u2019-]+){0,3}|[\u4e00-\u9fff]{2,8})"
+_NAME_TITLE_RECORD_RE = re.compile(
+    rf"(?P<name>{_PERSON_NAME_PATTERN})\s*[,\uff0c|-]\s*(?P<title>{_TITLE_SHAPE_PATTERN})"
+    rf"(?=$|[\s,\uff0c;\uff1b|:/()\-])"
+)
 
 
 class OfficialSiteExtractorAdapter:
@@ -464,7 +470,7 @@ def _structured_items(values: list[str]) -> list[dict]:
     for raw in values:
         try:
             parsed = json.loads(raw)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             continue
         if isinstance(parsed, list):
             items.extend(item for item in parsed if isinstance(item, dict))
@@ -552,16 +558,16 @@ def _json_ld_people(items: list[dict]) -> list[dict]:
 
 def _visible_text_people(text_blocks: list[str]) -> list[dict]:
     candidates = []
-    name_pattern = r"(?:[A-Z][A-Za-z'\u2019-]+(?:\s+[A-Z][A-Za-z'\u2019-]+){1,3}|[\u4e00-\u9fff]{2,4})"
     for part in text_blocks:
         window = _normalize_space(part)
         if not window:
             continue
+        boundary_starts = sorted({match.start() for match in _NAME_TITLE_RECORD_RE.finditer(window)})
         matches: list[tuple[int, int, str, str]] = []
         for marker in ROLE_MARKERS:
             marker_flags = re.IGNORECASE if marker.isascii() else 0
             for match in re.finditer(
-                rf"(?P<name>{name_pattern})\s*[,\uff0c|-]\s*(?P<title>{re.escape(marker)})(?=$|[\s,\uff0c;\uff1b|:/()\-])",
+                rf"(?P<name>{_PERSON_NAME_PATTERN})\s*[,\uff0c|-]\s*(?P<title>{re.escape(marker)})(?=$|[\s,\uff0c;\uff1b|:/()\-])",
                 window,
                 flags=marker_flags,
             ):
@@ -570,10 +576,12 @@ def _visible_text_people(text_blocks: list[str]) -> list[dict]:
                 if name and title:
                     matches.append((match.start(), match.end(), name, title))
         matches.sort(key=lambda item: (item[0], item[1], item[2].casefold(), item[3].casefold()))
-        for index, (start, _end, name, title) in enumerate(matches):
-            if index and start == matches[index - 1][0]:
+        seen_starts: set[int] = set()
+        for start, _end, name, title in matches:
+            if start in seen_starts:
                 continue
-            next_start = matches[index + 1][0] if index + 1 < len(matches) else len(window)
+            seen_starts.add(start)
+            next_start = next((item for item in boundary_starts if item > start), len(window))
             context = window[start : min(next_start, start + 240)]
             candidates.append({"name": name, "title": title, "confidence": 0.66, "context": context})
     return candidates
