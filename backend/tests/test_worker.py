@@ -639,6 +639,10 @@ class WorkerTests(unittest.TestCase):
 
     def test_planning_blocked_investigation_stays_blocked_when_run_jobs_is_invoked(self):
         store = MemoryStore()
+        health_snapshot = {
+            "summary": {"affected_capabilities": {"asset_discovery": ["amass"]}},
+            "tools": [],
+        }
         with (
             patch("app.core.tool_health.shutil.which", side_effect=lambda command: "/usr/bin/python3" if command == "python3" else None),
             patch("app.core.tool_health.Path.exists", return_value=False),
@@ -654,16 +658,20 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(store.list_jobs(investigation.id), [])
 
         with TemporaryDirectory() as tmpdir:
-            result = run_investigation_jobs(
-                store,
-                investigation.id,
-                max_jobs=1,
-                artifact_root=Path(tmpdir),
-            )
+            with patch("app.services.worker.build_tool_health_report", return_value=health_snapshot) as health_report:
+                result = run_investigation_jobs(
+                    store,
+                    investigation.id,
+                    max_jobs=1,
+                    artifact_root=Path(tmpdir),
+                )
 
         detail = store.get_investigation(investigation.id)
 
         self.assertEqual(result["started"], 0)
+        self.assertEqual(result["blocked"], 1)
+        self.assertEqual(result["tool_health"]["summary"]["affected_capabilities"], {"asset_discovery": ["amass"]})
+        health_report.assert_called_once_with()
         self.assertEqual(detail["status"], "BLOCKED")
         self.assertEqual(detail["summary"], "工具任务被环境依赖阻断")
         self.assertTrue(detail["metadata"]["initial_skipped_routes"])
@@ -965,6 +973,10 @@ class WorkerTests(unittest.TestCase):
 
     def test_worker_skips_when_investigation_already_has_running_job(self):
         store = MemoryStore()
+        health_snapshot = {
+            "summary": {"affected_capabilities": {"asset_discovery": ["amass"]}},
+            "tools": [],
+        }
         investigation = store.create_investigation(
             name="busy workflow",
             seed_type="domain",
@@ -975,16 +987,19 @@ class WorkerTests(unittest.TestCase):
         store.update_job_status(first_job["id"], "RUNNING")
 
         with TemporaryDirectory() as tmpdir:
-            result = run_investigation_jobs(
-                store,
-                investigation.id,
-                max_jobs=1,
-                artifact_root=Path(tmpdir),
-                adapter_factory=lambda name: FakeAdapter(),
-            )
+            with patch("app.services.worker.build_tool_health_report", return_value=health_snapshot) as health_report:
+                result = run_investigation_jobs(
+                    store,
+                    investigation.id,
+                    max_jobs=1,
+                    artifact_root=Path(tmpdir),
+                    adapter_factory=lambda name: FakeAdapter(),
+                )
 
         self.assertTrue(result["busy"])
         self.assertEqual(result["started"], 0)
+        self.assertEqual(result["tool_health"]["summary"]["affected_capabilities"], {"asset_discovery": ["amass"]})
+        health_report.assert_called_once_with()
 
     def test_heavy_tools_run_after_cross_verification_and_before_analysis(self):
         store = MemoryStore()

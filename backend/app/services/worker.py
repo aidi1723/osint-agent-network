@@ -93,6 +93,7 @@ def run_investigation_jobs(
         summary["quality_assessment"] = build_quality_assessment(detail)
         summary["completion_policy"] = build_completion_policy({**detail, "quality_assessment": summary["quality_assessment"]})
         summary["completion_mode"] = summary["completion_policy"]["completion_mode"]
+        summary["tool_health"] = build_tool_health_report()
         return summary
 
     if (
@@ -104,6 +105,7 @@ def run_investigation_jobs(
         summary["quality_assessment"] = build_quality_assessment(detail)
         summary["completion_policy"] = build_completion_policy({**detail, "quality_assessment": summary["quality_assessment"]})
         summary["completion_mode"] = summary["completion_policy"]["completion_mode"]
+        summary["tool_health"] = build_tool_health_report()
         return summary
 
     if _has_completed_analysis_judgement(detail):
