@@ -35,8 +35,15 @@ TERMINAL_STATUSES = {
 CONFLICT_STATUSES = {"CONFLICT", "CONFLICTED", "CONTRADICTED", "HIGH_RISK_CONFLICT"}
 IDENTITY_FIELD_KEYS = {"company_identity", "decision_maker", "identity"}
 VALID_REVIEWED_CONFLICT_OUTCOMES = {"false_conflict", "true_conflict"}
+SUCCESSFUL_COMPLETION_MODES = {"strict", "limited"}
 DEFAULT_MAX_POLLS = 12
 DEFAULT_TIMEOUT_SECONDS = 30
+MAX_POLL_ATTEMPTS = 20
+MAX_POLL_INTERVAL_SECONDS = 5.0
+MAX_TIMEOUT_SECONDS = 30
+MAX_CASE_WALL_SECONDS = 60.0
+MAX_RESPONSE_BYTES = 1_048_576
+RESPONSE_READ_CHUNK_BYTES = 64 * 1024
 
 
 class _NoRedirectHandler(HTTPRedirectHandler):
@@ -60,6 +67,10 @@ class _NoRedirectHandler(HTTPRedirectHandler):
 
 # Keep the request boundary patchable in tests while preventing redirect hops.
 urlopen = build_opener(_NoRedirectHandler()).open
+
+
+class _CaseDeadlineExceeded(RuntimeError):
+    pass
 
 
 def load_manifest(path: str | Path) -> dict[str, Any]:
@@ -219,6 +230,8 @@ def _resolve_bearer_token(token_env: str | None) -> str:
 def _validate_polling(max_polls: int, poll_interval: float, timeout_seconds: int) -> None:
     if type(max_polls) is not int or max_polls < 1:
         raise ValueError("max_polls must be a positive integer")
+    if max_polls > MAX_POLL_ATTEMPTS:
+        raise ValueError(f"max_polls must not exceed {MAX_POLL_ATTEMPTS}")
     if (
         not isinstance(poll_interval, (int, float))
         or isinstance(poll_interval, bool)
@@ -226,8 +239,12 @@ def _validate_polling(max_polls: int, poll_interval: float, timeout_seconds: int
         or poll_interval < 0
     ):
         raise ValueError("poll_interval must be a finite nonnegative number")
+    if poll_interval > MAX_POLL_INTERVAL_SECONDS:
+        raise ValueError(f"poll_interval must not exceed {MAX_POLL_INTERVAL_SECONDS}")
     if type(timeout_seconds) is not int or timeout_seconds < 1:
         raise ValueError("timeout_seconds must be a positive integer")
+    if timeout_seconds > MAX_TIMEOUT_SECONDS:
+        raise ValueError(f"timeout_seconds must not exceed {MAX_TIMEOUT_SECONDS}")
 
 
 def _execute_case(
@@ -239,6 +256,7 @@ def _execute_case(
     poll_interval: float,
     timeout_seconds: int,
 ) -> dict[str, Any]:
+    deadline = time.monotonic() + MAX_CASE_WALL_SECONDS
     result: dict[str, Any] = {
         "case_id": case["id"],
         "seed_type": case["seed_type"],
@@ -262,8 +280,11 @@ def _execute_case(
             f"{base_url}/api/investigations",
             create_payload,
             token=token,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=_request_timeout(deadline, timeout_seconds),
+            deadline=deadline,
         )
+    except _CaseDeadlineExceeded as exc:
+        return _record_non_success(result, "TIME_BUDGET_EXCEEDED", exc)
     except (HTTPError, URLError, OSError, ValueError) as exc:
         result["error"] = _error_message(exc)
         return result
@@ -282,8 +303,11 @@ def _execute_case(
             f"{base_url}/api/investigations/{quote(investigation_id, safe='')}/run-jobs",
             {},
             token=token,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=_request_timeout(deadline, timeout_seconds),
+            deadline=deadline,
         )
+    except _CaseDeadlineExceeded as exc:
+        return _record_non_success(result, "TIME_BUDGET_EXCEEDED", exc)
     except (HTTPError, URLError, OSError, ValueError) as exc:
         result["error"] = _error_message(exc)
         return result
@@ -302,19 +326,38 @@ def _execute_case(
                 detail_url,
                 None,
                 token=token,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=_request_timeout(deadline, timeout_seconds),
+                deadline=deadline,
             )
+        except _CaseDeadlineExceeded as exc:
+            return _record_non_success(result, "TIME_BUDGET_EXCEEDED", exc)
         except (HTTPError, URLError, OSError, ValueError) as exc:
             result["error"] = _error_message(exc)
             return result
 
+        if time.monotonic() >= deadline:
+            return _record_non_success(
+                result,
+                "TIME_BUDGET_EXCEEDED",
+                _CaseDeadlineExceeded("per-case wall-time budget exhausted"),
+            )
         result["poll_count"] = poll_index + 1
         status = _detail_status(detail)
         result["status"] = status
         if status in TERMINAL_STATUSES:
             break
         if poll_index + 1 < max_polls and poll_interval:
-            time.sleep(poll_interval)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return _record_non_success(
+                    result,
+                    "TIME_BUDGET_EXCEEDED",
+                    _CaseDeadlineExceeded("per-case wall-time budget exhausted"),
+                )
+            try:
+                time.sleep(min(poll_interval, remaining))
+            except OverflowError as exc:
+                return _record_non_success(result, "POLLING_ERROR", exc)
 
     if detail is None:
         return result
@@ -333,6 +376,7 @@ def _request_json(
     *,
     token: str,
     timeout_seconds: int,
+    deadline: float,
 ) -> dict[str, Any]:
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     headers = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
@@ -340,11 +384,15 @@ def _request_json(
         headers["Content-Type"] = "application/json"
     request = Request(url, data=data, headers=headers, method=method)
     with urlopen(request, timeout=timeout_seconds) as response:
-        body = response.read()
+        declared_length = _declared_content_length(response)
+        if declared_length is not None and declared_length > MAX_RESPONSE_BYTES:
+            raise ValueError(f"API response exceeds {MAX_RESPONSE_BYTES} bytes")
+        body = _read_capped_response(response, deadline, timeout_seconds)
     try:
-        decoded = json.loads(body.decode("utf-8"))
-    except (AttributeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        decoded = json.loads(bytes(body).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("API response must be a JSON object") from exc
+    _remaining_deadline_seconds(deadline)
     if not isinstance(decoded, dict):
         raise ValueError("API response must be a JSON object")
     return decoded
@@ -359,12 +407,12 @@ def _is_completed(detail: dict[str, Any], status: str) -> bool:
     if status != "COMPLETED":
         return False
     policy = _completion_policy(detail)
-    return policy.get("completion_mode") not in {
-        "blocked_by_environment",
-        "continue_collection",
-        "failed",
-        "ready_for_human_decision",
-    }
+    completion_mode = policy.get("completion_mode")
+    return (
+        isinstance(completion_mode, str)
+        and completion_mode in SUCCESSFUL_COMPLETION_MODES
+        and policy.get("manual_decision_required") is False
+    )
 
 
 def _needs_manual_intervention(detail: dict[str, Any], completed: bool) -> bool:
@@ -412,6 +460,75 @@ def _reviewed_conflict_outcomes(detail: dict[str, Any]) -> list[str]:
 def _completion_policy(detail: dict[str, Any]) -> dict[str, Any]:
     policy = detail.get("completion_policy")
     return policy if isinstance(policy, dict) else {}
+
+
+def _request_timeout(deadline: float, timeout_seconds: int) -> float:
+    return min(timeout_seconds, _remaining_deadline_seconds(deadline))
+
+
+def _remaining_deadline_seconds(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _CaseDeadlineExceeded("per-case wall-time budget exhausted")
+    return remaining
+
+
+def _record_non_success(result: dict[str, Any], status: str, exc: Exception) -> dict[str, Any]:
+    result["status"] = status
+    result["error"] = _error_message(exc)
+    return result
+
+
+def _declared_content_length(response: object) -> int | None:
+    headers = getattr(response, "headers", None)
+    if headers is None or not hasattr(headers, "get"):
+        return None
+    raw_length = headers.get("Content-Length")
+    if raw_length is None:
+        return None
+    try:
+        length = int(raw_length)
+    except (TypeError, ValueError):
+        return None
+    return length if length >= 0 else None
+
+
+def _read_capped_response(response: object, deadline: float, timeout_seconds: int) -> bytes:
+    chunks = []
+    total = 0
+    while True:
+        remaining = _remaining_deadline_seconds(deadline)
+        _set_response_timeout(response, min(remaining, timeout_seconds))
+        read_size = min(RESPONSE_READ_CHUNK_BYTES, MAX_RESPONSE_BYTES - total + 1)
+        read1 = getattr(response, "read1", None)
+        reader = read1 if callable(read1) else getattr(response, "read")
+        chunk = reader(read_size)
+        if not isinstance(chunk, (bytes, bytearray)):
+            raise ValueError("API response must be bytes")
+        if time.monotonic() >= deadline:
+            _close_response(response)
+            raise _CaseDeadlineExceeded("per-case wall-time budget exhausted")
+        if not chunk:
+            return b"".join(chunks)
+        total += len(chunk)
+        if total > MAX_RESPONSE_BYTES:
+            raise ValueError(f"API response exceeds {MAX_RESPONSE_BYTES} bytes")
+        chunks.append(bytes(chunk))
+
+
+def _set_response_timeout(response: object, timeout_seconds: float) -> None:
+    fp = getattr(response, "fp", None)
+    raw = getattr(fp, "raw", None)
+    socket = getattr(raw, "_sock", None)
+    settimeout = getattr(socket, "settimeout", None)
+    if callable(settimeout):
+        settimeout(timeout_seconds)
+
+
+def _close_response(response: object) -> None:
+    close = getattr(response, "close", None)
+    if callable(close):
+        close()
 
 
 def _error_message(exc: Exception) -> str:

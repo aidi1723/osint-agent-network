@@ -66,6 +66,13 @@ does not retry create or run-jobs mutations, and rejects redirect hops so the
 bearer token remains scoped to the validated base URL. The schema-only example
 is rejected with `--execute` because its case sets `real_target: false`.
 
+Execution has fixed resource limits: at most `20` detail polls, a `5` second
+maximum poll interval, a `30` second maximum request timeout, and a `60`
+second wall-time budget per case across create, run, and polling. Values above
+those limits are rejected before HTTP access. A deadline or polling sleep error
+is reported as a non-success outcome. JSON responses are capped at `1 MiB`;
+oversized declared or streamed responses are rejected as non-successes.
+
 ## Reading Results
 
 - `status_counts`: final observed investigation statuses, including pending,
