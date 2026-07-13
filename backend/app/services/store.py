@@ -695,6 +695,7 @@ class MemoryStore:
         summary: str,
         report_markdown: str,
         confidence: float | None,
+        tool_health: dict | None = None,
     ) -> dict | None:
         if required_tier != "reporter":
             return None
@@ -714,6 +715,7 @@ class MemoryStore:
                 summary,
                 report_markdown,
                 confidence,
+                tool_health=tool_health,
             )
 
     def claim_task(self, agent_id: str, capabilities: object) -> dict | None:
@@ -1155,6 +1157,7 @@ class MemoryStore:
         summary: str,
         report_markdown: str,
         confidence: float | None,
+        tool_health: dict | None = None,
     ) -> dict | None:
         with self.lock:
             return self._complete_task_locked(
@@ -1164,6 +1167,7 @@ class MemoryStore:
                 summary,
                 report_markdown,
                 confidence,
+                tool_health=tool_health,
             )
 
     def _complete_task_locked(
@@ -1174,6 +1178,7 @@ class MemoryStore:
         summary: str,
         report_markdown: str,
         confidence: float | None,
+        tool_health: dict | None = None,
     ) -> dict | None:
         investigation = self.investigations.get(investigation_id)
         if investigation is None:
@@ -1186,7 +1191,7 @@ class MemoryStore:
         _apply_gap_plans(preview)
         preview["completion_policy"] = build_completion_policy(preview)
         final_status = _policy_status_for_detail(preview, status)
-        final_report = render_structured_report(preview, assessment)
+        final_report = render_structured_report(preview, assessment, tool_health=tool_health)
         now = _now()
         original = {
             "status": investigation.status,
@@ -2479,6 +2484,7 @@ class SQLiteStore:
         summary: str,
         report_markdown: str,
         confidence: float | None,
+        tool_health: dict | None = None,
     ) -> dict | None:
         if required_tier != "reporter":
             return None
@@ -2503,7 +2509,7 @@ class SQLiteStore:
             _apply_gap_plans(preview)
             preview["completion_policy"] = build_completion_policy(preview)
             final_status = _policy_status_for_detail(preview, status)
-            final_report = render_structured_report(preview, assessment)
+            final_report = render_structured_report(preview, assessment, tool_health=tool_health)
             now = _now()
             conn.execute(
                 """
@@ -3096,6 +3102,7 @@ class SQLiteStore:
         summary: str,
         report_markdown: str,
         confidence: float | None,
+        tool_health: dict | None = None,
     ) -> dict | None:
         now = _now()
         detail = self.get_investigation(investigation_id)
@@ -3108,7 +3115,7 @@ class SQLiteStore:
         _apply_gap_plans(detail)
         detail["completion_policy"] = build_completion_policy(detail)
         final_status = _policy_status_for_detail(detail, status)
-        final_report = render_structured_report(detail, assessment)
+        final_report = render_structured_report(detail, assessment, tool_health=tool_health)
         with self.lock, closing(self._connect()) as conn, conn:
             row = conn.execute(
                 "SELECT id FROM investigations WHERE id = ?",

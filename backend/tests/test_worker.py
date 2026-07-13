@@ -1720,6 +1720,84 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(render_report.call_args.kwargs["tool_health"], health_snapshot)
         self.assertEqual(detail["status"], "COMPLETED")
 
+    def test_worker_persists_environment_coverage_limit_for_memory_and_sqlite_stores(self):
+        health_snapshot = {
+            "summary": {"affected_capabilities": {"asset_discovery": ["amass"]}},
+            "tools": [],
+        }
+
+        with TemporaryDirectory() as tmpdir:
+            stores = [
+                ("memory", MemoryStore()),
+                ("sqlite", SQLiteStore(str(Path(tmpdir) / "osint.sqlite"))),
+            ]
+            for store_name, store in stores:
+                with self.subTest(store=store_name):
+                    investigation = store.create_investigation(
+                        name=f"{store_name} environment coverage refresh",
+                        seed_type="company",
+                        seed_value="Example Trading LLC",
+                        strategy_name="quick",
+                    )
+                    store.replace_jobs(investigation.id, [])
+
+                    with patch("app.services.worker.build_tool_health_report", return_value=health_snapshot):
+                        result = run_investigation_jobs(
+                            store,
+                            investigation.id,
+                            max_jobs=1,
+                            artifact_root=Path(tmpdir),
+                        )
+
+                    detail = store.get_investigation(investigation.id)
+                    self.assertEqual(result["tool_health"], health_snapshot)
+                    self.assertIn("## 环境覆盖限制", detail["report_markdown"])
+                    self.assertIn("asset_discovery", detail["report_markdown"])
+                    self.assertIn("amass", detail["report_markdown"])
+                    self.assertEqual(detail["status"], "NEEDS_REVIEW")
+                    self.assertFalse(result["quality_assessment"]["completion_ready"])
+
+    def test_sqlite_agent_completion_persists_supplied_environment_coverage_limit(self):
+        health_snapshot = {
+            "summary": {"affected_capabilities": {"asset_discovery": ["amass"]}},
+            "tools": [],
+        }
+
+        with TemporaryDirectory() as tmpdir:
+            store = SQLiteStore(str(Path(tmpdir) / "osint.sqlite"))
+            reporter = store.register_agent(
+                agent_name="environment-coverage-reporter",
+                agent_type="reporter",
+                capabilities=["domain"],
+                role_tier="reporter",
+            )
+            investigation = store.create_investigation(
+                name="SQLite agent environment coverage refresh",
+                seed_type="domain",
+                seed_value="example-target.test",
+                strategy_name="quick",
+            )
+            claimed = store.claim_task(reporter["id"], ["domain"])
+            self.assertEqual(claimed["id"], investigation.id)
+
+            completed = store.agent_complete_task(
+                agent_id=reporter["id"],
+                required_tier="reporter",
+                investigation_id=investigation.id,
+                job_id=None,
+                status="NEEDS_REVIEW",
+                summary="Environment coverage refresh.",
+                report_markdown="## BLUF\nEnvironment coverage refresh.",
+                confidence=0.5,
+                tool_health=health_snapshot,
+            )
+
+        self.assertIsNotNone(completed)
+        self.assertIn("## 环境覆盖限制", completed["report_markdown"])
+        self.assertIn("asset_discovery", completed["report_markdown"])
+        self.assertIn("amass", completed["report_markdown"])
+        self.assertEqual(completed["status"], "NEEDS_REVIEW")
+
     def test_completed_quality_gate_summary_is_stable_when_rerun_has_no_jobs(self):
         store = MemoryStore()
         investigation = store.create_investigation(

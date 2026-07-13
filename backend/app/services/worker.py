@@ -179,6 +179,7 @@ def run_investigation_jobs(
             summary=summary_text,
             report_markdown=report_markdown,
             confidence=_confidence_from_risk(risk_report),
+            tool_health=tool_health,
         )
     else:
         store.set_investigation_status(
