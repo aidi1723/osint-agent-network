@@ -21,9 +21,11 @@ from app.tools.maigret import MaigretAdapter
 from app.tools.phoneinfoga import PhoneInfogaAdapter
 from app.tools.profile_parser import ProfileParserAdapter
 from app.tools.official_site_extractor import MAX_HTML_BYTES, OfficialSiteExtractorAdapter
+from app.tools import official_site_semantics
 from app.tools.official_site_semantics import (
     MAX_CONTACT_CANDIDATES,
     MAX_JSON_LD_NODES,
+    MAX_SCOPE_CANDIDATES,
     extract_contact_candidates,
     extract_scope_candidates,
 )
@@ -526,6 +528,22 @@ class OfficialSiteSemanticsTests(unittest.TestCase):
 
         self.assertEqual(len(contacts), MAX_CONTACT_CANDIDATES)
 
+    def test_static_contact_extraction_bounds_duplicate_raw_matches_per_block(self):
+        raw_match_budget = MAX_CONTACT_CANDIDATES * 4
+        context = " ; ".join(
+            "Email: repeat@example.com; Phone: +1 202 555 0100"
+            for _ in range(raw_match_budget)
+        )
+
+        with patch(
+            "app.tools.official_site_semantics._static_contact_classification",
+            wraps=official_site_semantics._static_contact_classification,
+        ) as classify:
+            contacts = extract_contact_candidates([context], [])
+
+        self.assertEqual(len(contacts), 2)
+        self.assertEqual(classify.call_count, raw_match_budget)
+
     def test_scope_traversal_stops_after_node_budget_for_primitive_roots(self):
         class PrimitiveRoots:
             def __iter__(self):
@@ -536,6 +554,27 @@ class OfficialSiteSemanticsTests(unittest.TestCase):
         scopes = extract_scope_candidates(PrimitiveRoots(), [], [], [], fixed_patterns=())
 
         self.assertEqual(scopes, [])
+
+    def test_scope_keeps_fixed_pattern_when_semantic_candidates_fill_cap(self):
+        headings = (
+            "Industrial Pumps",
+            "Hydraulic Pumps",
+            "Filtration Systems",
+            "Window Systems",
+            "Door Hardware",
+            "Curtain Wall Systems",
+            "Industrial Machinery",
+            "Pump Equipment",
+        )
+
+        scopes = extract_scope_candidates([], [], headings, ["Auto parts"])
+
+        self.assertEqual(len(scopes), MAX_SCOPE_CANDIDATES)
+        self.assertIn("auto parts", [candidate.value for candidate in scopes])
+        self.assertIn(
+            ("auto parts", "official_site_business_scope"),
+            {(candidate.value, candidate.evidence_kind) for candidate in scopes},
+        )
 
 
 class OfficialSiteExtractorAdapterTests(unittest.TestCase):
@@ -788,14 +827,22 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
 
     def test_parser_rejects_generic_mission_heading_and_quote_scope(self):
         parsed = OfficialSiteExtractorAdapter().parse_html(
-            "<html><body><h2>Our Mission</h2><p>We provide a quote.</p></body></html>",
+            """
+            <html><body>
+              <h2>Our Mission &amp; Values</h2>
+              <p>We provide a free quote.</p>
+              <p>We offer a free quotation.</p>
+            </body></html>
+            """,
             url="https://example.com/about",
         )
 
         scopes = {item.value for item in parsed.entities if item.type == "business_scope"}
 
         self.assertNotIn("Our Mission", scopes)
-        self.assertNotIn("a quote", scopes)
+        self.assertNotIn("Values", scopes)
+        self.assertNotIn("a free quote", scopes)
+        self.assertNotIn("a free quotation", scopes)
 
     def test_parser_keeps_fixed_scope_when_heading_is_semantic(self):
         parsed = OfficialSiteExtractorAdapter().parse_html(

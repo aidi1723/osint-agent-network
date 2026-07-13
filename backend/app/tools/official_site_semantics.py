@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass
 import re
 from typing import Iterable, Sequence
@@ -21,6 +22,8 @@ BUSINESS_SCOPE_PATTERNS = (
 )
 MAX_SCOPE_CANDIDATES = 8
 MAX_CONTACT_CANDIDATES = 12
+# Bound raw static matches separately so repeated values cannot bypass the result cap.
+MAX_STATIC_CONTACT_MATCHES = MAX_CONTACT_CANDIDATES * 4
 MAX_SNIPPET_CHARS = 280
 MAX_JSON_LD_DEPTH = 32
 MAX_JSON_LD_NODES = 256
@@ -46,6 +49,9 @@ class ContactCandidate:
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _PHONE_RE = re.compile(
     r"(?:\+\d[\d .()/-]{7,}\d|\b0?\d{2,3}[\s.-]\d{3,4}[\s.-]\d{4}\b|\b\d{3}[\s.-]\d{3}[\s.-]\d{4}\b)"
+)
+_STATIC_CONTACT_RE = re.compile(
+    rf"(?P<email>{_EMAIL_RE.pattern})|(?P<phone>{_PHONE_RE.pattern})"
 )
 _ENGLISH_SCOPE_CUE_RE = re.compile(
     r"\b(?:we\s+)?(?:manufacture|manufactures|supply|supplies|provide|provides|offer|offers|"
@@ -111,11 +117,13 @@ _EXCLUDED_SCOPE_TEXT_RE = re.compile(
     ,
     flags=re.IGNORECASE,
 )
+_QUOTE_SCOPE_TOKEN_RE = re.compile(r"\b(?:quotes?|quotations?)\b", flags=re.IGNORECASE)
 _FAX_RE = re.compile(r"\bfax\b|\u4f20\u771f", flags=re.IGNORECASE)
 _FIELD_LABEL_RE = re.compile(
     r"\bfax\b|\b(?:phone|telephone|tel|email|e-mail)\b|\u4f20\u771f|\u7535\u8bdd|\u90ae\u7bb1",
     flags=re.IGNORECASE,
 )
+_CONTACT_BLOCK_SEPARATOR_RE = re.compile(r"[;|]")
 _CUSTOMER_SERVICE_RE = re.compile(
     r"\bcustomer\s+service\b|\bcustomer\s+support\b|\bsupport\b|\bservice\s+hotline\b|"
     r"\u5ba2\u670d|\u5ba2\u6237\u670d\u52a1|\u552e\u540e",
@@ -162,6 +170,13 @@ def extract_scope_candidates(
 ) -> list[ScopeCandidate]:
     candidates: list[ScopeCandidate] = []
     seen: set[str] = set()
+    fallback_text = _normalize_space(" ".join(text_blocks))
+    lowered_fallback_text = fallback_text.casefold()
+    matching_fixed_patterns = [
+        pattern
+        for pattern in fixed_patterns
+        if _is_scope_value(pattern) and pattern.casefold() in lowered_fallback_text
+    ]
 
     def add(value: str, evidence_kind: str, snippet: str, confidence: float) -> None:
         normalized_value = _normalize_space(value).strip(" .,:;:-")
@@ -206,11 +221,14 @@ def extract_scope_candidates(
             for value in _cued_scope_values(sentence):
                 add(value, "official_site_business_scope_text", sentence, 0.70)
 
-    fallback_text = _normalize_space(" ".join(text_blocks))
-    lowered_text = fallback_text.casefold()
-    for pattern in fixed_patterns:
-        if pattern.casefold() not in lowered_text:
-            continue
+    if len(candidates) >= MAX_SCOPE_CANDIDATES:
+        for pattern in matching_fixed_patterns:
+            if pattern.casefold() not in seen:
+                removed = candidates.pop()
+                seen.remove(removed.value.casefold())
+                break
+
+    for pattern in matching_fixed_patterns:
         add(
             pattern,
             "official_site_business_scope",
@@ -236,30 +254,19 @@ def extract_contact_candidates(
         normalized_context = _normalize_space(context)
         if not normalized_context:
             continue
-        for match in _EMAIL_RE.finditer(normalized_context):
+        for match, entity_type, block_context, field_label in _static_contact_matches(normalized_context):
             if len(candidates) >= MAX_CONTACT_CANDIDATES:
                 break
-            contact_context, block_context, field_label = _contact_field_context(
-                normalized_context, match.start(), match.end()
-            )
             classification = _static_contact_classification(block_context, field_label)
             _add_contact_candidate(
                 candidates,
                 indexes,
-                ContactCandidate("email", match.group(), classification, _bounded_snippet(block_context)),
-            )
-        for match in _PHONE_RE.finditer(normalized_context):
-            if len(candidates) >= MAX_CONTACT_CANDIDATES:
-                break
-            contact_context, block_context, field_label = _contact_field_context(
-                normalized_context, match.start(), match.end()
-            )
-            classification = _static_contact_classification(block_context, field_label)
-            entity_type = "fax" if classification == "fax" else "phone"
-            _add_contact_candidate(
-                candidates,
-                indexes,
-                ContactCandidate(entity_type, match.group(), classification, _bounded_snippet(block_context)),
+                ContactCandidate(
+                    "fax" if entity_type == "phone" and classification == "fax" else entity_type,
+                    match.group(),
+                    classification,
+                    _bounded_snippet(block_context),
+                ),
             )
 
     structured_iter = iter(_iter_json_nodes(structured_items))
@@ -395,9 +402,7 @@ def _heading_scope_values(value: str) -> list[str]:
     fragments = _scope_fragments(stripped)
     if not fragments:
         return []
-    if has_scope_prefix or _HEADING_SCOPE_VOCAB_RE.search(stripped):
-        return fragments
-    if len(fragments) >= 2 and _SCOPE_FRAGMENT_SPLIT_RE.search(stripped):
+    if all(has_scope_prefix or _HEADING_SCOPE_VOCAB_RE.search(fragment) for fragment in fragments):
         return fragments
     return []
 
@@ -417,7 +422,11 @@ def _is_scope_value(value: str) -> bool:
     if len(normalized) < 3 or len(normalized) > 180:
         return False
     lowered = normalized.casefold()
-    if lowered in _EXCLUDED_SCOPE_VALUES or _EXCLUDED_SCOPE_TEXT_RE.search(normalized):
+    if (
+        lowered in _EXCLUDED_SCOPE_VALUES
+        or _EXCLUDED_SCOPE_TEXT_RE.search(normalized)
+        or _QUOTE_SCOPE_TOKEN_RE.search(normalized)
+    ):
         return False
     return True
 
@@ -448,14 +457,22 @@ def _json_contact_context(node: dict) -> str:
     )
 
 
-def _contact_field_context(context: str, start: int, end: int) -> tuple[str, str, str]:
-    block_start = max(context.rfind(marker, 0, start) for marker in (";", "|")) + 1
-    block_context = context[block_start:end]
-    labels = list(_FIELD_LABEL_RE.finditer(context, block_start, start))
-    if not labels:
-        return context[max(block_start, start - 96) : end], block_context, ""
-    previous_label_end = labels[-2].end() if len(labels) > 1 else block_start
-    return context[max(previous_label_end, start - 96) : end], block_context, labels[-1].group()
+def _static_contact_matches(context: str) -> Iterable[tuple[re.Match[str], str, str, str]]:
+    labels = tuple(_FIELD_LABEL_RE.finditer(context))
+    label_ends = tuple(label.end() for label in labels)
+    separators = tuple(match.start() for match in _CONTACT_BLOCK_SEPARATOR_RE.finditer(context))
+
+    for raw_match_count, match in enumerate(_STATIC_CONTACT_RE.finditer(context)):
+        if raw_match_count >= MAX_STATIC_CONTACT_MATCHES:
+            break
+        block_index = bisect_right(separators, match.start()) - 1
+        block_start = separators[block_index] + 1 if block_index >= 0 else 0
+        label_index = bisect_right(label_ends, match.start()) - 1
+        field_label = ""
+        if label_index >= 0 and labels[label_index].start() >= block_start:
+            field_label = labels[label_index].group()
+        entity_type = "email" if match.lastgroup == "email" else "phone"
+        yield match, entity_type, context[block_start : match.end()], field_label
 
 
 def _static_contact_classification(block_context: str, field_label: str) -> str:
