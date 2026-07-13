@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from app.core.safe_http import (
     FakeIpAllowance,
+    FakeIpApprovalRequired,
     InvalidFakeIpConfiguration,
     SafeHttpError,
     SafeHttpResponse,
@@ -695,18 +696,9 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
         safe_fetch_mock.assert_not_called()
 
     def test_run_returns_sanitized_fake_ip_review_diagnostic(self):
-        class ReviewRequired(SafeHttpError):
-            def __init__(self, hostname):
-                self.hostname = hostname
-                super().__init__("fake-IP host requires review")
-
         target = "https://example.com/private-token"
-        review_error = ReviewRequired("www.example.com")
+        review_error = FakeIpApprovalRequired("www.example.com")
         with patch(
-            "app.tools.official_site_extractor.FakeIpApprovalRequired",
-            ReviewRequired,
-            create=True,
-        ), patch(
             "app.tools.official_site_extractor.safe_fetch",
             side_effect=review_error,
         ):
@@ -722,6 +714,8 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
         self.assertNotIn("private-token", result.stderr_excerpt)
         self.assertNotIn("198.18.100.99", result.stderr_excerpt)
         self.assertNotIn("resolver", result.stderr_excerpt)
+        self.assertNotIn("private-token", repr(result))
+        self.assertNotIn("198.18.100.99", repr(result))
 
     def test_run_bounds_high_ratio_gzip_expansion(self):
         expanded = b"A" * (32 * 1024 * 1024)

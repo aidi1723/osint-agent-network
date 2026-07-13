@@ -15,6 +15,7 @@ from app.core.normalization import NormalizationError, normalize_target
 from app.core.safe_http import (
     BlockedNetworkTarget,
     FakeIpAllowance,
+    FakeIpApprovalRequired,
     InvalidFakeIpConfiguration,
     InvalidHttpTarget,
     RedirectLimitExceeded,
@@ -169,6 +170,24 @@ class SafeHttpValidationTests(unittest.TestCase):
         self.assertEqual(getattr(caught.exception, "hostname", None), "www.example.com")
         self.assertEqual(str(caught.exception), "fake-IP host requires review")
 
+    def test_approval_file_blocks_mixed_fake_and_other_answers_without_review(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = write_approval_file(tmpdir, approval_payload())
+            allowance = fake_ip_allowance_from_env(
+                {"OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE": str(path)},
+                now=APPROVAL_NOW,
+            )
+
+        for addresses in (("198.18.100.99", PUBLIC_IP), ("198.18.100.99", "10.0.0.1")):
+            with self.subTest(addresses=addresses):
+                with self.assertRaises(BlockedNetworkTarget) as caught:
+                    validate_public_url(
+                        "https://www.example.com/",
+                        resolver=resolver_for(*addresses),
+                        fake_ip_allowance=allowance,
+                    )
+                self.assertNotIsInstance(caught.exception, FakeIpApprovalRequired)
+
     def test_approval_file_rejects_expired_records(self):
         expired = approval_payload(
             approvals=[
@@ -192,6 +211,37 @@ class SafeHttpValidationTests(unittest.TestCase):
                     {"OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE": str(path)},
                     now=APPROVAL_NOW,
                 )
+
+    def test_approval_file_rejects_each_missing_approval_field(self):
+        approval = {
+            "hostname": "example.com",
+            "approved_by": "security@example.com",
+            "reason": "transparent proxy routing",
+            "approved_at": (APPROVAL_NOW - timedelta(days=1)).isoformat(),
+            "expires_at": (APPROVAL_NOW + timedelta(days=1)).isoformat(),
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for missing_field in ("approved_by", "reason", "approved_at", "expires_at"):
+                with self.subTest(missing_field=missing_field):
+                    payload = approval_payload(
+                        approvals=[
+                            {
+                                field: value
+                                for field, value in approval.items()
+                                if field != missing_field
+                            }
+                        ]
+                    )
+                    path = write_approval_file(tmpdir, payload)
+                    with self.assertRaisesRegex(
+                        InvalidFakeIpConfiguration,
+                        "^invalid fake-IP allowance configuration$",
+                    ):
+                        fake_ip_allowance_from_env(
+                            {"OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE": str(path)},
+                            now=APPROVAL_NOW,
+                        )
 
     def test_approval_file_rejects_malformed_duplicate_and_mixed_configuration(self):
         duplicate = approval_payload(
