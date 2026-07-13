@@ -78,6 +78,16 @@ _HEADING_SCOPE_VOCAB_RE = re.compile(
     r"\u4ea7\u54c1|\u670d\u52a1|\u8bbe\u5907|\u7cfb\u7edf|\u6cf5|\u8fc7\u6ee4",
     flags=re.IGNORECASE,
 )
+_CONCRETE_SCOPE_TERM_RE = re.compile(
+    r"\b(?:equipment|systems?|pumps?|windows?|doors?|parts?|components?|filtration|filters?|"
+    r"machinery|hardware|curtain\s+wall|pompes?|maintenance|hydraulique|industrial|automotive|"
+    r"manufactur(?:ing|ed|er)?|construction|engineering|logistics|transport(?:ation)?|software|"
+    r"technology|medical|healthcare|pharmaceuticals?|chemical|electronics?|energy|agricultur(?:e|al)|"
+    r"textiles?|furniture|packaging|metals?|steel|alumin(?:um|ium)|plastics?|water|treatment|"
+    r"consulting|repair(?:s|ing)?)\b|\u8bbe\u5907|\u7cfb\u7edf|\u6cf5|\u8fc7\u6ee4|\u96f6\u90e8\u4ef6|"
+    r"\u95e8\u7a97|\u5e55\u5899|\u673a\u68b0|\u4e94\u91d1|\u6c7d\u8f66|\u5de5\u4e1a|\u5de5\u7a0b|\u5236\u9020|\u6750\u6599|\u6c34\u5904\u7406",
+    flags=re.IGNORECASE,
+)
 _ORGANIZATION_SUFFIX_RE = re.compile(
     r"\b(?:llc|inc|ltd|limited|company|corporation|corp|co\.?\s*ltd\.?)\b", flags=re.IGNORECASE
 )
@@ -123,7 +133,7 @@ _FIELD_LABEL_RE = re.compile(
     r"\bfax\b|\b(?:phone|telephone|tel|email|e-mail)\b|\u4f20\u771f|\u7535\u8bdd|\u90ae\u7bb1",
     flags=re.IGNORECASE,
 )
-_CONTACT_BLOCK_SEPARATOR_RE = re.compile(r"[;|]")
+_CONTACT_BLOCK_SEPARATOR_RE = re.compile(r"[;|\uff1b]")
 _CUSTOMER_SERVICE_RE = re.compile(
     r"\bcustomer\s+service\b|\bcustomer\s+support\b|\bsupport\b|\bservice\s+hotline\b|"
     r"\u5ba2\u670d|\u5ba2\u6237\u670d\u52a1|\u552e\u540e",
@@ -389,7 +399,11 @@ def _cued_scope_values(value: str) -> list[str]:
     values: list[str] = []
     for pattern in (_ENGLISH_SCOPE_CUE_RE, _CHINESE_SCOPE_CUE_RE):
         for match in pattern.finditer(value):
-            values.extend(_scope_fragments(match.group("value")))
+            values.extend(
+                fragment
+                for fragment in _scope_fragments(match.group("value"))
+                if _CONCRETE_SCOPE_TERM_RE.search(fragment)
+            )
     return values
 
 
@@ -460,19 +474,55 @@ def _json_contact_context(node: dict) -> str:
 def _static_contact_matches(context: str) -> Iterable[tuple[re.Match[str], str, str, str]]:
     labels = tuple(_FIELD_LABEL_RE.finditer(context))
     label_ends = tuple(label.end() for label in labels)
+    service_markers = tuple(_CUSTOMER_SERVICE_RE.finditer(context))
+    service_marker_ends = tuple(marker.end() for marker in service_markers)
     separators = tuple(match.start() for match in _CONTACT_BLOCK_SEPARATOR_RE.finditer(context))
+    previous_contact_end = 0
 
     for raw_match_count, match in enumerate(_STATIC_CONTACT_RE.finditer(context)):
         if raw_match_count >= MAX_STATIC_CONTACT_MATCHES:
             break
         block_index = bisect_right(separators, match.start()) - 1
         block_start = separators[block_index] + 1 if block_index >= 0 else 0
-        label_index = bisect_right(label_ends, match.start()) - 1
-        field_label = ""
-        if label_index >= 0 and labels[label_index].start() >= block_start:
-            field_label = labels[label_index].group()
+        current_label = _last_marker_before(labels, label_ends, match.start(), block_start)
+        inherited_label = None
+        if current_label is None:
+            inherited_label = _last_marker_before(
+                labels, label_ends, match.start(), previous_contact_end
+            )
+            if inherited_label is not None and inherited_label.start() >= block_start:
+                inherited_label = None
+        field_label = (current_label or inherited_label).group() if current_label or inherited_label else ""
+
+        current_service_marker = _last_marker_before(
+            service_markers, service_marker_ends, match.start(), block_start
+        )
+        inherited_service_marker = None
+        if current_service_marker is None:
+            inherited_service_marker = _last_marker_before(
+                service_markers, service_marker_ends, match.start(), previous_contact_end
+            )
+            if inherited_service_marker is not None and inherited_service_marker.start() >= block_start:
+                inherited_service_marker = None
+
+        marker_context = " ".join(
+            marker.group()
+            for marker in (inherited_label, inherited_service_marker)
+            if marker is not None
+        )
+        block_context = " ".join(part for part in (marker_context, context[block_start : match.end()]) if part)
         entity_type = "email" if match.lastgroup == "email" else "phone"
-        yield match, entity_type, context[block_start : match.end()], field_label
+        previous_contact_end = match.end()
+        yield match, entity_type, block_context, field_label
+
+
+def _last_marker_before(
+    markers: Sequence[re.Match[str]], marker_ends: Sequence[int], end: int, start: int
+) -> re.Match[str] | None:
+    marker_index = bisect_right(marker_ends, end) - 1
+    if marker_index < 0 or markers[marker_index].start() < start:
+        return None
+    return markers[marker_index]
 
 
 def _static_contact_classification(block_context: str, field_label: str) -> str:

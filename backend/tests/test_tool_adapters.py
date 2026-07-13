@@ -544,6 +544,24 @@ class OfficialSiteSemanticsTests(unittest.TestCase):
         self.assertEqual(len(contacts), 2)
         self.assertEqual(classify.call_count, raw_match_budget)
 
+    def test_static_contacts_preserve_markers_across_format_separators(self):
+        contacts = extract_contact_candidates(
+            [
+                "Fax; +1 202 555 0199",
+                "\u4f20\u771f\uff1b+1 202 555 0198",
+                "Customer Service; Phone: +1 202 555 0188",
+                "Fax; Phone: +1 202 555 0187",
+            ],
+            [],
+        )
+        by_value = {candidate.value: candidate for candidate in contacts}
+
+        self.assertEqual(by_value["+1 202 555 0199"].entity_type, "fax")
+        self.assertEqual(by_value["+1 202 555 0198"].entity_type, "fax")
+        self.assertEqual(by_value["+1 202 555 0188"].classification, "customer_service")
+        self.assertEqual(by_value["+1 202 555 0187"].entity_type, "phone")
+        self.assertEqual(by_value["+1 202 555 0187"].classification, "public_general")
+
     def test_scope_traversal_stops_after_node_budget_for_primitive_roots(self):
         class PrimitiveRoots:
             def __iter__(self):
@@ -825,6 +843,28 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
             relationships,
         )
 
+    def test_parser_does_not_link_separator_delimited_customer_service_phone_to_named_person(self):
+        parsed = OfficialSiteExtractorAdapter().parse_html(
+            """
+            <html><body>
+              <p>Alice Brown, Sales Manager; Customer Service; Phone: +1 202 555 0188</p>
+            </body></html>
+            """,
+            url="https://example.com/contact",
+        )
+
+        evidence = {(item.entity_value, item.evidence_kind) for item in parsed.evidence}
+        relationships = {
+            (item.from_value, item.to_value, item.relationship_type)
+            for item in parsed.relationships
+        }
+
+        self.assertIn(("+12025550188", "official_site_contact_customer_service"), evidence)
+        self.assertNotIn(
+            ("Alice Brown", "+12025550188", "person_has_role_linked_contact"),
+            relationships,
+        )
+
     def test_parser_rejects_generic_mission_heading_and_quote_scope(self):
         parsed = OfficialSiteExtractorAdapter().parse_html(
             """
@@ -843,6 +883,16 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
         self.assertNotIn("Values", scopes)
         self.assertNotIn("a free quote", scopes)
         self.assertNotIn("a free quotation", scopes)
+
+    def test_parser_rejects_generic_value_proposition_scope(self):
+        parsed = OfficialSiteExtractorAdapter().parse_html(
+            "<html><body><p>We provide an exceptional customer experience.</p></body></html>",
+            url="https://example.com/about",
+        )
+
+        scopes = {item.value for item in parsed.entities if item.type == "business_scope"}
+
+        self.assertEqual(scopes, set())
 
     def test_parser_keeps_fixed_scope_when_heading_is_semantic(self):
         parsed = OfficialSiteExtractorAdapter().parse_html(
