@@ -644,6 +644,45 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
         self.assertIn(("+12025550103", "official_site_contact_public_general"), evidence)
         self.assertIn(("+12025550199", "official_site_contact_fax"), evidence)
 
+    def test_parser_keeps_reverse_inline_fax_and_phone_distinct(self):
+        parsed = OfficialSiteExtractorAdapter().parse_html(
+            "<html><body><p>Fax: +1 202 555 0199 Phone: +1 202 555 0103</p></body></html>",
+            url="https://example.com/contact",
+        )
+
+        entities = {(item.type, item.value) for item in parsed.entities}
+        evidence = {(item.entity_value, item.evidence_kind) for item in parsed.evidence}
+
+        self.assertIn(("fax", "+12025550199"), entities)
+        self.assertIn(("phone", "+12025550103"), entities)
+        self.assertNotIn(("fax", "+12025550103"), entities)
+        self.assertIn(("+12025550199", "official_site_contact_fax"), evidence)
+        self.assertIn(("+12025550103", "official_site_contact_public_general"), evidence)
+
+    def test_parser_does_not_cross_link_adjacent_named_roles(self):
+        parsed = OfficialSiteExtractorAdapter().parse_html(
+            """
+            <html><body>
+              <p>Alice Brown, Sales Manager; Bob Jones, Director - Email: bob.jones@example.com</p>
+            </body></html>
+            """,
+            url="https://example.com/team",
+        )
+
+        relationships = {
+            (item.from_value, item.to_value, item.relationship_type)
+            for item in parsed.relationships
+        }
+
+        self.assertNotIn(
+            ("Alice Brown", "bob.jones@example.com", "person_has_role_linked_contact"),
+            relationships,
+        )
+        self.assertIn(
+            ("Bob Jones", "bob.jones@example.com", "person_has_role_linked_contact"),
+            relationships,
+        )
+
     def test_parser_preserves_fixed_automotive_scope_fallback(self):
         parsed = OfficialSiteExtractorAdapter().parse_html(
             "<html><body><p>Auto parts and brake components.</p></body></html>",

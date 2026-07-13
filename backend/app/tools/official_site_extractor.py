@@ -557,20 +557,25 @@ def _visible_text_people(text_blocks: list[str]) -> list[dict]:
         window = _normalize_space(part)
         if not window:
             continue
+        matches: list[tuple[int, int, str, str]] = []
         for marker in ROLE_MARKERS:
             marker_flags = re.IGNORECASE if marker.isascii() else 0
-            match = re.search(
+            for match in re.finditer(
                 rf"(?P<name>{name_pattern})\s*[,\uff0c|-]\s*(?P<title>{re.escape(marker)})(?=$|[\s,\uff0c;\uff1b|:/()\-])",
                 window,
                 flags=marker_flags,
-            )
-            if not match:
+            ):
+                name = _normalize_person_name(match.group("name"))
+                title = _normalize_job_title(match.group("title"))
+                if name and title:
+                    matches.append((match.start(), match.end(), name, title))
+        matches.sort(key=lambda item: (item[0], item[1], item[2].casefold(), item[3].casefold()))
+        for index, (start, _end, name, title) in enumerate(matches):
+            if index and start == matches[index - 1][0]:
                 continue
-            name = _normalize_person_name(match.group("name"))
-            title = _normalize_job_title(match.group("title"))
-            if name and title:
-                context = window[max(0, match.start() - 40) : match.end() + 180]
-                candidates.append({"name": name, "title": title, "confidence": 0.66, "context": context})
+            next_start = matches[index + 1][0] if index + 1 < len(matches) else len(window)
+            context = window[start : min(next_start, start + 240)]
+            candidates.append({"name": name, "title": title, "confidence": 0.66, "context": context})
     return candidates
 
 

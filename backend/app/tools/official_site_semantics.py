@@ -99,6 +99,10 @@ _EXCLUDED_SCOPE_TEXT_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _FAX_RE = re.compile(r"\bfax\b|\u4f20\u771f", flags=re.IGNORECASE)
+_FIELD_LABEL_RE = re.compile(
+    r"\bfax\b|\b(?:phone|telephone|tel|email|e-mail)\b|\u4f20\u771f|\u7535\u8bdd|\u90ae\u7bb1",
+    flags=re.IGNORECASE,
+)
 _CUSTOMER_SERVICE_RE = re.compile(
     r"\bcustomer\s+service\b|\bcustomer\s+support\b|\bsupport\b|\bservice\s+hotline\b|"
     r"\u5ba2\u670d|\u5ba2\u6237\u670d\u52a1|\u552e\u540e",
@@ -213,16 +217,20 @@ def extract_contact_candidates(
         if not normalized_context:
             continue
         for match in _EMAIL_RE.finditer(normalized_context):
-            contact_context = _preceding_contact_context(normalized_context, match.start(), match.end())
-            classification = _contact_classification(contact_context)
+            contact_context, block_context, field_label = _contact_field_context(
+                normalized_context, match.start(), match.end()
+            )
+            classification = _static_contact_classification(block_context, field_label)
             _add_contact_candidate(
                 candidates,
                 indexes,
                 ContactCandidate("email", match.group(), classification, _bounded_snippet(contact_context)),
             )
         for match in _PHONE_RE.finditer(normalized_context):
-            contact_context = _preceding_contact_context(normalized_context, match.start(), match.end())
-            classification = _contact_classification(contact_context)
+            contact_context, block_context, field_label = _contact_field_context(
+                normalized_context, match.start(), match.end()
+            )
+            classification = _static_contact_classification(block_context, field_label)
             entity_type = "fax" if classification == "fax" else "phone"
             _add_contact_candidate(
                 candidates,
@@ -360,9 +368,24 @@ def _json_contact_context(node: dict) -> str:
     )
 
 
-def _preceding_contact_context(context: str, start: int, end: int) -> str:
-    separator = max(context.rfind(marker, 0, start) for marker in (";", "|"))
-    return context[max(separator + 1, start - 96) : end]
+def _contact_field_context(context: str, start: int, end: int) -> tuple[str, str, str]:
+    block_start = max(context.rfind(marker, 0, start) for marker in (";", "|")) + 1
+    block_context = context[block_start:end]
+    labels = list(_FIELD_LABEL_RE.finditer(context, block_start, start))
+    if not labels:
+        return context[max(block_start, start - 96) : end], block_context, ""
+    previous_label_end = labels[-2].end() if len(labels) > 1 else block_start
+    return context[max(previous_label_end, start - 96) : end], block_context, labels[-1].group()
+
+
+def _static_contact_classification(block_context: str, field_label: str) -> str:
+    if field_label and _FAX_RE.fullmatch(field_label):
+        return "fax"
+    if _CUSTOMER_SERVICE_RE.search(block_context):
+        return "customer_service"
+    if not field_label:
+        return _contact_classification(block_context)
+    return "public_general"
 
 
 def _add_contact_candidate(
