@@ -38,6 +38,8 @@ def write_release_fixture(root: Path, *, backend_license: str = "GPL-3.0-only") 
 
 class PublicReleaseCheckTests(unittest.TestCase):
     def test_repository_sources_pass_public_release_check(self):
+        if not (REPOSITORY_ROOT / ".git").exists():
+            self.skipTest("repository source scan requires a Git working tree")
         result = evaluate_public_release(REPOSITORY_ROOT)
 
         self.assertTrue(result["ready"], result["blockers"])
