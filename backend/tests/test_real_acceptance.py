@@ -137,7 +137,7 @@ class RealAcceptanceTests(unittest.TestCase):
                     real_acceptance._validate_polling(1, interval, 30)
 
     @patch("scripts.real_acceptance.urlopen")
-    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "test-token"}, clear=True)
+    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "<redacted>"}, clear=True)
     def test_execute_rejects_excessive_polling_values_before_network(self, urlopen_mock):
         excessive_options = (
             {"max_polls": 10**9},
@@ -159,7 +159,7 @@ class RealAcceptanceTests(unittest.TestCase):
         urlopen_mock.assert_not_called()
 
     @patch("scripts.real_acceptance.urlopen")
-    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "test-token"}, clear=True)
+    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "<redacted>"}, clear=True)
     def test_cli_rejects_excessive_polling_values_before_network(self, urlopen_mock):
         with TemporaryDirectory() as directory:
             manifest_path = Path(directory) / "manifest.json"
@@ -190,7 +190,7 @@ class RealAcceptanceTests(unittest.TestCase):
 
     @patch("scripts.real_acceptance._request_json")
     @patch("scripts.real_acceptance.time.monotonic", side_effect=[0.0, 0.0, 61.0])
-    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "test-token"}, clear=True)
+    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "<redacted>"}, clear=True)
     def test_execute_stops_when_per_case_deadline_expires_before_run(self, monotonic_mock, request_json_mock):
         request_json_mock.side_effect = [{"id": "investigation-123"}, {"accepted": True}]
 
@@ -209,7 +209,7 @@ class RealAcceptanceTests(unittest.TestCase):
 
     @patch("scripts.real_acceptance._request_json")
     @patch("scripts.real_acceptance.time.monotonic", side_effect=[0.0, 0.0, 0.0, 0.0, 61.0])
-    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "test-token"}, clear=True)
+    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "<redacted>"}, clear=True)
     def test_execute_does_not_complete_when_final_detail_arrives_after_deadline(self, monotonic_mock, request_json_mock):
         request_json_mock.side_effect = [
             {"id": "investigation-123"},
@@ -260,7 +260,7 @@ class RealAcceptanceTests(unittest.TestCase):
 
     @patch("scripts.real_acceptance.urlopen")
     @patch("scripts.real_acceptance.time.sleep", side_effect=OverflowError("sleep overflow"))
-    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "test-token"}, clear=True)
+    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "<redacted>"}, clear=True)
     def test_execute_records_sleep_overflow_as_non_success(self, sleep_mock, urlopen_mock):
         urlopen_mock.side_effect = [
             _JsonResponse({"id": "investigation-123"}),
@@ -286,7 +286,7 @@ class RealAcceptanceTests(unittest.TestCase):
         sleep_mock.assert_called_once_with(1)
 
     @patch("scripts.real_acceptance.urlopen")
-    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "test-token"}, clear=True)
+    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "<redacted>"}, clear=True)
     def test_execute_rejects_oversized_declared_response_before_read(self, urlopen_mock):
         response = _JsonResponse({"id": "investigation-123"}, content_length=17)
         urlopen_mock.side_effect = [response, _JsonResponse({"accepted": True}), _JsonResponse(_completed_detail())]
@@ -304,7 +304,7 @@ class RealAcceptanceTests(unittest.TestCase):
         self.assertEqual(response.read_sizes, [])
 
     @patch("scripts.real_acceptance.urlopen")
-    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "test-token"}, clear=True)
+    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "<redacted>"}, clear=True)
     def test_execute_rejects_oversized_streamed_response_with_bounded_read(self, urlopen_mock):
         response = _JsonResponse(body=b'{"id":"investigation-123"}')
         urlopen_mock.side_effect = [response, _JsonResponse({"accepted": True}), _JsonResponse(_completed_detail())]
@@ -322,7 +322,7 @@ class RealAcceptanceTests(unittest.TestCase):
         self.assertEqual(response.read_sizes, [17])
 
     @patch("scripts.real_acceptance.urlopen")
-    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "test-token"}, clear=True)
+    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "<redacted>"}, clear=True)
     def test_execute_rejects_oversized_short_read_stream(self, urlopen_mock):
         first_chunk = b'{"id":"investigation-123"}'
         response = _JsonResponse(
@@ -365,7 +365,7 @@ class RealAcceptanceTests(unittest.TestCase):
                 raised.exception.close()
 
     @patch("scripts.real_acceptance.urlopen")
-    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "test-token"}, clear=True)
+    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "<redacted>"}, clear=True)
     def test_execute_records_redirect_http_error_as_non_success(self, urlopen_mock):
         redirect_error = HTTPError(
             "https://approved.example/api/investigations",
@@ -390,7 +390,7 @@ class RealAcceptanceTests(unittest.TestCase):
         self.assertTrue(redirect_error.closed)
 
     @patch("scripts.real_acceptance.urlopen")
-    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "test-token"}, clear=True)
+    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "<redacted>"}, clear=True)
     def test_execute_rejects_nonreal_case_before_network(self, urlopen_mock):
         with self.assertRaisesRegex(ValueError, "real_target"):
             run_acceptance_manifest(
@@ -416,7 +416,7 @@ class RealAcceptanceTests(unittest.TestCase):
         urlopen_mock.assert_not_called()
 
     @patch("scripts.real_acceptance.urlopen")
-    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "test-token"}, clear=True)
+    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "<redacted>"}, clear=True)
     def test_execute_rejects_remote_http_base_url_before_network(self, urlopen_mock):
         with self.assertRaisesRegex(ValueError, "HTTPS"):
             run_acceptance_manifest(
@@ -429,7 +429,7 @@ class RealAcceptanceTests(unittest.TestCase):
         urlopen_mock.assert_not_called()
 
     @patch("scripts.real_acceptance.urlopen")
-    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "test-token"}, clear=True)
+    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "<redacted>"}, clear=True)
     def test_execute_posts_create_and_run_then_polls_detail(self, urlopen_mock):
         urlopen_mock.side_effect = [
             _JsonResponse({"id": "investigation-123"}),
@@ -497,10 +497,10 @@ class RealAcceptanceTests(unittest.TestCase):
             },
         )
         self.assertEqual(json.loads(requests[1].data.decode("utf-8")), {})
-        self.assertEqual(requests[0].get_header("Authorization"), "Bearer test-token")
+        self.assertEqual(requests[0].get_header("Authorization"), "Bearer <redacted>")
 
     @patch("scripts.real_acceptance.urlopen")
-    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "test-token"}, clear=True)
+    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "<redacted>"}, clear=True)
     def test_execute_does_not_complete_malformed_completed_detail(self, urlopen_mock):
         urlopen_mock.side_effect = [
             _JsonResponse({"id": "investigation-123"}),
@@ -521,7 +521,7 @@ class RealAcceptanceTests(unittest.TestCase):
         self.assertEqual(result["evidence_floor_rate"], 0.0)
 
     @patch("scripts.real_acceptance.urlopen")
-    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "test-token"}, clear=True)
+    @patch.dict(os.environ, {"REAL_ACCEPTANCE_TOKEN": "<redacted>"}, clear=True)
     def test_execute_does_not_crash_or_complete_unhashable_completion_mode(self, urlopen_mock):
         detail = _completed_detail()
         detail["completion_policy"]["completion_mode"] = []

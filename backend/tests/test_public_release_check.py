@@ -37,6 +37,11 @@ def write_release_fixture(root: Path, *, backend_license: str = "GPL-3.0-only") 
 
 
 class PublicReleaseCheckTests(unittest.TestCase):
+    def test_repository_sources_pass_public_release_check(self):
+        result = evaluate_public_release(REPOSITORY_ROOT)
+
+        self.assertTrue(result["ready"], result["blockers"])
+
     def test_release_finding_is_immutable(self):
         finding = ReleaseFinding("PUBLIC_PATH", "notes.txt", 3, "Personal home path")
 

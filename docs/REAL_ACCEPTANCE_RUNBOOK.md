@@ -51,7 +51,7 @@ Only execute an approved private manifest after every case has
 environment variable explicitly:
 
 ```bash
-export REAL_ACCEPTANCE_TOKEN='operator-provided-token'
+export REAL_ACCEPTANCE_TOKEN='<operator-provided-token>'
 backend/.venv/bin/python scripts/real_acceptance.py \
   --manifest /approved-private-path/acceptance-manifest.json \
   --execute \

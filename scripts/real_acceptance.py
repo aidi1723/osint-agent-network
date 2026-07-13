@@ -151,14 +151,14 @@ def run_acceptance_manifest(
     if not all(case["real_target"] is True for case in cases):
         raise ValueError("--execute requires every case to set real_target: true")
     normalized_base_url = _validate_base_url(base_url)
-    token = _resolve_bearer_token(token_env)
+    bearer = _resolve_bearer_token(token_env)
     _validate_polling(max_polls, poll_interval, timeout_seconds)
 
     case_results = [
         _execute_case(
             case,
             base_url=normalized_base_url,
-            token=token,
+            token=bearer,
             max_polls=max_polls,
             poll_interval=poll_interval,
             timeout_seconds=timeout_seconds,
@@ -221,10 +221,10 @@ def _is_local_http_host(hostname: str) -> bool:
 def _resolve_bearer_token(token_env: str | None) -> str:
     if not isinstance(token_env, str) or not token_env.strip():
         raise ValueError("--execute requires --token-env")
-    token = os.getenv(token_env)
-    if not isinstance(token, str) or not token.strip():
+    value = os.getenv(token_env)
+    if not isinstance(value, str) or not value.strip():
         raise ValueError(f"token is missing from environment variable: {token_env}")
-    return token.strip()
+    return value.strip()
 
 
 def _validate_polling(max_polls: int, poll_interval: float, timeout_seconds: int) -> None:
