@@ -9,6 +9,8 @@ class RegressionSmokeTests(unittest.TestCase):
 
         self.assertEqual(result["case_count"], 4)
         self.assertEqual(result["failed"], 0)
+        self.assertEqual(result["suite_kind"], "synthetic_contract")
+        self.assertFalse(result["network_accessed"])
         for case in result["cases"]:
             self.assertGreater(case["pir_count"], 0)
             self.assertGreater(case["eei_count"], 0)

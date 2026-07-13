@@ -13,7 +13,8 @@ Latest verified baseline:
 
 - `bash scripts/verify.sh` passed.
 - Backend unittest discovery: `411 tests OK`.
-- Regression smoke: `4` cases / `0` failed.
+- Synthetic regression smoke: `4` fixed contract cases / `0` failed. It is
+  offline and cannot establish real completion or generalization.
 - Frontend helper checks passed.
 - Vitest: `2` files / `9` tests passed.
 - Frontend production build passed.

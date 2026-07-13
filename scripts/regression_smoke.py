@@ -21,6 +21,8 @@ def run_regression_cases(fixture_path: str | Path = FIXTURE_PATH) -> dict:
     results = [_run_case(case) for case in cases]
     failed = [case for case in results if case["failures"]]
     return {
+        "suite_kind": "synthetic_contract",
+        "network_accessed": False,
         "case_count": len(results),
         "failed": len(failed),
         "cases": results,

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "purpose": "schema_example_only",
+  "cases": [
+    {
+      "id": "schema-example-domain",
+      "name": "Schema example domain only",
+      "seed_type": "domain",
+      "seed_value": "example.invalid",
+      "real_target": false,
+      "minimum_evidence": [
+        "official_website",
+        "business_scope"
+      ]
+    }
+  ]
+}
