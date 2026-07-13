@@ -9,7 +9,12 @@ from pathlib import Path
 import re
 
 from app.core.normalization import NormalizationError, normalize_target
-from app.core.safe_http import SafeHttpError, fake_ip_allowance_from_env, safe_fetch
+from app.core.safe_http import (
+    FakeIpApprovalRequired,
+    SafeHttpError,
+    fake_ip_allowance_from_env,
+    safe_fetch,
+)
 from app.tools.base import (
     NormalizedEntity,
     NormalizedEvidence,
@@ -96,12 +101,13 @@ class OfficialSiteExtractorAdapter:
     def run(self, target_type: str, target_value: str, workdir: Path, timeout_seconds: int) -> ToolRunResult:
         workdir.mkdir(parents=True, exist_ok=True)
         artifact = workdir / "official_site_input.html"
-        command = ToolCommand(
+        rejected_command = ToolCommand(
             args=["PARSE_ARTIFACT", "<rejected-target>"],
             cwd=workdir,
             expected_artifact=artifact,
             timeout_seconds=timeout_seconds,
         )
+        command = rejected_command
         try:
             fake_ip_allowance = fake_ip_allowance_from_env()
             url = self.validate_target(target_type, target_value)
@@ -125,6 +131,14 @@ class OfficialSiteExtractorAdapter:
                 returncode=0 if 200 <= status < 400 else 1,
                 stdout_excerpt=f"fetched official site html status={status} bytes={len(body[:MAX_HTML_BYTES])} truncated={truncated}",
                 stderr_excerpt="",
+            )
+        except FakeIpApprovalRequired as exc:
+            rejected_command.expected_artifact.write_text("", encoding="utf-8")
+            return ToolRunResult(
+                command=rejected_command,
+                returncode=1,
+                stdout_excerpt="",
+                stderr_excerpt=f"fake_ip_review_required: {exc.hostname}",
             )
         except (NormalizationError, SafeHttpError):
             command.expected_artifact.write_text("", encoding="utf-8")

@@ -694,6 +694,35 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
         self.assertNotIn("private-token", repr(result))
         safe_fetch_mock.assert_not_called()
 
+    def test_run_returns_sanitized_fake_ip_review_diagnostic(self):
+        class ReviewRequired(SafeHttpError):
+            def __init__(self, hostname):
+                self.hostname = hostname
+                super().__init__("fake-IP host requires review")
+
+        target = "https://example.com/private-token"
+        review_error = ReviewRequired("www.example.com")
+        with patch(
+            "app.tools.official_site_extractor.FakeIpApprovalRequired",
+            ReviewRequired,
+            create=True,
+        ), patch(
+            "app.tools.official_site_extractor.safe_fetch",
+            side_effect=review_error,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                result = OfficialSiteExtractorAdapter().run("url", target, Path(tmpdir), timeout_seconds=5)
+                artifact = result.command.expected_artifact.read_bytes()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout_excerpt, "")
+        self.assertEqual(result.stderr_excerpt, "fake_ip_review_required: www.example.com")
+        self.assertEqual(artifact, b"")
+        self.assertEqual(result.command.args, ["PARSE_ARTIFACT", "<rejected-target>"])
+        self.assertNotIn("private-token", result.stderr_excerpt)
+        self.assertNotIn("198.18.100.99", result.stderr_excerpt)
+        self.assertNotIn("resolver", result.stderr_excerpt)
+
     def test_run_bounds_high_ratio_gzip_expansion(self):
         expanded = b"A" * (32 * 1024 * 1024)
         fetched = SafeHttpResponse(

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from concurrent.futures import Future
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 import http.client
 import ipaddress
+import json
 import os
+from pathlib import Path
 import queue
 import re
 import socket
@@ -27,6 +30,12 @@ class BlockedNetworkTarget(SafeHttpError):
     pass
 
 
+class FakeIpApprovalRequired(BlockedNetworkTarget):
+    def __init__(self, hostname: str):
+        self.hostname = hostname
+        super().__init__("fake-IP host requires review")
+
+
 class RedirectLimitExceeded(SafeHttpError):
     pass
 
@@ -43,6 +52,7 @@ class InvalidFakeIpConfiguration(SafeHttpError):
 class FakeIpAllowance:
     networks: tuple[ipaddress.IPv4Network, ...] = ()
     hosts: frozenset[str] = frozenset()
+    review_unapproved_hosts: bool = field(default=False, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -73,18 +83,33 @@ _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 MAX_RESOLVED_ADDRESSES = 8  # Bound raw DNS fan-out before deduplication.
 MAX_VALIDATED_ADDRESSES = 8  # Bound sequential connection failover.
 _FAKE_IP_SUPERNET = ipaddress.ip_network("198.18.0.0/15")
+_MAX_FAKE_IP_APPROVAL_FILE_BYTES = 64 * 1024
+_INVALID_FAKE_IP_CONFIGURATION_MESSAGE = "invalid fake-IP allowance configuration"
 _RESOLVER_WORKERS = 4
 _RESOLVER_QUEUE: queue.Queue = queue.Queue(maxsize=32)
 
 
-def fake_ip_allowance_from_env(environ: Mapping[str, str] | None = None) -> FakeIpAllowance:
+def fake_ip_allowance_from_env(
+    environ: Mapping[str, str] | None = None,
+    *,
+    now: datetime | None = None,
+) -> FakeIpAllowance:
     environ = os.environ if environ is None else environ
+    approval_path = str(environ.get("OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE", "")).strip()
     raw_cidrs = str(environ.get("OSINT_SAFE_HTTP_FAKE_IP_CIDRS", "")).strip()
     raw_hosts = str(environ.get("OSINT_SAFE_HTTP_FAKE_IP_HOSTS", "")).strip()
+    if approval_path:
+        if raw_cidrs or raw_hosts:
+            raise _invalid_fake_ip_configuration()
+        return _approval_file_allowance(Path(approval_path), now=now)
+    return _legacy_fake_ip_allowance(raw_cidrs, raw_hosts)
+
+
+def _legacy_fake_ip_allowance(raw_cidrs: str, raw_hosts: str) -> FakeIpAllowance:
     if not raw_cidrs and not raw_hosts:
         return FakeIpAllowance()
     if not raw_cidrs or not raw_hosts:
-        raise InvalidFakeIpConfiguration("invalid fake-IP allowance configuration")
+        raise _invalid_fake_ip_configuration()
 
     networks: list[ipaddress.IPv4Network] = []
     hosts: set[str] = set()
@@ -101,10 +126,107 @@ def fake_ip_allowance_from_env(environ: Mapping[str, str] | None = None) -> Fake
                 raise ValueError
             hosts.add(host)
     except (TypeError, UnicodeError, ValueError):
-        raise InvalidFakeIpConfiguration("invalid fake-IP allowance configuration") from None
+        raise _invalid_fake_ip_configuration() from None
     if not networks or not hosts:
-        raise InvalidFakeIpConfiguration("invalid fake-IP allowance configuration")
+        raise _invalid_fake_ip_configuration()
     return FakeIpAllowance(tuple(networks), frozenset(hosts))
+
+
+def _approval_file_allowance(path: Path, *, now: datetime | None) -> FakeIpAllowance:
+    current_time = datetime.now(UTC) if now is None else now
+    try:
+        if not isinstance(current_time, datetime) or not _is_timezone_aware(current_time):
+            raise ValueError
+        with path.open("rb") as approval_file:
+            payload_bytes = approval_file.read(_MAX_FAKE_IP_APPROVAL_FILE_BYTES + 1)
+        if len(payload_bytes) > _MAX_FAKE_IP_APPROVAL_FILE_BYTES:
+            raise ValueError
+        payload = json.loads(
+            payload_bytes.decode("utf-8"),
+            object_pairs_hook=_json_object_without_duplicate_keys,
+        )
+        if not isinstance(payload, dict) or set(payload) != {"version", "networks", "approvals"}:
+            raise ValueError
+        if type(payload["version"]) is not int or payload["version"] != 1:
+            raise ValueError
+
+        networks_value = payload["networks"]
+        if not isinstance(networks_value, list) or not networks_value:
+            raise ValueError
+        networks: list[ipaddress.IPv4Network] = []
+        for raw_network in networks_value:
+            if not isinstance(raw_network, str):
+                raise ValueError
+            network = ipaddress.ip_network(raw_network, strict=True)
+            if not isinstance(network, ipaddress.IPv4Network) or not network.subnet_of(_FAKE_IP_SUPERNET):
+                raise ValueError
+            if network in networks:
+                raise ValueError
+            networks.append(network)
+
+        approvals_value = payload["approvals"]
+        if not isinstance(approvals_value, list):
+            raise ValueError
+        hosts: set[str] = set()
+        for approval in approvals_value:
+            hostname = _approval_hostname(approval)
+            if hostname in hosts:
+                raise ValueError
+            approved_at = _approval_timestamp(approval["approved_at"])
+            expires_at = _approval_timestamp(approval["expires_at"])
+            if expires_at <= approved_at or expires_at <= current_time:
+                raise ValueError
+            hosts.add(hostname)
+    except (OSError, TypeError, UnicodeError, ValueError, OverflowError, json.JSONDecodeError):
+        raise _invalid_fake_ip_configuration() from None
+    return FakeIpAllowance(tuple(networks), frozenset(hosts), review_unapproved_hosts=True)
+
+
+def _approval_hostname(approval: object) -> str:
+    required_fields = {"hostname", "approved_by", "reason", "approved_at", "expires_at"}
+    if not isinstance(approval, dict) or set(approval) != required_fields:
+        raise ValueError
+    hostname_value = approval["hostname"]
+    if not isinstance(hostname_value, str):
+        raise ValueError
+    hostname = hostname_value.encode("idna").decode("ascii").lower().rstrip(".")
+    if (
+        not hostname
+        or not _valid_hostname(hostname)
+        or _literal_address(hostname) is not None
+    ):
+        raise ValueError
+    for field_name in ("approved_by", "reason"):
+        value = approval[field_name]
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError
+    return hostname
+
+
+def _json_object_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError
+        payload[key] = value
+    return payload
+
+
+def _approval_timestamp(value: object) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise ValueError
+    timestamp = datetime.fromisoformat(value)
+    if not _is_timezone_aware(timestamp):
+        raise ValueError
+    return timestamp
+
+
+def _is_timezone_aware(value: datetime) -> bool:
+    return value.tzinfo is not None and value.utcoffset() is not None
+
+
+def _invalid_fake_ip_configuration() -> InvalidFakeIpConfiguration:
+    return InvalidFakeIpConfiguration(_INVALID_FAKE_IP_CONFIGURATION_MESSAGE)
 
 
 def _config_items(value: str) -> tuple[str, ...]:
@@ -187,6 +309,13 @@ def validate_public_url(
             raise InvalidHttpTarget("target resolution failed") from None
     if not addresses:
         raise InvalidHttpTarget("target resolution failed")
+    if _requires_fake_ip_approval(
+        addresses,
+        hostname=ascii_hostname,
+        is_literal=literal_address is not None,
+        fake_ip_allowance=fake_ip_allowance,
+    ):
+        raise FakeIpApprovalRequired(ascii_hostname)
     if any(
         not _is_allowed_address(
             address,
@@ -406,8 +535,41 @@ def _is_allowed_address(
         return True
     if is_literal or not isinstance(address, ipaddress.IPv4Address) or fake_ip_allowance is None:
         return False
-    return hostname in fake_ip_allowance.hosts and any(
-        address in network for network in fake_ip_allowance.networks
+    return hostname in fake_ip_allowance.hosts and _is_permitted_fake_ip_address(
+        address,
+        fake_ip_allowance.networks,
+    )
+
+
+def _requires_fake_ip_approval(
+    addresses: set[ipaddress.IPv4Address | ipaddress.IPv6Address],
+    *,
+    hostname: str,
+    is_literal: bool,
+    fake_ip_allowance: FakeIpAllowance | None,
+) -> bool:
+    if (
+        is_literal
+        or fake_ip_allowance is None
+        or not fake_ip_allowance.review_unapproved_hosts
+        or hostname in fake_ip_allowance.hosts
+    ):
+        return False
+    return all(
+        _is_permitted_fake_ip_address(address, fake_ip_allowance.networks)
+        for address in addresses
+    )
+
+
+def _is_permitted_fake_ip_address(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    networks: tuple[ipaddress.IPv4Network, ...],
+) -> bool:
+    return isinstance(address, ipaddress.IPv4Address) and any(
+        isinstance(network, ipaddress.IPv4Network)
+        and network.subnet_of(_FAKE_IP_SUPERNET)
+        and address in network
+        for network in networks
     )
 
 

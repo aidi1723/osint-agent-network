@@ -175,16 +175,24 @@ For the current <production-host> real-tool wiring and remaining install list, s
 
 ### Controlled fake-IP compatibility
 
-The safe HTTP exception for transparent fake-IP proxies is default-off. Enable it only when a production network maps approved public sites into the benchmarking range and both controls can be configured:
+The safe HTTP exception for transparent fake-IP proxies is default-off. Use it only when a production network maps approved public sites into the benchmarking range. Choose one mutually exclusive mode; setting `OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE` together with either legacy variable fails closed before an official-site request begins.
+
+The legacy compatibility mode requires both controls:
 
 ```text
 OSINT_SAFE_HTTP_FAKE_IP_CIDRS=198.18.0.0/15
 OSINT_SAFE_HTTP_FAKE_IP_HOSTS=<exact-public-host>,<exact-redirect-host>
 ```
 
-Each CIDR must be an IPv4 subnet contained by `198.18.0.0/15`, and each host is an exact host match. Wildcards, URLs, ports, credentials, and IP addresses are invalid configuration. IP literals remain blocked even when they fall inside the configured subnet. Every redirect is resolved and validated again, so a redirect hostname requires its own exact entry.
+The reviewed mode is preferred. Point the environment variable at a local approval file that is readable by the service account:
 
-Both variables are required; malformed or partial configuration fails closed before the official-site request begins. The exception is used only by the internal official-site extractor. Other safe HTTP consumers retain strict public-address validation. Post-fetch content cleaning and evidence normalization do not replace destination controls because they cannot undo an SSRF request.
+```text
+OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE=/opt/osint-agent-network/config/fake-ip-approvals.json
+```
+
+The approval file uses JSON with `version: 1`, one or more IPv4 `networks` contained by `198.18.0.0/15`, and reviewed `approvals`. Each approval has one exact IDNA-normalized hostname, a nonempty reviewer and reason, timezone-aware approval and expiration timestamps, and an expiration after the approval time. Expired entries are rejected rather than silently retained. An unapproved hostname that resolves only to an approved fake-IP network is stopped with a review-required diagnostic; it is never automatically approved.
+
+In either mode, each host is an exact host match. Wildcards, all-host entries, URLs, ports, credentials, and IP addresses are invalid configuration. IP literals remain blocked even when they fall inside a configured subnet. Every redirect is resolved and validated again, so a redirect hostname requires its own exact host approval. The exception is used only by the internal official-site extractor. Other safe HTTP consumers retain strict public-address validation. Post-fetch content cleaning and evidence normalization do not replace destination controls because they cannot undo an SSRF request.
 
 ## 6. Native Deployment
 

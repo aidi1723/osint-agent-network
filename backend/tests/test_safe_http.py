@@ -1,4 +1,9 @@
+from datetime import UTC, datetime, timedelta
+import ipaddress
+import json
+from pathlib import Path
 import socket
+import tempfile
 import threading
 import time
 import traceback
@@ -24,6 +29,7 @@ from app.core.safe_http import (
 
 
 PUBLIC_IP = "8.8.8.8"
+APPROVAL_NOW = datetime(2030, 1, 1, tzinfo=UTC)
 
 
 def resolver_for(*addresses):
@@ -43,6 +49,36 @@ def fake_ip_allowance(*hosts):
             "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": ",".join(hosts),
         }
     )
+
+
+def approval_payload(
+    *,
+    networks: list[str] | None = None,
+    approvals: list[dict[str, str]] | None = None,
+) -> dict[str, object]:
+    approved_at = APPROVAL_NOW - timedelta(days=1)
+    expires_at = APPROVAL_NOW + timedelta(days=1)
+    return {
+        "version": 1,
+        "networks": networks if networks is not None else ["198.18.0.0/15"],
+        "approvals": approvals
+        if approvals is not None
+        else [
+            {
+                "hostname": "example.com",
+                "approved_by": "security@example.com",
+                "reason": "transparent proxy routing",
+                "approved_at": approved_at.isoformat(),
+                "expires_at": expires_at.isoformat(),
+            }
+        ],
+    }
+
+
+def write_approval_file(directory: str, payload: dict[str, object]) -> Path:
+    path = Path(directory) / "fake-ip-approvals.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
 
 
 class FakeResponse:
@@ -68,6 +104,243 @@ class FakeConnection:
 
 
 class SafeHttpValidationTests(unittest.TestCase):
+    def test_approval_file_allows_exact_unexpired_host(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = write_approval_file(tmpdir, approval_payload())
+            allowance = fake_ip_allowance_from_env(
+                {"OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE": str(path)},
+                now=APPROVAL_NOW,
+            )
+
+        target = validate_public_url(
+            "https://example.com/",
+            resolver=resolver_for("198.18.100.99"),
+            fake_ip_allowance=allowance,
+        )
+
+        self.assertEqual(target.hostname, "example.com")
+        self.assertEqual(target.validated_ips, ("198.18.100.99",))
+
+    def test_approval_file_normalizes_host_before_exact_matching(self):
+        normalized_host = approval_payload(
+            approvals=[
+                {
+                    "hostname": "Example.COM.",
+                    "approved_by": "security@example.com",
+                    "reason": "transparent proxy routing",
+                    "approved_at": (APPROVAL_NOW - timedelta(days=1)).isoformat(),
+                    "expires_at": (APPROVAL_NOW + timedelta(days=1)).isoformat(),
+                }
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = write_approval_file(tmpdir, normalized_host)
+            allowance = fake_ip_allowance_from_env(
+                {"OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE": str(path)},
+                now=APPROVAL_NOW,
+            )
+
+        target = validate_public_url(
+            "https://example.com/",
+            resolver=resolver_for("198.18.100.99"),
+            fake_ip_allowance=allowance,
+        )
+
+        self.assertEqual(allowance.hosts, frozenset({"example.com"}))
+        self.assertEqual(target.hostname, "example.com")
+
+    def test_approval_file_requires_review_for_unapproved_sibling_host(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = write_approval_file(tmpdir, approval_payload())
+            allowance = fake_ip_allowance_from_env(
+                {"OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE": str(path)},
+                now=APPROVAL_NOW,
+            )
+
+        with self.assertRaises(BlockedNetworkTarget) as caught:
+            validate_public_url(
+                "https://www.example.com/",
+                resolver=resolver_for("198.18.100.99"),
+                fake_ip_allowance=allowance,
+            )
+
+        self.assertEqual(type(caught.exception).__name__, "FakeIpApprovalRequired")
+        self.assertEqual(getattr(caught.exception, "hostname", None), "www.example.com")
+        self.assertEqual(str(caught.exception), "fake-IP host requires review")
+
+    def test_approval_file_rejects_expired_records(self):
+        expired = approval_payload(
+            approvals=[
+                {
+                    "hostname": "example.com",
+                    "approved_by": "security@example.com",
+                    "reason": "transparent proxy routing",
+                    "approved_at": (APPROVAL_NOW - timedelta(days=2)).isoformat(),
+                    "expires_at": (APPROVAL_NOW - timedelta(days=1)).isoformat(),
+                }
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = write_approval_file(tmpdir, expired)
+            with self.assertRaisesRegex(
+                InvalidFakeIpConfiguration,
+                "^invalid fake-IP allowance configuration$",
+            ):
+                fake_ip_allowance_from_env(
+                    {"OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE": str(path)},
+                    now=APPROVAL_NOW,
+                )
+
+    def test_approval_file_rejects_malformed_duplicate_and_mixed_configuration(self):
+        duplicate = approval_payload(
+            approvals=[
+                {
+                    "hostname": "example.com",
+                    "approved_by": "security@example.com",
+                    "reason": "transparent proxy routing",
+                    "approved_at": (APPROVAL_NOW - timedelta(days=1)).isoformat(),
+                    "expires_at": (APPROVAL_NOW + timedelta(days=1)).isoformat(),
+                },
+                {
+                    "hostname": "example.com",
+                    "approved_by": "security@example.com",
+                    "reason": "duplicate normalized host",
+                    "approved_at": (APPROVAL_NOW - timedelta(days=1)).isoformat(),
+                    "expires_at": (APPROVAL_NOW + timedelta(days=1)).isoformat(),
+                },
+            ]
+        )
+        invalid = (
+            approval_payload(networks=["2001:db8::/32"]),
+            *(
+                approval_payload(
+                    approvals=[
+                        {
+                            "hostname": hostname,
+                            "approved_by": "security@example.com",
+                            "reason": "not a valid exact hostname",
+                            "approved_at": (APPROVAL_NOW - timedelta(days=1)).isoformat(),
+                            "expires_at": (APPROVAL_NOW + timedelta(days=1)).isoformat(),
+                        }
+                    ]
+                )
+                for hostname in (
+                    "*.example.com",
+                    "https://example.com",
+                    "198.18.100.99",
+                    "bad..example.com",
+                )
+            ),
+            duplicate,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for payload in invalid:
+                with self.subTest(payload=payload):
+                    path = write_approval_file(tmpdir, payload)
+                    with self.assertRaisesRegex(
+                        InvalidFakeIpConfiguration,
+                        "^invalid fake-IP allowance configuration$",
+                    ):
+                        fake_ip_allowance_from_env(
+                            {"OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE": str(path)},
+                            now=APPROVAL_NOW,
+                        )
+
+            path = write_approval_file(tmpdir, approval_payload())
+            with self.assertRaisesRegex(
+                InvalidFakeIpConfiguration,
+                "^invalid fake-IP allowance configuration$",
+            ):
+                fake_ip_allowance_from_env(
+                    {
+                        "OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE": str(path),
+                        "OSINT_SAFE_HTTP_FAKE_IP_CIDRS": "198.18.0.0/15",
+                        "OSINT_SAFE_HTTP_FAKE_IP_HOSTS": "example.com",
+                    },
+                    now=APPROVAL_NOW,
+                )
+
+    def test_approval_file_rejects_unreadable_oversized_and_naive_timestamps(self):
+        naive_timestamp = approval_payload(
+            approvals=[
+                {
+                    "hostname": "example.com",
+                    "approved_by": "security@example.com",
+                    "reason": "transparent proxy routing",
+                    "approved_at": "2029-12-31T00:00:00",
+                    "expires_at": (APPROVAL_NOW + timedelta(days=1)).isoformat(),
+                }
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_path = Path(tmpdir) / "missing.json"
+            oversized_path = Path(tmpdir) / "oversized.json"
+            oversized_path.write_bytes(b" " * (64 * 1024 + 1))
+            malformed_path = Path(tmpdir) / "malformed.json"
+            malformed_path.write_text("{", encoding="utf-8")
+            naive_path = Path(tmpdir) / "naive.json"
+            naive_path.write_text(json.dumps(naive_timestamp), encoding="utf-8")
+            for path in (missing_path, oversized_path, malformed_path, naive_path):
+                with self.subTest(path=path.name):
+                    with self.assertRaisesRegex(
+                        InvalidFakeIpConfiguration,
+                        "^invalid fake-IP allowance configuration$",
+                    ):
+                        fake_ip_allowance_from_env(
+                            {"OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE": str(path)},
+                            now=APPROVAL_NOW,
+                        )
+
+    def test_approval_file_rejects_duplicate_json_object_keys(self):
+        duplicate_key_document = (
+            '{"version":1,"networks":["198.18.0.0/15"],"approvals":[],"approvals":[]}'
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "duplicate-keys.json"
+            path.write_text(duplicate_key_document, encoding="utf-8")
+            with self.assertRaisesRegex(
+                InvalidFakeIpConfiguration,
+                "^invalid fake-IP allowance configuration$",
+            ):
+                fake_ip_allowance_from_env(
+                    {"OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE": str(path)},
+                    now=APPROVAL_NOW,
+                )
+
+    def test_approval_file_keeps_direct_fake_ip_literal_blocked(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = write_approval_file(tmpdir, approval_payload())
+            allowance = fake_ip_allowance_from_env(
+                {"OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE": str(path)},
+                now=APPROVAL_NOW,
+            )
+
+        with self.assertRaises(BlockedNetworkTarget) as caught:
+            validate_public_url(
+                "https://198.18.100.99/",
+                fake_ip_allowance=allowance,
+            )
+
+        self.assertNotEqual(type(caught.exception).__name__, "FakeIpApprovalRequired")
+
+    def test_manual_allowance_cannot_permit_private_networks(self):
+        allowance = FakeIpAllowance(
+            (ipaddress.ip_network("10.0.0.0/8"),),
+            frozenset({"example.com"}),
+        )
+
+        with self.assertRaises(BlockedNetworkTarget):
+            validate_public_url(
+                "https://example.com/",
+                resolver=resolver_for("10.0.0.1"),
+                fake_ip_allowance=allowance,
+            )
+
     def test_empty_fake_ip_configuration_preserves_strict_default(self):
         allowance = fake_ip_allowance_from_env({})
 
@@ -401,6 +674,34 @@ class SafeHttpValidationTests(unittest.TestCase):
 
 
 class SafeFetchTests(unittest.TestCase):
+    def test_approval_file_redirect_requires_review_for_each_exact_hostname(self):
+        connector_calls = []
+
+        def connector(target, timeout_seconds, headers):
+            connector_calls.append(target.original_hostname)
+            return FakeResponse(302, headers={"Location": "https://www.example.com/final"}), FakeConnection()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = write_approval_file(tmpdir, approval_payload())
+            allowance = fake_ip_allowance_from_env(
+                {"OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE": str(path)},
+                now=APPROVAL_NOW,
+            )
+
+        with self.assertRaises(BlockedNetworkTarget) as caught:
+            safe_fetch(
+                "https://example.com/start",
+                timeout_seconds=1,
+                max_bytes=10,
+                resolver=resolver_for("198.18.100.99"),
+                connector=connector,
+                fake_ip_allowance=allowance,
+            )
+
+        self.assertEqual(type(caught.exception).__name__, "FakeIpApprovalRequired")
+        self.assertEqual(getattr(caught.exception, "hostname", None), "www.example.com")
+        self.assertEqual(connector_calls, ["example.com"])
+
     def test_fake_ip_redirect_requires_each_exact_hostname(self):
         connector_calls = []
 

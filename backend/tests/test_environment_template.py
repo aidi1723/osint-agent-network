@@ -47,6 +47,7 @@ class EnvironmentTemplateTests(unittest.TestCase):
             "OPENAI_BASE_URL",
             "OPENAI_API_KEY",
             "OPENAI_MODEL",
+            "OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE",
         }
         self.assertTrue(expected_keys.issubset(keys), expected_keys - keys)
 

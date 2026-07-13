@@ -15,11 +15,15 @@ class ReleaseArtifactTests(unittest.TestCase):
 
         self.assertIn("OSINT_SAFE_HTTP_FAKE_IP_CIDRS=\n", environment)
         self.assertIn("OSINT_SAFE_HTTP_FAKE_IP_HOSTS=\n", environment)
+        self.assertIn("OSINT_SAFE_HTTP_FAKE_IP_APPROVALS_FILE=\n", environment)
         self.assertIn("default-off", runbook)
         self.assertIn("exact host", runbook)
         self.assertIn("`198.18.0.0/15`", runbook)
         self.assertIn("IP literals remain blocked", runbook)
         self.assertIn("Every redirect", runbook)
+        self.assertIn("mutually exclusive", runbook)
+        self.assertIn("approval file", runbook)
+        self.assertIn("expiration", runbook)
 
     def test_backend_package_discovery_excludes_runtime_data(self):
         config = tomllib.loads(
