@@ -2309,6 +2309,40 @@ class AgentRouteAuthorizationHttpTests(unittest.TestCase):
                     if wrong_role == "tool_agent":
                         self.store.cancel_task(investigation.id)
 
+    def test_authorized_reporter_completion_uses_store_health_default(self):
+        reporter = self.register("reporter")
+        investigation = self.claimed_task(reporter)
+        health_snapshot = {
+            "summary": {"affected_capabilities": {"asset_discovery": ["amass"]}},
+            "tools": [],
+        }
+
+        with patch(
+            "app.services.store.build_tool_health_report",
+            return_value=health_snapshot,
+            create=True,
+        ) as health_report:
+            status, response = self.post(
+                f"/api/agent/tasks/{investigation.id}/complete",
+                {
+                    "task_id": investigation.id,
+                    "status": "NEEDS_REVIEW",
+                    "summary": "Reporter completion.",
+                    "report_markdown": "## BLUF\nReporter completion.",
+                },
+                reporter["agent_token"],
+            )
+
+        detail = self.store.get_investigation(investigation.id)
+        self.assertEqual(status, 200)
+        self.assertEqual(response["status"], "NEEDS_REVIEW")
+        self.assertEqual(detail["status"], "NEEDS_REVIEW")
+        self.assertIn("## 环境覆盖限制", response["report_markdown"])
+        self.assertIn("asset_discovery", response["report_markdown"])
+        self.assertIn("amass", response["report_markdown"])
+        self.assertEqual(response["report_markdown"], detail["report_markdown"])
+        health_report.assert_called_once_with()
+
     def test_unknown_disabled_legacy_null_and_management_credentials_are_401(self):
         registration = self.register("reporter")
         investigation = self.claimed_task(registration)

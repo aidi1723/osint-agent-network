@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from app.core.agent_permissions import PermissionedRoleStore, tier_for_role
 from app.core.planner import PlannedJob
@@ -126,6 +127,43 @@ class LocalRoleAgentTests(unittest.TestCase):
         detail = store.get_investigation(investigation.id)
         self.assertTrue(result.completed)
         self.assertIn(("company", "Example LLC"), {(item["type"], item["value"]) for item in detail["entities"]})
+
+    def test_analysis_judgement_uses_store_health_default_in_persisted_report(self):
+        store = MemoryStore()
+        investigation = store.create_investigation(
+            name="Analysis health default",
+            seed_type="company",
+            seed_value="Example LLC",
+            strategy_name="quick",
+        )
+        health_snapshot = {
+            "summary": {"affected_capabilities": {"asset_discovery": ["amass"]}},
+            "tools": [],
+        }
+
+        with patch(
+            "app.services.store.build_tool_health_report",
+            return_value=health_snapshot,
+            create=True,
+        ) as health_report:
+            result = run_role_agent(
+                store,
+                investigation.id,
+                {
+                    "id": "job-analysis",
+                    "investigation_id": investigation.id,
+                    "tool_name": "analysis_judgement",
+                    "agent_role": "analysis_judgement_agent",
+                },
+            )
+
+        detail = store.get_investigation(investigation.id)
+        self.assertTrue(result.completed)
+        self.assertEqual(detail["status"], "NEEDS_REVIEW")
+        self.assertIn("## 环境覆盖限制", detail["report_markdown"])
+        self.assertIn("asset_discovery", detail["report_markdown"])
+        self.assertIn("amass", detail["report_markdown"])
+        health_report.assert_called_once_with()
 
     def test_sparse_lead_identity_match_respects_declared_dependencies(self):
         store = MemoryStore()

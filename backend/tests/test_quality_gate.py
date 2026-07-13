@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from app.core.intelligence_memory import build_intelligence_memory
 from app.core.quality import build_quality_assessment, completion_status_for_detail, render_structured_report
@@ -483,6 +484,10 @@ class QualityGateTests(unittest.TestCase):
         self.assertEqual(status_after, status_before)
 
     def test_sqlite_complete_task_applies_quality_gate_and_structured_report(self):
+        health_snapshot = {
+            "summary": {"affected_capabilities": {"asset_discovery": ["amass"]}},
+            "tools": [],
+        }
         with TemporaryDirectory() as tmpdir:
             store = SQLiteStore(str(Path(tmpdir) / "osint.sqlite"))
             investigation = store.create_investigation(
@@ -491,19 +496,28 @@ class QualityGateTests(unittest.TestCase):
                 seed_value="Incomplete LLC",
                 strategy_name="standard",
             )
-            updated = store.complete_task(
-                investigation_id=investigation.id,
-                agent_id="agent-1",
-                status="COMPLETED",
-                summary="Done",
-                report_markdown="Done",
-                confidence=0.9,
-            )
+            with patch(
+                "app.services.store.build_tool_health_report",
+                return_value=health_snapshot,
+                create=True,
+            ) as health_report:
+                updated = store.complete_task(
+                    investigation_id=investigation.id,
+                    agent_id="agent-1",
+                    status="COMPLETED",
+                    summary="Done",
+                    report_markdown="Done",
+                    confidence=0.9,
+                )
 
         self.assertEqual(updated["status"], "NEEDS_REVIEW")
         self.assertIn("quality_assessment", updated)
         self.assertLess(updated["quality_assessment"]["score"], 50)
         self.assertIn("## BLUF", updated["report_markdown"])
+        self.assertIn("## 环境覆盖限制", updated["report_markdown"])
+        self.assertIn("asset_discovery", updated["report_markdown"])
+        self.assertIn("amass", updated["report_markdown"])
+        health_report.assert_called_once_with()
 
     def test_quality_assessment_includes_core_v3_checks(self):
         detail = {
