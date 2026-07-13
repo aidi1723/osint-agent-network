@@ -93,7 +93,11 @@ def completion_status_for_detail(detail: dict, requested_status: str) -> str:
     return "COMPLETED" if assessment["completion_ready"] else "NEEDS_REVIEW"
 
 
-def render_structured_report(detail: dict, assessment: dict | None = None) -> str:
+def render_structured_report(
+    detail: dict,
+    assessment: dict | None = None,
+    tool_health: dict | None = None,
+) -> str:
     assessment = assessment or build_quality_assessment(detail)
     planner_detail = {**detail, "quality_assessment": assessment}
     facts = detail.get("facts") or []
@@ -149,6 +153,7 @@ def render_structured_report(detail: dict, assessment: dict | None = None) -> st
 
     lines.extend(_completion_policy_lines(completion_policy))
     lines.extend(_gap_followup_lines(gap_analysis, gap_tool_plan))
+    lines.extend(_environment_coverage_limit_lines(tool_health))
 
     lines.extend(["", "## EEI 覆盖摘要"])
     eeis = requirements.get("eeis") or []
@@ -339,6 +344,18 @@ def _gap_followup_lines(gap_analysis: list[dict], gap_tool_plan: list[dict]) -> 
         hint = str(gap.get("manual_review_hint") or "").strip()
         if hint:
             lines.append(f"  - 人工复核：{hint}")
+    return lines
+
+
+def _environment_coverage_limit_lines(tool_health: dict | None) -> list[str]:
+    summary = tool_health.get("summary") if tool_health else {}
+    affected_capabilities = summary.get("affected_capabilities") if summary else {}
+    if not affected_capabilities:
+        return []
+
+    lines = ["", "## 环境覆盖限制", "- 当前环境的自动化覆盖能力有所降低。"]
+    for capability, tool_names in sorted(affected_capabilities.items()):
+        lines.append(f"- {capability}：{', '.join(sorted(tool_names))}")
     return lines
 
 

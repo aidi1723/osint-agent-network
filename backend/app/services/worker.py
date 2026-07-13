@@ -163,8 +163,14 @@ def run_investigation_jobs(
         or _report_score_stale(report_markdown, quality_assessment)
         or (final_status == "NEEDS_REVIEW" and not report_markdown.strip())
     )
+    tool_health = build_tool_health_report()
+    summary["tool_health"] = tool_health
     if should_refresh_report:
-        report_markdown = render_structured_report({**detail, "summary": summary_text, "completion_policy": completion_policy}, quality_assessment)
+        report_markdown = render_structured_report(
+            {**detail, "summary": summary_text, "completion_policy": completion_policy},
+            quality_assessment,
+            tool_health=tool_health,
+        )
     if should_refresh_report and hasattr(store, "complete_task"):
         store.complete_task(
             investigation_id=investigation_id,

@@ -28,6 +28,7 @@ class ToolHealthTests(unittest.TestCase):
         self.assertEqual(report["summary"]["ready"], 1)
         self.assertEqual(report["tools"][0]["status"], "ready")
         self.assertEqual(report["tools"][0]["reason"], "internal adapter")
+        self.assertEqual(report["tools"][0]["coverage_areas"], [])
 
     def test_reports_missing_executable_for_cli_tool_with_configured_command(self):
         registry = ToolRegistry(
@@ -52,6 +53,64 @@ class ToolHealthTests(unittest.TestCase):
         self.assertEqual(item["status"], "missing_executable")
         self.assertEqual(item["command"], "amass")
         self.assertIn("AMASS_COMMAND", item["env_checked"])
+
+    def test_unavailable_tools_report_affected_capabilities_without_ready_tools(self):
+        registry = ToolRegistry(
+            [
+                ToolDefinition(
+                    name="amass",
+                    display_name="OWASP Amass",
+                    execution_mode="sync_cli",
+                    accepts=("domain",),
+                    produces=("subdomain",),
+                    requires_credentials=False,
+                    default_timeout_seconds=120,
+                    base_confidence=0.5,
+                ),
+                ToolDefinition(
+                    name="socialscan",
+                    display_name="SocialScan",
+                    execution_mode="sync_cli",
+                    accepts=("username",),
+                    produces=("profile_url",),
+                    requires_credentials=False,
+                    default_timeout_seconds=120,
+                    base_confidence=0.5,
+                ),
+                ToolDefinition(
+                    name="maigret",
+                    display_name="Maigret",
+                    execution_mode="sync_cli",
+                    accepts=("username",),
+                    produces=("profile_url",),
+                    requires_credentials=False,
+                    default_timeout_seconds=120,
+                    base_confidence=0.5,
+                ),
+            ]
+        )
+
+        with patch(
+            "app.core.tool_health.shutil.which",
+            side_effect=lambda command: "/usr/bin/maigret" if command == "maigret" else None,
+        ):
+            report = build_tool_health_report(registry=registry, env={})
+
+        tools_by_name = {item["name"]: item for item in report["tools"]}
+        affected = report["summary"]["affected_capabilities"]
+
+        self.assertEqual(tools_by_name["amass"]["coverage_areas"], ["asset_discovery"])
+        self.assertEqual(tools_by_name["socialscan"]["coverage_areas"], ["social_identity"])
+        self.assertEqual(tools_by_name["maigret"]["coverage_areas"], ["social_identity"])
+        self.assertEqual(list(affected), ["asset_discovery", "social_identity"])
+        self.assertEqual(
+            affected,
+            {
+                "asset_discovery": ["amass"],
+                "social_identity": ["socialscan"],
+            },
+        )
+        self.assertNotIn("maigret", affected["social_identity"])
 
     def test_reports_rest_tool_missing_config_without_network_probe(self):
         registry = ToolRegistry(

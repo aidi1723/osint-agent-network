@@ -15,6 +15,17 @@ CREDENTIAL_BLOCKED = "credential_blocked"
 DISABLED = "disabled"
 
 
+TOOL_COVERAGE_AREAS = {
+    "theharvester": ("contact_discovery",),
+    "phoneinfoga": ("contact_validation_assist",),
+    "maigret": ("social_identity",),
+    "socialscan": ("social_identity",),
+    "spiderfoot": ("contact_discovery", "social_identity", "asset_discovery"),
+    "amass": ("asset_discovery",),
+    "customs_supply_chain": ("supply_chain_evidence",),
+}
+
+
 TOOL_CONFIG = {
     "sherlock": {
         "command_env": "SHERLOCK_COMMAND",
@@ -112,6 +123,16 @@ def build_tool_health_report(
     summary["attention_required"] = (
         summary[MISSING_CONFIG] + summary[MISSING_EXECUTABLE] + summary[CREDENTIAL_BLOCKED]
     )
+    affected_capabilities: dict[str, list[str]] = {}
+    for item in tools:
+        if item["status"] == READY:
+            continue
+        for capability in item["coverage_areas"]:
+            affected_capabilities.setdefault(capability, []).append(item["name"])
+    summary["affected_capabilities"] = {
+        capability: sorted(tool_names)
+        for capability, tool_names in sorted(affected_capabilities.items())
+    }
     return {"summary": summary, "tools": tools}
 
 
@@ -129,6 +150,7 @@ def _tool_status(tool, env: Mapping[str, str]) -> dict:
         "env_checked": checked,
         "command": "",
         "base_url": "",
+        "coverage_areas": sorted(TOOL_COVERAGE_AREAS.get(tool.name, ())),
     }
     if not tool.enabled_by_default:
         item["status"] = DISABLED

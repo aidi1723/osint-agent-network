@@ -421,6 +421,67 @@ class QualityGateTests(unittest.TestCase):
         self.assertIn("executable not found: httpx", report)
         self.assertIn("Inspect public registry", report)
 
+    def test_environment_coverage_limit_is_reported_without_changing_completion(self):
+        detail = {
+            "seed_type": "domain",
+            "seed_value": "example-target.test",
+            "entities": [
+                {"type": "organization", "value": "SampleCo", "confidence": 0.8},
+                {"type": "domain", "value": "example-target.test", "confidence": 0.8},
+                {"type": "email", "value": "contact@example-target.test", "confidence": 0.8},
+                {"type": "phone", "value": "+1-555-0100", "confidence": 0.8},
+                {"type": "business_scope", "value": "industrial components", "confidence": 0.8},
+            ],
+            "evidence_ledger": [{"id": "ev-1", "source_url": "https://example-target.test", "admiralty_code": "A-2"}],
+            "facts": [
+                {
+                    "id": "fact-1",
+                    "statement": "SampleCo publishes a contact channel.",
+                    "status": "CONFIRMED",
+                    "promotion_stage": "ACCEPTED_FACT",
+                    "confidence": 0.8,
+                    "evidence_ids": ["ev-1"],
+                }
+            ],
+            "hypotheses": [{"id": "h1", "status": "MOST_LIKELY"}],
+            "relationships": [{"from_value": "SampleCo", "to_value": "example-target.test"}],
+            "report_markdown": "## BLUF\nSampleCo has source-backed public business evidence.",
+            "intelligence_requirements": {
+                "pirs": [{"id": "pir-1", "status": "ANSWERED"}],
+                "eeis": [{"id": "eei-1", "field_key": "company_identity", "required": True, "status": "CONFIRMED"}],
+            },
+            "cross_verification_matrix": [
+                {"field_key": "company_identity", "status": "CONFIRMED", "candidate_value": "SampleCo"}
+            ],
+            "gap_analysis": [],
+            "gap_tool_plan": [],
+        }
+        tool_health = {
+            "summary": {
+                "affected_capabilities": {
+                    "asset_discovery": ["amass"],
+                    "social_identity": ["socialscan"],
+                }
+            },
+            "tools": [],
+        }
+
+        assessment_before = build_quality_assessment(detail)
+        status_before = completion_status_for_detail(detail, requested_status="COMPLETED")
+        report = render_structured_report(detail, assessment_before, tool_health=tool_health)
+        assessment_after = build_quality_assessment({**detail, "tool_health": tool_health})
+        status_after = completion_status_for_detail({**detail, "tool_health": tool_health}, requested_status="COMPLETED")
+
+        self.assertIn("## 环境覆盖限制", report)
+        self.assertIn("asset_discovery", report)
+        self.assertIn("amass", report)
+        self.assertIn("social_identity", report)
+        self.assertIn("socialscan", report)
+        self.assertLess(report.index("## 卡点与补采计划"), report.index("## 环境覆盖限制"))
+        self.assertLess(report.index("## 环境覆盖限制"), report.index("## EEI 覆盖摘要"))
+        self.assertEqual(assessment_after["completion_ready"], assessment_before["completion_ready"])
+        self.assertEqual(status_after, status_before)
+
     def test_sqlite_complete_task_applies_quality_gate_and_structured_report(self):
         with TemporaryDirectory() as tmpdir:
             store = SQLiteStore(str(Path(tmpdir) / "osint.sqlite"))

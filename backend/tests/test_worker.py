@@ -1686,6 +1686,40 @@ class WorkerTests(unittest.TestCase):
         self.assertNotIn("完整度评分：1.0 / 100", detail["report_markdown"])
         self.assertIn(f"完整度评分：{result['quality_assessment']['score']} / 100", detail["report_markdown"])
 
+    def test_worker_wires_one_health_snapshot_to_report_without_changing_final_status(self):
+        store = MemoryStore()
+        investigation = store.create_investigation(
+            name="环境覆盖报告刷新",
+            seed_type="company",
+            seed_value="Example Trading LLC",
+            strategy_name="quick",
+        )
+        store.replace_jobs(investigation.id, [])
+        store.set_investigation_status(investigation.id, "NEEDS_REVIEW")
+
+        health_snapshot = {
+            "summary": {"affected_capabilities": {"asset_discovery": ["amass"]}},
+            "tools": [],
+        }
+        completion_policy = {
+            "recommended_status": "COMPLETED",
+            "completion_mode": "limited",
+        }
+
+        with (
+            patch("app.services.worker.build_tool_health_report", return_value=health_snapshot) as health_report,
+            patch("app.services.worker.render_structured_report", return_value="## BLUF\nRefreshed report.") as render_report,
+            patch("app.services.worker.build_completion_policy", return_value=completion_policy),
+            patch("app.services.store.build_completion_policy", return_value=completion_policy),
+        ):
+            result = run_investigation_jobs(store, investigation.id, max_jobs=1, artifact_root=Path("/tmp/unused"))
+            detail = store.get_investigation(investigation.id)
+
+        self.assertEqual(result["tool_health"], health_snapshot)
+        health_report.assert_called_once_with()
+        self.assertEqual(render_report.call_args.kwargs["tool_health"], health_snapshot)
+        self.assertEqual(detail["status"], "COMPLETED")
+
     def test_completed_quality_gate_summary_is_stable_when_rerun_has_no_jobs(self):
         store = MemoryStore()
         investigation = store.create_investigation(
