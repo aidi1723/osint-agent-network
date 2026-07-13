@@ -491,8 +491,7 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
           <body>
             <section>
               <h2>Leadership</h2>
-              <p>Jane Smith, Export Manager</p>
-              <p>Email: jane.smith@example.com</p>
+              <p>Jane Smith, Export Manager - Email: jane.smith@example.com</p>
             </section>
           </body>
         </html>
@@ -516,7 +515,12 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
             relationships,
         )
         self.assertIn(("Jane Smith", "Export Manager", "person_has_public_role"), relationships)
-        self.assertIn(("Jane Smith", "jane.smith@example.com", "person_has_contact"), relationships)
+        self.assertIn(
+            ("Jane Smith", "jane.smith@example.com", "person_has_role_linked_contact"),
+            relationships,
+        )
+        self.assertNotIn(("Jane Smith", "jane.smith@example.com", "person_has_contact"), relationships)
+        self.assertIn(("jane.smith@example.com", "official_site_role_linked_contact"), evidence)
 
     def test_parser_extracts_json_ld_person_decision_maker_candidate(self):
         adapter = OfficialSiteExtractorAdapter()
@@ -542,7 +546,11 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
         self.assertIn(("person", "Michael Chen"), entity_values)
         self.assertIn(("job_title", "Managing Director"), entity_values)
         self.assertIn(("decision_maker", "Michael Chen - Managing Director"), entity_values)
-        self.assertIn(("Michael Chen", "michael.chen@example.com", "person_has_contact"), relationships)
+        self.assertIn(
+            ("Michael Chen", "michael.chen@example.com", "person_has_role_linked_contact"),
+            relationships,
+        )
+        self.assertNotIn(("Michael Chen", "michael.chen@example.com", "person_has_contact"), relationships)
 
     def test_parser_rejects_generic_decision_labels_and_distant_contacts(self):
         adapter = OfficialSiteExtractorAdapter()
@@ -553,7 +561,7 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
             <p>Sales Team - Customer Service</p>
             <p>Generic inbox: info@example.com</p>
             <section>
-              <p>Alice Brown, Sales Manager</p>
+              <p>Alice Brown, Sales Manager - Generic inbox: info@example.com; Generic hotline: +1 212 555 0140</p>
             </section>
           </body>
         </html>
@@ -570,7 +578,14 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
         self.assertNotIn(("person", "Contact Us"), entity_values)
         self.assertNotIn(("person", "Sales Team"), entity_values)
         self.assertIn(("person", "Alice Brown"), entity_values)
-        self.assertNotIn(("Alice Brown", "info@example.com", "person_has_contact"), relationships)
+        self.assertNotIn(
+            ("Alice Brown", "info@example.com", "person_has_role_linked_contact"),
+            relationships,
+        )
+        self.assertNotIn(
+            ("Alice Brown", "+12125550140", "person_has_role_linked_contact"),
+            relationships,
+        )
 
     def test_parser_extracts_contact_and_business_fields_from_html(self):
         adapter = OfficialSiteExtractorAdapter()
@@ -607,12 +622,59 @@ class OfficialSiteExtractorAdapterTests(unittest.TestCase):
         self.assertIn(("business_scope", "uPVC windows"), entity_values)
         self.assertIn(("business_scope", "aluminum curtain wall systems"), entity_values)
         self.assertIn(("address", "88 Industrial Road, Newark, NJ"), entity_values)
-        self.assertIn(("sales@example.com", "official_site_contact"), evidence)
-        self.assertIn(("uPVC windows", "official_site_business_scope"), evidence)
+        self.assertIn(("sales@example.com", "official_site_contact_public_general"), evidence)
+        self.assertIn(("uPVC windows", "official_site_business_scope_text"), evidence)
         self.assertIn(
             ("https://example.com/about", "sales@example.com", "official_site_has_contact_email"),
             relationships,
         )
+
+    def test_parser_keeps_inline_phone_and_fax_distinct(self):
+        parsed = OfficialSiteExtractorAdapter().parse_html(
+            "<html><body><p>Phone: +1 202 555 0103 Fax: +1 202 555 0199</p></body></html>",
+            url="https://example.com/contact",
+        )
+
+        entities = {(item.type, item.value) for item in parsed.entities}
+        evidence = {(item.entity_value, item.evidence_kind) for item in parsed.evidence}
+
+        self.assertIn(("phone", "+12025550103"), entities)
+        self.assertIn(("fax", "+12025550199"), entities)
+        self.assertNotIn(("phone", "+12025550199"), entities)
+        self.assertIn(("+12025550103", "official_site_contact_public_general"), evidence)
+        self.assertIn(("+12025550199", "official_site_contact_fax"), evidence)
+
+    def test_parser_preserves_fixed_automotive_scope_fallback(self):
+        parsed = OfficialSiteExtractorAdapter().parse_html(
+            "<html><body><p>Auto parts and brake components.</p></body></html>",
+            url="https://example.com/products",
+        )
+
+        entities = {(item.type, item.value) for item in parsed.entities}
+        evidence = {(item.entity_value, item.evidence_kind) for item in parsed.evidence}
+
+        self.assertIn(("business_scope", "auto parts"), entities)
+        self.assertIn(("business_scope", "brake components"), entities)
+        self.assertIn(("auto parts", "official_site_business_scope"), evidence)
+
+    def test_parser_emits_heading_and_cued_text_scope_evidence(self):
+        parsed = OfficialSiteExtractorAdapter().parse_html(
+            """
+            <html><body>
+              <h2>Industrial Pumps</h2>
+              <p>We provide membrane filtration systems for process water.</p>
+            </body></html>
+            """,
+            url="https://example.com/capabilities",
+        )
+
+        entities = {(item.type, item.value) for item in parsed.entities}
+        evidence = {(item.entity_value, item.evidence_kind) for item in parsed.evidence}
+
+        self.assertIn(("business_scope", "Industrial Pumps"), entities)
+        self.assertIn(("business_scope", "membrane filtration systems"), entities)
+        self.assertIn(("Industrial Pumps", "official_site_business_scope_heading"), evidence)
+        self.assertIn(("membrane filtration systems", "official_site_business_scope_text"), evidence)
 
     def test_build_command_is_artifact_parser(self):
         adapter = OfficialSiteExtractorAdapter()

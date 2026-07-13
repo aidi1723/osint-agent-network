@@ -106,11 +106,63 @@ class ToolFixtureRegressionTests(unittest.TestCase):
         self.assertIn(("business_scope", "uPVC windows"), entities)
         self.assertIn(("business_scope", "aluminum curtain wall systems"), entities)
         self.assertIn(("address", "88 Industrial Road, Newark, NJ"), entities)
-        self.assertIn(("sales@example.com", "official_site_contact"), evidence)
-        self.assertIn(("uPVC windows", "official_site_business_scope"), evidence)
+        self.assertIn(("sales@example.com", "official_site_contact_public_general"), evidence)
+        self.assertIn(("uPVC windows", "official_site_business_scope_meta"), evidence)
         self.assertIn(
             ("https://www.example.com/about", "sales@example.com", "official_site_has_contact_email"),
             relationships,
+        )
+
+    def test_official_site_extractor_chinese_fixture_keeps_scopes_and_contact_semantics(self):
+        parsed = OfficialSiteExtractorAdapter().parse_artifact(
+            FIXTURES / "official_site_extractor" / "chinese_services.html",
+            target_value="https://water-example.test/services",
+        )
+
+        entities = entity_pairs(parsed)
+        evidence = evidence_pairs(parsed)
+        relationships = relationship_triples(parsed)
+        evidence_by_key = {(item.entity_value, item.evidence_kind): item for item in parsed.evidence}
+
+        self.assertIn(("business_scope", "工业水处理设备"), entities)
+        self.assertIn(("business_scope", "膜过滤系统"), entities)
+        self.assertIn(("business_scope", "工程服务"), entities)
+        self.assertIn(("工业水处理设备", "official_site_business_scope_meta"), evidence)
+        self.assertIn("工业水处理设备、膜过滤系统和工程服务", evidence_by_key[("工业水处理设备", "official_site_business_scope_meta")].snippet)
+        self.assertIn(("email", "li.ming@water-example.test"), entities)
+        self.assertIn(("phone", "+12025550101"), entities)
+        self.assertIn(("email", "service@water-example.test"), entities)
+        self.assertIn(("fax", "+12025550199"), entities)
+        self.assertNotIn(("phone", "+12025550199"), entities)
+        self.assertIn(("service@water-example.test", "official_site_contact_customer_service"), evidence)
+        self.assertIn(("+12025550199", "official_site_contact_fax"), evidence)
+        self.assertIn(("李明", "li.ming@water-example.test", "person_has_role_linked_contact"), relationships)
+        self.assertIn(("李明", "+12025550101", "person_has_role_linked_contact"), relationships)
+        self.assertIn(("li.ming@water-example.test", "official_site_role_linked_contact"), evidence)
+        self.assertNotIn(("李明", "service@water-example.test", "person_has_role_linked_contact"), relationships)
+        self.assertNotIn(("李明", "+12025550199", "person_has_role_linked_contact"), relationships)
+        self.assertNotIn(
+            ("李明", "li.ming@water-example.test", "person_has_contact"),
+            relationships,
+        )
+
+    def test_official_site_extractor_french_json_ld_fixture_keeps_language_neutral_scopes(self):
+        parsed = OfficialSiteExtractorAdapter().parse_artifact(
+            FIXTURES / "official_site_extractor" / "french_catalog.json.html",
+            target_value="https://catalog-example.test/products",
+        )
+
+        entities = entity_pairs(parsed)
+        evidence = evidence_pairs(parsed)
+        evidence_by_key = {(item.entity_value, item.evidence_kind): item for item in parsed.evidence}
+
+        self.assertIn(("business_scope", "Pompes industrielles"), entities)
+        self.assertIn(("business_scope", "Maintenance hydraulique"), entities)
+        self.assertIn(("Pompes industrielles", "official_site_business_scope_json_ld"), evidence)
+        self.assertIn(("Maintenance hydraulique", "official_site_business_scope_json_ld"), evidence)
+        self.assertEqual(
+            evidence_by_key[("Pompes industrielles", "official_site_business_scope_json_ld")].snippet,
+            "Pompes industrielles",
         )
 
     def test_subfinder_fixture_keeps_passive_subdomains(self):
@@ -165,7 +217,7 @@ class ToolFixtureRegressionTests(unittest.TestCase):
             ),
             search_relationships,
         )
-        self.assertIn(("sales@example.com", "official_site_contact"), extractor_evidence)
+        self.assertIn(("sales@example.com", "official_site_contact_public_general"), extractor_evidence)
         self.assertIn(
             (
                 "https://www.example-target.test/about",
