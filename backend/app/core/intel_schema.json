@@ -1,0 +1,65 @@
+{
+  "version": "0.1",
+  "unknown_markers": ["unknown", "unconfirmed", "待补充", "未在公开来源中确认"],
+  "entities": {
+    "required_fields": ["type", "value", "source_tool", "confidence"],
+    "status_values": ["CONFIRMED", "CANDIDATE", "CONTRADICTED", "UNVERIFIED", "NEEDS_REVIEW"],
+    "identity_confidence_fields": [
+      "record_confidence",
+      "identity_match_confidence",
+      "field_interpretation_confidence"
+    ],
+    "candidate_rules": [
+      "Keep CRM lead identity, public company record, and decision-maker profile separate until evidence closes the identity match.",
+      "Do not promote broad same-name hits without country, platform, company, contact, product, or independent corroboration."
+    ]
+  },
+  "evidence": {
+    "required_fields": ["kind", "source_tool", "snippet"],
+    "source_type_values": [
+      "official_website",
+      "government_registry",
+      "regulatory_filing",
+      "original_social_profile",
+      "mainstream_media",
+      "industry_association",
+      "business_directory",
+      "job_board",
+      "map_listing",
+      "search_result",
+      "aggregator",
+      "tool_output",
+      "single_weak_signal",
+      "anonymous_forum",
+      "unknown"
+    ]
+  },
+  "relationships": {
+    "required_fields": ["from", "to", "type", "confidence"],
+    "direction_required": true
+  },
+  "claims": {
+    "required_fields": ["statement", "status", "supporting_evidence"],
+    "status_values": ["CONFIRMED", "LIKELY", "PLAUSIBLE", "UNVERIFIED", "CONTRADICTED"]
+  },
+  "admiralty_code": {
+    "source_reliability": ["A", "B", "C", "D", "E", "F"],
+    "information_credibility": ["1", "2", "3", "4", "5", "6"],
+    "required_fields": ["code", "source_reliability", "information_credibility", "probability_language"]
+  },
+  "hypotheses": {
+    "default_sparse_lead": [
+      "alpha_real_procurement",
+      "beta_price_benchmarking",
+      "gamma_noise_or_unmatched_identity"
+    ],
+    "status_values": ["MOST_LIKELY", "PLAUSIBLE", "DISFAVORED", "REJECTED", "UNVERIFIED"]
+  },
+  "indicators": {
+    "required_fields": ["id", "scenario", "weight", "polarity", "evidence_kinds"]
+  },
+  "reports": {
+    "required_sections": ["BLUF", "PIR", "confirmed_facts", "ACH", "I&W", "directed_collection", "recommendations"],
+    "language_rule": "Use cautious evidence-bound language. Unknown fields must remain unknown or 待补充."
+  }
+}

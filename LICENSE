@@ -1,0 +1,32 @@
+Proprietary Commercial License
+
+Copyright (c) 2026 OSINT Agent Network / 情报官.
+All rights reserved.
+
+This software and associated documentation are proprietary and confidential.
+No ownership rights are transferred by access to this repository or by receipt
+of a copy of the software.
+
+You may use, copy, deploy, or modify this software only under a separate written
+license agreement or other written authorization from the copyright holder.
+
+Unless expressly authorized in writing, you may not:
+
+- publish, distribute, sublicense, sell, lease, or transfer the software;
+- make the source code or binaries available to any third party;
+- use the software to build or operate a competing product or service;
+- remove copyright, license, attribution, or proprietary notices;
+- reverse engineer compiled artifacts except where prohibited restrictions are
+  unenforceable under applicable law;
+- use the software outside authorized, lawful, and consent-based investigations.
+
+This software is provided "as is" without warranties of any kind, whether
+express, implied, statutory, or otherwise, including warranties of merchantability,
+fitness for a particular purpose, title, and non-infringement. To the maximum
+extent permitted by law, the copyright holder is not liable for any direct,
+indirect, incidental, special, consequential, exemplary, or punitive damages
+arising from use of the software.
+
+Third-party dependencies remain governed by their own licenses. See
+THIRD_PARTY_NOTICES.md.
+

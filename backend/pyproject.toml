@@ -1,0 +1,11 @@
+[project]
+name = "osint-agent-network-backend"
+version = "0.1.0"
+description = "OSINT Agent Network API. Runtime dependencies are the Python standard library."
+requires-python = ">=3.11"
+license = "Proprietary"
+dependencies = []
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

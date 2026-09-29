@@ -1,0 +1,16 @@
+[Unit]
+Description=OSINT Agent Network Web UI
+After=network-online.target osint-agent-network-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/aidi/apps/osint-agent-network/frontend
+ExecStart=/usr/bin/npm run preview -- --host 127.0.0.1 --port 3008
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
