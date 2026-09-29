@@ -1,5 +1,91 @@
 # Update Log
 
+## 2026-09-29 - Local Directory Audit And Handoff Checkpoint
+
+Scope:
+
+- Audited and repaired the workspace copy at `osint-agent-network` on this machine.
+- This copy started as an incomplete 2026-05-24 snapshot. It is not the same tree as GitHub `main`.
+- Goal of this checkpoint: make the local directory runnable and reviewable without publishing investigation data.
+- Did not replace either GitHub `main`. Did not build Docker images. Did not connect a customs data source.
+
+Commits on local `main`:
+
+- `7d73bb7` — Establish a reviewable baseline and close the directory audit findings.
+- `172b264` — Make a local handoff possible without shipping investigation data.
+
+GitHub:
+
+- Local `main` was pushed as branch `local-handoff-2026-09-29` on both repositories. Their `main` branches were left unchanged.
+- Public: https://github.com/aidi1723/osint-agent-network/tree/local-handoff-2026-09-29
+  - `main` remains `27c3347` (2026-07-13, `test: skip source scan outside Git checkouts`).
+- Private: https://github.com/aidi1723/osint-agent-network-private/tree/local-handoff-2026-09-29
+  - `main` remains `0a45e57` (2026-05-22, `Initial proprietary release`).
+- This local repository has no `origin` remote. The pushes used explicit GitHub URLs.
+- The public branch is visible to anyone. Do not put `data/`, `.env`, or investigation exports on it.
+
+Changes:
+
+- **Frontend restored**: `frontend/src` was copied back from the local full tree. Vite dev and preview bind to `127.0.0.1`.
+- **Git baseline**: Repository initialized. `data/*.sqlite`, `data/jobs/`, screenshots, snapshots, samples, and `.env` stay ignored.
+- **Loopback auth**: Default `APP_HOST` is `127.0.0.1`. Binding any other address without `AGENT_API_TOKEN` or `ADMIN_API_TOKEN` exits. Token comparison is constant-time. `/api/health` stays anonymous. `/api/tools/health` requires a token when one is configured.
+- **Browser session**: `GET /api/auth/session`, `POST /api/auth/login`, and `POST /api/auth/logout`. With no token configured, session status is `{authenticated: false, required: false}` so the console opens. With a token, login sets an HttpOnly `osint_session` cookie and later writes require `X-CSRF-Token`. Sessions are stored in `data/sessions.sqlite` and survive an API restart.
+- **Role gate**: HTTP agent writes call `authorize_role_method`. Unknown roles return 403. A reader role cannot call `add_fact`. The CLI sends `agent_role`.
+- **SQLite**: Connections use a 5 second timeout, WAL, and `busy_timeout=5000`. System status returns the database file name, not an absolute path. LLM status returns `api_key_configured` and does not return key fragments.
+- **Fact promotion**: Evidence whose URL starts with `hcs://role-agent/` or whose source type is `role_agent_collection` can only become `NEEDS_REVIEW`. External evidence can still become `LIKELY` or `CONFIRMED`.
+- **Company orchestration**: `_needs_company_orchestration` is true only when `seed_type` is `company`. Name keywords such as `llc` or `hospitality` no longer create company jobs for a username task.
+- **Test artifacts**: Worker tests that call `run_investigation_jobs` pass a temporary `artifact_root`. `JOB_WORKDIR` still overrides the default `data/jobs` path.
+- **Recon-ng**: Company names may not contain an apostrophe. Commands stay on argv lists.
+- **Intelligence summary**: `GET /api/investigations/:id/intelligence` groups stored email, phone, domain, social, and product entities. It does not invent trade records.
+- **Customs**: `POST /api/customs/supply-chain` returns `501` with the detail `当前后端没有接入海关数据源，无法查询供应链。`
+- **Release check**: `python3 scripts/check_handoff.py` fails if Compose publishes a port on all interfaces, `.dockerignore` omits `data/`, gitignore misses investigation paths, a sensitive path is tracked, or `frontend/package.json` is GPL while `EULA.md` remains proprietary.
+- **License metadata**: `frontend/package.json` and the lockfile root license are `UNLICENSED`, matching the existing EULA. Third-party dependency licenses are unchanged.
+- **Compose**: `docker-compose.yml` builds images, publishes `127.0.0.1:8088` and `127.0.0.1:3008`, and treats a missing `.env` as optional. The container still listens on `0.0.0.0`, so it refuses to start until a token is set. Hot reload remains `docker-compose.dev.yml`.
+
+Regression coverage:
+
+- Auth tests cover open loopback session, admin login, and non-loopback bind refusal.
+- Protocol tests cover missing `agent_role` and reader roles being rejected for fact writes.
+- Role-agent tests require collection notes to stay `NEEDS_REVIEW`, and external evidence can still promote.
+- Worker tests keep job output in a temporary directory.
+- `backend/tests/test_browser_sessions.py` checks that a new store process can read a saved session and that expired sessions are removed.
+- `backend/tests/test_intelligence_summary.py` checks entity grouping and the customs 501 response.
+- `backend/tests/test_release_check.py` checks unsafe ports, GPL metadata, and tracked investigation data.
+
+Local verification on 2026-09-29:
+
+- `PYTHONPATH=backend python3 -m unittest discover -s backend/tests` — 226 tests, OK, about 9 seconds.
+- `python3 scripts/check_handoff.py` — passed.
+- Browser at `http://127.0.0.1:3008/` opened the investigation console with no login error. The selected task's intelligence panel showed 2 emails, 5 phones, 3 social profiles, and 2 product entries.
+- At the end of the handoff, `GET http://127.0.0.1:8088/api/health` returned ok and the web port returned HTTP 200.
+- `bash scripts/verify.sh`, frontend `npm test`, and `npm run build` were not re-run after the final handoff commit. Do not treat them as fresh evidence.
+- Docker was not built. `docker version` could not reach the Colima socket at `unix:///Users/aidi/.colima/default/docker.sock`.
+
+How the three copies differ:
+
+- Compared by git blob hash on 2026-09-29.
+- Against public `main`: 138 files identical, 78 files different, 111 files only on GitHub, 8 files only in this local branch.
+- GitHub-only work includes customs supply chain, browser auth, persistent job queue, report export, and the July security docs. Do not delete that line to make this branch match.
+- Against private `main`: private is an older subset. All 167 private files exist here; 119 are identical and 48 differ. This branch has 57 additional files.
+- None of the three commits tracks `.env`, SQLite databases, or screenshots. `.env.example` is intentionally tracked.
+
+Next session, start here:
+
+1. Choose the base before editing. To continue the July product, start from public `main` at `27c3347` and port only the checks that are still missing. To continue this repaired May snapshot, stay on `local-handoff-2026-09-29`. Do not merge the two histories blindly and do not force-push either `main`.
+2. If the next goal is external delivery of this branch: start Docker, run `docker compose up` with `ADMIN_API_TOKEN` set in `.env`, and keep host ports on `127.0.0.1`.
+3. Leave customs at 501 until a real trade source exists. Do not fill it with sample shipments.
+4. Leave real investigation data in `data/`. It is gitignored and excluded from the Docker build context. Do not delete it and do not commit it.
+5. Re-run `python3 scripts/check_handoff.py` and the backend unittest command above before calling the tree deliverable.
+6. Historical docs still mention `/Users/aidi/情报官/osint-agent-network` and `10.0.0.184`. They did not block local startup. Update them only when touching deployment docs.
+7. `store.py` is still the large persistence module. Split it only around the change being made.
+
+Closure decision:
+
+- Closed as a local handoff checkpoint.
+- Not closed as a public or hosted release. The runnable console is the local one. The newer product history is still public `main`.
+
+---
+
 ## 2026-05-24 - Intelligence Maturity Gate And n100 Workflow Closure
 
 Scope:
