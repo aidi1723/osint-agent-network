@@ -1,11 +1,18 @@
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
+
+from unittest.mock import patch
 
 from app.main import (
     agent_request_authorized,
     bind_authorization_error,
+    login_with_admin_token,
     read_request_authorized,
     request_authorized,
     requires_write_authorization,
+    reset_browser_sessions,
+    session_status_payload,
 )
 
 
@@ -65,6 +72,33 @@ class AgentAuthTests(unittest.TestCase):
                 expected_token="read-secret",
             )
         )
+
+    def test_session_is_open_when_no_token_is_configured(self):
+        with patch.dict("os.environ", {}, clear=True):
+            payload = session_status_payload({})
+        self.assertFalse(payload["required"])
+        self.assertFalse(payload["authenticated"])
+
+    def test_login_creates_a_session_for_the_admin_token(self):
+        with TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                "os.environ",
+                {
+                    "ADMIN_API_TOKEN": "admin-secret",
+                    "OSINT_SESSION_DB_PATH": str(Path(tmpdir) / "sessions.sqlite"),
+                },
+                clear=True,
+            ):
+                reset_browser_sessions()
+                self.assertEqual(session_status_payload({})["required"], True)
+                self.assertIsNone(login_with_admin_token("wrong"))
+                body, cookie = login_with_admin_token("admin-secret")
+                self.assertTrue(body["authenticated"])
+                self.assertTrue(body["csrf_token"])
+                self.assertIn("osint_session=", cookie)
+                session = session_status_payload({"Cookie": cookie.split(";", 1)[0]})
+            self.assertTrue(session["authenticated"])
+            self.assertEqual(session["csrf_token"], body["csrf_token"])
 
     def test_non_loopback_bind_requires_a_token(self):
         self.assertEqual(bind_authorization_error("127.0.0.1", "", ""), "")

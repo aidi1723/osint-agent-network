@@ -1,13 +1,18 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.cookies import SimpleCookie
 import hmac
 import json
 import os
+import secrets
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from app.core.agent_payload_validation import validate_agent_payload
+from app.core.browser_sessions import BrowserSessionStore
 from app.core.agent_permissions import authorize_role_method
 from app.core.intel_gateway import build_intel_plan
+from app.core.intelligence_summary import build_investigation_intelligence
 from app.core.mcp_descriptor import build_mcp_descriptor, load_mcp_resource
 from app.core.normalization import NormalizationError
 from app.core.registry import default_tool_registry
@@ -29,8 +34,12 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/api/auth/session":
+            self._json(session_status_payload(dict(self.headers)))
+            return
+
         read_token = os.getenv("READ_API_TOKEN", "") or os.getenv("ADMIN_API_TOKEN", "") or os.getenv("AGENT_API_TOKEN", "")
-        if not read_request_authorized(parsed.path, dict(self.headers), read_token):
+        if not read_request_authorized(parsed.path, dict(self.headers), read_token) and browser_session_from_headers(dict(self.headers)) is None:
             self._json({"detail": "unauthorized read request"}, status=401)
             return
 
@@ -101,6 +110,18 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._json({"agents": store.list_agents()})
             return
 
+        if parsed.path.startswith("/api/investigations/") and parsed.path.endswith("/intelligence"):
+            investigation_id = parsed.path[len("/api/investigations/") : -len("/intelligence")]
+            if not investigation_id or "/" in investigation_id:
+                self._json({"detail": "not found"}, status=404)
+                return
+            item = store.get_investigation(investigation_id)
+            if item is None:
+                self._json({"detail": "investigation not found"}, status=404)
+                return
+            self._json(build_investigation_intelligence(item))
+            return
+
         if parsed.path.startswith("/api/investigations/"):
             investigation_id = parsed.path.rsplit("/", 1)[-1]
             item = store.get_investigation(investigation_id)
@@ -120,7 +141,28 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._json(exc.payload, status=exc.status)
 
     def _handle_post(self, parsed):
-        if parsed.path.startswith("/api/agent/"):
+        if parsed.path == "/api/auth/login":
+            payload = self._read_json()
+            result = login_with_admin_token(str(payload.get("admin_token") or ""))
+            if result is None:
+                self._json({"detail": "invalid credentials"}, status=401)
+                return
+            body, cookie = result
+            self._json(body, headers=(("Set-Cookie", cookie),))
+            return
+
+        if parsed.path == "/api/auth/logout":
+            clear_browser_session(dict(self.headers))
+            self._json({"authenticated": False}, headers=(("Set-Cookie", expired_session_cookie()),))
+            return
+
+        session = browser_session_from_headers(dict(self.headers))
+        if session is not None:
+            csrf = self.headers.get("X-CSRF-Token") or self.headers.get("x-csrf-token") or ""
+            if not _constant_match(csrf, session["csrf"]):
+                self._json({"detail": "browser mutation protection failed"}, status=403)
+                return
+        elif parsed.path.startswith("/api/agent/"):
             if not agent_request_authorized(dict(self.headers), os.getenv("AGENT_API_TOKEN", "")):
                 self._json({"detail": "unauthorized agent request"}, status=401)
                 return
@@ -129,6 +171,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             if not request_authorized(dict(self.headers), expected_token):
                 self._json({"detail": "unauthorized management request"}, status=401)
                 return
+
+        if parsed.path == "/api/customs/supply-chain":
+            self._json(
+                {"detail": "当前后端没有接入海关数据源，无法查询供应链。"},
+                status=501,
+            )
+            return
 
         if parsed.path == "/api/investigations":
             try:
@@ -452,7 +501,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         self._json({"detail": "validation failed", "errors": errors}, status=400)
         return True
 
-    def _json(self, payload: dict, status: int = 200):
+    def _json(self, payload: dict, status: int = 200, headers: tuple[tuple[str, str], ...] = ()):
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -462,7 +511,10 @@ class ApiHandler(BaseHTTPRequestHandler):
         if origin in allowed_origins or "*" in allowed_origins:
             self.send_header("Access-Control-Allow-Origin", origin or allowed_origins[0])
         self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CSRF-Token")
+        self.send_header("Access-Control-Allow-Credentials", "true")
+        for name, value in headers:
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(encoded)
 
@@ -489,17 +541,110 @@ def agent_request_authorized(headers: dict, expected_token: str) -> bool:
     return request_authorized(headers, expected_token)
 
 
+def _constant_match(presented: str, expected: str) -> bool:
+    if len(presented) != len(expected):
+        return False
+    return hmac.compare_digest(presented, expected)
+
+
 def request_authorized(headers: dict, expected_token: str) -> bool:
     if not expected_token:
         return True
     authorization = headers.get("Authorization") or headers.get("authorization") or ""
-    return hmac.compare_digest(authorization, f"Bearer {expected_token}")
+    return _constant_match(authorization, f"Bearer {expected_token}")
 
 
 def read_request_authorized(path: str, headers: dict, expected_token: str) -> bool:
     if path in {"/api/health"}:
         return True
     return request_authorized(headers, expected_token)
+
+
+def browser_session_store() -> BrowserSessionStore:
+    override = os.getenv("OSINT_SESSION_DB_PATH", "").strip()
+    if override:
+        return BrowserSessionStore(Path(override))
+    database = Path(os.getenv("OSINT_DB_PATH", "data/osint.sqlite"))
+    return BrowserSessionStore(database.with_name("sessions.sqlite"))
+
+
+def reset_browser_sessions() -> None:
+    browser_session_store().clear()
+
+
+def configured_auth_tokens() -> list[str]:
+    return [
+        token
+        for token in (
+            os.getenv("ADMIN_API_TOKEN", ""),
+            os.getenv("AGENT_API_TOKEN", ""),
+            os.getenv("READ_API_TOKEN", ""),
+        )
+        if token
+    ]
+
+
+def session_status_payload(headers: dict) -> dict:
+    if not configured_auth_tokens():
+        return {"authenticated": False, "required": False}
+    session = browser_session_from_headers(headers)
+    if session is None:
+        return {"authenticated": False, "required": True}
+    return {
+        "authenticated": True,
+        "required": True,
+        "role": "admin",
+        "csrf_token": session["csrf"],
+    }
+
+
+def browser_session_from_headers(headers: dict) -> dict | None:
+    raw = headers.get("Cookie") or headers.get("cookie") or ""
+    if not raw:
+        return None
+    cookie = SimpleCookie()
+    try:
+        cookie.load(raw)
+    except Exception:
+        return None
+    morsel = cookie.get("osint_session")
+    if morsel is None or not morsel.value:
+        return None
+    return browser_session_store().get(morsel.value)
+
+
+def login_with_admin_token(admin_token: str) -> tuple[dict, str] | None:
+    expected = [token for token in (os.getenv("ADMIN_API_TOKEN", ""), os.getenv("AGENT_API_TOKEN", "")) if token]
+    if not expected or not any(_constant_match(admin_token, token) for token in expected):
+        return None
+    session_id = secrets.token_urlsafe(32)
+    csrf = secrets.token_urlsafe(32)
+    browser_session_store().put(session_id, csrf, time.time() + 8 * 60 * 60)
+    return (
+        {"authenticated": True, "required": True, "role": "admin", "csrf_token": csrf},
+        session_cookie(session_id),
+    )
+
+
+def clear_browser_session(headers: dict) -> None:
+    raw = headers.get("Cookie") or headers.get("cookie") or ""
+    cookie = SimpleCookie()
+    try:
+        cookie.load(raw)
+    except Exception:
+        return
+    morsel = cookie.get("osint_session")
+    if morsel is not None and morsel.value:
+        browser_session_store().delete(morsel.value)
+
+
+def session_cookie(session_id: str) -> str:
+    secure = "; Secure" if os.getenv("OSINT_COOKIE_SECURE", "").lower() in {"1", "true", "yes"} else ""
+    return f"osint_session={session_id}; HttpOnly; Path=/; SameSite=Lax{secure}"
+
+
+def expired_session_cookie() -> str:
+    return "osint_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax"
 
 
 def bind_authorization_error(host: str, agent_token: str, admin_token: str) -> str:
@@ -527,6 +672,8 @@ def requires_write_authorization(path: str) -> bool:
     if path == "/api/agents/heartbeat":
         return True
     if path == "/api/investigations":
+        return True
+    if path == "/api/customs/supply-chain":
         return True
     if path == "/api/investigations/release-stale":
         return True

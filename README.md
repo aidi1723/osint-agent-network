@@ -101,7 +101,17 @@ Compose 会构建 API 和静态前端，并把端口发布在本机：
 - `api`: `127.0.0.1:8088`
 - `web`: `127.0.0.1:3008`
 
-容器内 API 监听 `0.0.0.0`，因此 `.env` 必须设置 `AGENT_API_TOKEN` 或 `ADMIN_API_TOKEN`，否则进程会拒绝启动。本地开发热更新使用 `docker compose -f docker-compose.dev.yml up`。
+容器内 API 监听 `0.0.0.0`，因此 `.env` 必须设置 `AGENT_API_TOKEN` 或 `ADMIN_API_TOKEN`，否则进程会拒绝启动。`.env` 不存在时 Compose 仍能解析配置，但 API 会因没有令牌而退出。本地开发热更新使用 `docker compose -f docker-compose.dev.yml up`。
+
+调查数据库、任务产物和截图留在 `data/`。这个目录被 Git 和 Docker 构建上下文排除，运行时再挂载进容器。登录会话写在同一目录的 `sessions.sqlite`，API 重启后仍然有效。海关供应链没有数据源，界面里的分析按钮会说明未接入。
+
+交付前在项目根目录执行：
+
+```bash
+python3 scripts/check_handoff.py
+```
+
+前端 `package.json` 使用 `UNLICENSED`，与 `EULA.md` 的专有许可一致。第三方依赖仍按各自许可证使用。
 
 n100 部署时建议把项目放在 `/home/aidi/apps/osint-agent-network`，并把 `.env` 中的工具路径、模型中转地址和 API Token 配好。
 

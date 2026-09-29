@@ -4,7 +4,8 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       APP_ENV: production
       APP_HOST: 0.0.0.0

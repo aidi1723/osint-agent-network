@@ -10,9 +10,7 @@ frontend.zip
 output/
 reports/*
 !reports/.gitkeep
-data/*.sqlite
-data/*.sqlite-*
-data/*.db
+data/
 data/*.log
 data/*.pid
 data/jobs/
